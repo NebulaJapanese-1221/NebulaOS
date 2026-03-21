@@ -1,0 +1,62 @@
+//! A simple heap allocator implementation.
+
+use super::multiboot::{self, MultibootMemoryMapEntry};
+use linked_list_allocator::LockedHeap;
+
+extern "C" {
+    // Symbol defined in the linker script.
+    static _end: u8;
+}
+
+/// Finds a suitable region of memory for the heap from the multiboot memory map.
+///
+/// # Safety
+/// The caller must ensure that the multiboot info pointer is valid.
+pub fn find_heap_region(multiboot_info_ptr: usize) -> Option<(usize, usize)> {
+    let multiboot_info = unsafe { &*(multiboot_info_ptr as *const u32 as *const multiboot::MultibootInfo) };
+
+    // Check if the memory map is present (bit 6)
+    // NOTE(clarification): This check ensures that a memory map was actually provided by the bootloader
+    if multiboot_info.flags & (1 << 6) == 0 {
+        return None;
+    }
+
+    let mmap_start = multiboot_info.mmap_addr as usize;
+    let mmap_end = mmap_start + multiboot_info.mmap_length as usize;
+    let mut current_addr = mmap_start;
+
+    // Get the address of the `_end` symbol, which marks the end of the kernel image.
+    let kernel_end = core::ptr::addr_of!(_end) as usize;
+    // Align the kernel end address to the next page boundary to be safe.
+    let kernel_end_aligned = ((kernel_end + 4095) / 4096) * 4096;
+
+    let mut best_region: Option<(usize, usize)> = None;
+
+    while current_addr < mmap_end {
+        let entry = unsafe { &*(current_addr as *const MultibootMemoryMapEntry) };
+        
+        // We are looking for a region of type 1 (available RAM).
+        if entry.type_ == 1 { // Available RAM
+            let region_start = entry.addr as usize;
+            let region_end = region_start + entry.len as usize;
+
+            // Check if this region is after the kernel and has a usable size.
+            if region_end > kernel_end_aligned {
+                let heap_start = region_start.max(kernel_end_aligned);
+                let heap_size = region_end - heap_start;
+
+                if heap_size > best_region.map_or(0, |r| r.1) { // Finding the largest available region
+                    best_region = Some((heap_start, heap_size));
+                }
+            }
+        }
+
+        // Move to the next entry. The size field includes the size of the size field itself.
+        current_addr += entry.size as usize + 4;
+    }
+
+    best_region
+}
+
+#[global_allocator]
+pub static ALLOCATOR: LockedHeap = LockedHeap::empty();

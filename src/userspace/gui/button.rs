@@ -1,0 +1,58 @@
+use super::rect::Rect;
+use crate::drivers::framebuffer;
+use super::font;
+use alloc::string::{String, ToString};
+
+#[derive(Clone)]
+pub struct Button {
+    pub rect: Rect,
+    pub text: String,
+    pub bg_color: u32,
+    pub text_color: u32,
+}
+
+impl Button {
+    pub fn new(x: isize, y: isize, width: usize, height: usize, text: &str) -> Self {
+        Self {
+            rect: Rect { x, y, width, height },
+            text: text.to_string(),
+            bg_color: 0x00_C0_C0_C0,
+            text_color: 0x00_00_00_00,
+        }
+    }
+
+    pub fn draw(&self, fb: &mut framebuffer::Framebuffer, mouse_x: isize, mouse_y: isize, clip: Option<Rect>) {
+        let is_hovered = self.contains(mouse_x, mouse_y);
+        let draw_color = if is_hovered {
+            // Brighten the color for hover effect by adding 0x20 to each component
+            let r = ((self.bg_color >> 16) & 0xFF) as u8;
+            let g = ((self.bg_color >> 8) & 0xFF) as u8;
+            let b = (self.bg_color & 0xFF) as u8;
+
+            let r_h = r.saturating_add(0x20);
+            let g_h = g.saturating_add(0x20);
+            let b_h = b.saturating_add(0x20);
+
+            ((r_h as u32) << 16) | ((g_h as u32) << 8) | (b_h as u32)
+        } else {
+            self.bg_color
+        };
+        super::draw_rect(fb, self.rect.x, self.rect.y, self.rect.width, self.rect.height, draw_color, clip);
+
+        // Add 3D bevel effect
+        let bright = 0x00_FF_FF_FF;
+        let dark = 0x00_40_40_40;
+        super::draw_rect(fb, self.rect.x, self.rect.y, self.rect.width, 1, bright, clip); // Top
+        super::draw_rect(fb, self.rect.x, self.rect.y, 1, self.rect.height, bright, clip); // Left
+        super::draw_rect(fb, self.rect.x + self.rect.width as isize - 1, self.rect.y, 1, self.rect.height, dark, clip); // Right
+        super::draw_rect(fb, self.rect.x, self.rect.y + self.rect.height as isize - 1, self.rect.width, 1, dark, clip); // Bottom
+
+        let text_x = self.rect.x + (self.rect.width as isize - (self.text.len() as isize * 8)) / 2;
+        let text_y = self.rect.y + (self.rect.height as isize - 16) / 2;
+        font::draw_string(fb, text_x, text_y, self.text.as_str(), self.text_color, clip);
+    }
+
+    pub fn contains(&self, x: isize, y: isize) -> bool {
+        self.rect.contains(x, y)
+    }
+}
