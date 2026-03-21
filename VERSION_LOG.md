@@ -1,5 +1,11 @@
 # NebulaOS Version History
 
+## 0.0.2-dev3 (03-21-2026)
+- Fixed keyboard not working (QEMU and Real Hardware)
+- Fixed mouse freezing at random times (QEMU and Real Hardware)
+- Fixed shutdown crashing NebulaOS (QEMU and Real Hardware)
+
+
 ## v0.0.2-dev2 (03-21-2026)
 - Added full Hiragana and Katakana character sets with common Kanji characters to the Japanese font. Also fixed many issues from the previous 2 versions (graphics, lag, etc) and added better window dragging.
 

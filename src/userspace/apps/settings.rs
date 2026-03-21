@@ -18,6 +18,7 @@ enum Tab {
 
 #[derive(Clone)]
 pub struct Settings {
+    redraw: bool,
     current_tab: Tab,
 }
 
@@ -25,6 +26,7 @@ impl Settings {
     pub fn new() -> Self {
         Self {
             current_tab: Tab::System,
+            redraw: true,
         }
     }
 
@@ -45,7 +47,7 @@ impl Settings {
         let tab_width = win.width / count;
         
         for (i, (tab, label)) in tab_labels.iter().enumerate() {
-            let x = win.x + (i * tab_width) as isize;
+            let x = win.x + (i * tab_width) as isize;            
             let is_active = self.current_tab == *tab;
             let bg_color = if is_active { 0x00_50_50_60 } else { 0x00_30_30_30 };
             
@@ -55,9 +57,9 @@ impl Settings {
                 bg_color,
                 text_color: 0x00_FF_FF_FF,
             };
-            btn.draw(fb, 0, 0, None); // Mouse hover not supported in this context yet
+            btn.draw(fb, 0, 0, Some(win.rect)); // Mouse hover not supported in this context yet
             
-            if is_active {
+        if is_active {
                 crate::userspace::gui::draw_rect(fb, x, start_y + bar_height as isize - 2, tab_width, 2, 0x00_00_AA_FF, None);
             }
         }
@@ -83,9 +85,11 @@ impl Settings {
                 let hc = HIGH_CONTRAST.load(Ordering::Relaxed);
                 let lt = LARGE_TEXT.load(Ordering::Relaxed);
 
-                let btn_hc_text = format!("{} {}", if hc { "[x]" } else { "[ ]" }, locale.option_high_contrast());
+                let btn_hc_text = format!("{}  {}", if hc { "[x]" } else { "[ ]" }, locale.option_high_contrast());
+                
                 let btn_hc = Button { rect: Rect { x: content_x, y: content_y + 20, width: 140, height: 20 }, text: btn_hc_text, bg_color: 0x00_30_30_30, text_color: 0xFFFFFF };
-                let btn_lt_text = format!("{} {}", if lt { "[x]" } else { "[ ]" }, locale.option_large_text());
+                let btn_lt_text = format!("{}  {}", if lt { "[x]" } else { "[ ]" }, locale.option_large_text());
+
                 let btn_lt = Button { rect: Rect { x: content_x, y: content_y + 45, width: 140, height: 20 }, text: btn_lt_text, bg_color: 0x00_30_30_30, text_color: 0xFFFFFF };
                 btn_hc.draw(fb, 0, 0, None);
                 btn_lt.draw(fb, 0, 0, None);
@@ -155,6 +159,8 @@ impl Settings {
 
 impl App for Settings {
     fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window) {
+        // Only redraw if there have been changes.
+    
         self.draw_tabs(fb, win);
         self.draw_content(fb, win);
     }

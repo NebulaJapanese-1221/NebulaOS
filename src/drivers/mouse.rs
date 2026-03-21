@@ -140,11 +140,13 @@ pub extern "x86-interrupt" fn interrupt_handler(_frame: &mut InterruptStackFrame
 pub fn get_packet() -> Option<MousePacket> {
     // This function should be non-blocking. It checks the buffer once.
     let mut buffer = MOUSE_BUFFER.lock();
-    if buffer.head == buffer.tail {
+    let packet = if buffer.head == buffer.tail {
         None
     } else {
         let packet = buffer.packets[buffer.tail];
         buffer.tail = (buffer.tail + 1) % BUFFER_SIZE;
         Some(packet)
-    }
+    };
+    core::mem::drop(buffer);
+    packet
 }

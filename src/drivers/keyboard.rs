@@ -2,6 +2,7 @@ use spin::Mutex;
 use super::ps2;
 use crate::kernel::interrupts::InterruptStackFrame;
 use crate::kernel::io;
+use core::arch::asm;
 
 /// A simple ring buffer for buffering key presses.
 pub struct KeyBuffer {
@@ -20,6 +21,11 @@ impl KeyBuffer {
             modifiers: Modifiers {
                 lshift: false,
                 rshift: false,
+                ctrl: false,
+                alt: false,
+                capslock: false,
+                last_scancode: todo!(),
+                repeat_count: todo!(),
             },
         }
     }
@@ -73,6 +79,11 @@ pub extern "x86-interrupt" fn interrupt_handler(_frame: &mut InterruptStackFrame
 pub struct Modifiers {
     pub lshift: bool,
     pub rshift: bool,
+    pub ctrl: bool,
+    pub alt: bool,
+    pub capslock: bool,
+    pub last_scancode: u8,
+    pub repeat_count: u32,
 }
 
 /// The global keyboard buffer.
@@ -92,6 +103,15 @@ pub fn update_modifiers(scancode: u8) {
         0xAA => kb.modifiers.lshift = false,  // Left Shift Release
         0x36 => kb.modifiers.rshift = true,   // Right Shift Press
         0xB6 => kb.modifiers.rshift = false,  // Right Shift Release
+        0x1D => kb.modifiers.ctrl = true,      // Ctrl Press
+        0x9D => kb.modifiers.ctrl = false,     // Ctrl Release
+        0x38 => kb.modifiers.alt = true,       // Alt Press
+        0xB8 => kb.modifiers.alt = false,      // Alt Release
+        0x3A => {                              // Capslock Press (toggle)
+            if scancode < 0x80 {
+                kb.modifiers.capslock = !kb.modifiers.capslock;
+            }
+        }
         _ => {}
     }
 }
@@ -101,52 +121,102 @@ pub fn is_shift_pressed() -> bool {
     kb.modifiers.lshift || kb.modifiers.rshift
 }
 
+pub fn is_capslock_enabled() -> bool {
+    let kb = KEY_BUFFER.lock();
+    kb.modifiers.capslock
+}
+
+static SCANCODE_SET1: [char; 128] = [
+    '\0', '\x1B', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\x08', '\t',
+    'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\n', '\0', 'a', 's',
+    'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`', '\0', '\\', 'z', 'x', 'c', 'v',
+    'b', 'n', 'm', ',', '.', '/', '\0', '*', '\0', ' ', '\0', '\0', '\0', '\0', '\0', '\0',
+    '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '-', '\0', '\0', '\0', '+', '\0',
+    '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0',
+    '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0',
+    '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0',
+];
+
+static SCANCODE_SET1_SHIFTED: [char; 128] = [
+    '\0', '\x1B', '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '\x08', '\t',
+    'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', '\n', '\0', 'A', 'S',
+    'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', '"', '~', '\0', '|', 'Z', 'X', 'C', 'V',
+    'B', 'N', 'M', '<', '>', '?', '\0', '*', '\0', ' ', '\0', '\0', '\0', '\0', '\0', '\0',
+    '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '-', '\0', '\0', '\0', '+', '\0',
+    '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0',
+    '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0',
+    '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0',
+];
+
 /// Converts a PS/2 scancode (Set 1) to a character.
 /// Handles a basic QWERTY layout.
 pub fn scancode_to_char(scancode: u8) -> Option<char> {
     let shift = is_shift_pressed();
+    let capslock = is_capslock_enabled();
+    let idx = scancode as usize;
+
+    if idx >= SCANCODE_SET1.len() {
+        return None;
+    }
+
+    let c = SCANCODE_SET1[idx];
+    if c == '\0' {
+        return None;
+    }
+
+    let is_letter = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
     
-    if shift {
-        match scancode {
-            0x02 => Some('!'), 0x03 => Some('@'), 0x04 => Some('#'), 0x05 => Some('$'),
-            0x06 => Some('%'), 0x07 => Some('^'), 0x08 => Some('&'), 0x09 => Some('*'),
-            0x0A => Some('('), 0x0B => Some(')'), 0x0C => Some('_'), 0x0D => Some('+'),
-            0x0E => Some('\x08'), // Backspace
-            0x0F => Some('\t'),
-            0x10 => Some('Q'), 0x11 => Some('W'), 0x12 => Some('E'), 0x13 => Some('R'),
-            0x14 => Some('T'), 0x15 => Some('Y'), 0x16 => Some('U'), 0x17 => Some('I'),
-            0x18 => Some('O'), 0x19 => Some('P'), 0x1A => Some('{'), 0x1B => Some('}'),
-            0x1C => Some('\n'), // Enter
-            0x1E => Some('A'), 0x1F => Some('S'), 0x20 => Some('D'), 0x21 => Some('F'),
-            0x22 => Some('G'), 0x23 => Some('H'), 0x24 => Some('J'), 0x25 => Some('K'),
-            0x26 => Some('L'), 0x27 => Some(':'), 0x28 => Some('"'), 0x29 => Some('~'),
-            0x2B => Some('|'),
-            0x2C => Some('Z'), 0x2D => Some('X'), 0x2E => Some('C'), 0x2F => Some('V'),
-            0x30 => Some('B'), 0x31 => Some('N'), 0x32 => Some('M'), 0x33 => Some('<'),
-            0x34 => Some('>'), 0x35 => Some('?'),
-            0x39 => Some(' '),
-            _ => None,
-        }
+    // If it is a letter, Shift XOR CapsLock determines case.
+    // If it is NOT a letter (e.g. number or symbol), only Shift determines the alternate char.
+    let use_shifted = if is_letter {
+        shift ^ capslock
     } else {
-        match scancode {
-            0x02 => Some('1'), 0x03 => Some('2'), 0x04 => Some('3'), 0x05 => Some('4'),
-            0x06 => Some('5'), 0x07 => Some('6'), 0x08 => Some('7'), 0x09 => Some('8'),
-            0x0A => Some('9'), 0x0B => Some('0'), 0x0C => Some('-'), 0x0D => Some('='),
-            0x0E => Some('\x08'), // Backspace
-            0x0F => Some('\t'),
-            0x10 => Some('q'), 0x11 => Some('w'), 0x12 => Some('e'), 0x13 => Some('r'),
-            0x14 => Some('t'), 0x15 => Some('y'), 0x16 => Some('u'), 0x17 => Some('i'),
-            0x18 => Some('o'), 0x19 => Some('p'), 0x1A => Some('['), 0x1B => Some(']'),
-            0x1C => Some('\n'), // Enter
-            0x1E => Some('a'), 0x1F => Some('s'), 0x20 => Some('d'), 0x21 => Some('f'),
-            0x22 => Some('g'), 0x23 => Some('h'), 0x24 => Some('j'), 0x25 => Some('k'),
-            0x26 => Some('l'), 0x27 => Some(';'), 0x28 => Some('\''), 0x29 => Some('`'),
-            0x2B => Some('\\'),
-            0x2C => Some('z'), 0x2D => Some('x'), 0x2E => Some('c'), 0x2F => Some('v'),
-            0x30 => Some('b'), 0x31 => Some('n'), 0x32 => Some('m'), 0x33 => Some(','),
-            0x34 => Some('.'), 0x35 => Some('/'),
-            0x39 => Some(' '),
-            _ => None,
+        shift
+    };
+
+    if use_shifted {
+        Some(SCANCODE_SET1_SHIFTED[idx])
+    } else {
+        Some(c)
+    }
+}
+
+pub fn init() {
+    unsafe {
+        // 1. Disable PS/2 devices to prevent them from sending data during setup
+        ps2::write_command(0xAD); // Disable keyboard
+        ps2::write_command(0xA7); // Disable mouse
+
+        // 2. Flush the output buffer to discard any garbage bytes from the BIOS
+        while (ps2::read_status() & ps2::STATUS_OUTPUT_BUFFER) != 0 {
+            ps2::read_data();
         }
+
+        // 3. Set the controller configuration byte
+        ps2::write_command(0x20); // Get Config Byte
+        let mut status = ps2::read_data();
+        status |= 0x01; // Enable IRQ1 (Keyboard)
+        status &= !0x10; // Enable Keyboard Clock (Clear disable bit)
+        ps2::write_command(0x60); // Set Config Byte
+        ps2::write_data(status);
+
+        // 4. Send commands to the keyboard itself
+        // Reset keyboard first to ensure clean state
+        ps2::write_keyboard_command(0xFF); // Reset
+        ps2::read_data(); // Consume ACK
+
+        ps2::write_keyboard_command(0xF0); // Set Scan Code Set
+        ps2::write_keyboard_command(0x02); // Scan Code Set 2
+        ps2::read_data(); // Consume ACK
+
+        ps2::write_keyboard_command(0xF6); // Set Defaults
+        ps2::read_data(); // Consume ACK
+
+        ps2::write_keyboard_command(0xF4); // Enable Scanning
+        ps2::read_data(); // Consume ACK
+
+        // 5. Enable the devices
+        ps2::write_command(0xAE); // Enable keyboard
+        ps2::write_command(0xA8); // Enable mouse
     }
 }

@@ -1,5 +1,9 @@
 use super::io;
 use core::{mem::size_of, slice};
+use core::sync::atomic::{AtomicU16, AtomicU32, Ordering};
+
+static PM1A_CNT_BLK: AtomicU32 = AtomicU32::new(0);
+static SHUTDOWN_CMD: AtomicU16 = AtomicU16::new(0);
 
 #[repr(C, packed)]
 struct Rsdp {
@@ -74,6 +78,9 @@ fn find_rsdp() -> Option<*const Rsdp> {
 fn find_sdt_in_rsdt(rsdt: *const SdtHeader, signature: &[u8; 4]) -> Option<*const SdtHeader> {
     unsafe {
         let rsdt_len = (*rsdt).length as usize;
+        if rsdt_len < size_of::<SdtHeader>() {
+            return None;
+        }
         let entry_count = (rsdt_len - size_of::<SdtHeader>()) / 4;
         let entries_ptr = (rsdt as *const u8).add(size_of::<SdtHeader>()) as *const u32;
 
@@ -89,6 +96,9 @@ fn find_sdt_in_rsdt(rsdt: *const SdtHeader, signature: &[u8; 4]) -> Option<*cons
 
 fn find_signature_in_slice(data: &[u8], signature: &[u8; 4]) -> Option<*const u8> {
     //let sig = data.windows(4).position(|window| window == signature);
+    if data.len() < 4 {
+        return None;
+    }
     for i in 0..(data.len() - 4) {
         if &data[i..i + 4] == signature {
             unsafe {
@@ -106,6 +116,9 @@ fn find_signature_in_slice(data: &[u8], signature: &[u8; 4]) -> Option<*const u8
 
 unsafe fn get_s5_val(dsdt_ptr: *const SdtHeader) -> Option<u8> {
     let dsdt_len = (*dsdt_ptr).length as usize;
+    if dsdt_len < size_of::<SdtHeader>() {
+        return None;
+    }
     let data_ptr = (dsdt_ptr as *const u8).add(size_of::<SdtHeader>());
     let data = slice::from_raw_parts(data_ptr, dsdt_len - size_of::<SdtHeader>());
 
@@ -117,8 +130,9 @@ unsafe fn get_s5_val(dsdt_ptr: *const SdtHeader) -> Option<u8> {
     None
 }
 
-pub fn acpi_shutdown() {
-    if let Some(rsdp) = find_rsdp() {        let rsdt_ptr = unsafe { (*rsdp).rsdt_address } as *const SdtHeader;
+pub fn init() {
+    if let Some(rsdp) = find_rsdp() {
+        let rsdt_ptr = unsafe { (*rsdp).rsdt_address } as *const SdtHeader;
         if let Some(fadt_ptr) = find_sdt_in_rsdt(rsdt_ptr, b"FACP") {
             let fadt = unsafe { &*(fadt_ptr as *const Fadt) };
             let pm1a_cnt_port = fadt.pm1a_cnt_blk as u16;
@@ -133,9 +147,17 @@ pub fn acpi_shutdown() {
 
             // Write SLP_TYPa << 10 | SLP_EN to the PM1a control port
             let shutdown_val = (s5_val as u16) << 10 | 0x2000;
-            unsafe {
-                io::outw(pm1a_cnt_port, shutdown_val);
-            }
+            
+            PM1A_CNT_BLK.store(pm1a_cnt_port as u32, Ordering::Relaxed);
+            SHUTDOWN_CMD.store(shutdown_val, Ordering::Relaxed);
         }
+    }
+}
+
+pub fn acpi_shutdown() {
+    let port = PM1A_CNT_BLK.load(Ordering::Relaxed) as u16;
+    let cmd = SHUTDOWN_CMD.load(Ordering::Relaxed);
+    if port != 0 {
+        unsafe { io::outw(port, cmd); }
     }
 }

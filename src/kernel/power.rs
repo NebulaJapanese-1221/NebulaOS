@@ -10,6 +10,13 @@ pub fn shutdown() {
     // It may not work on all hardware or emulators, but it is more portable.
     acpi::acpi_shutdown();
 
+    // Try emulator shutdown hacks for QEMU/Bochs/VirtualBox
+    unsafe {
+        io::outw(0xB004, 0x2000); // Bochs / Older QEMU
+        io::outw(0x604, 0x2000);  // Newer QEMU
+        io::outw(0x4004, 0x3400); // VirtualBox
+    }
+
     // If ACPI shutdown fails, fall back to a manual screen.
     unsafe { asm!("cli", options(nomem, nostack)); } // Disable interrupts
 

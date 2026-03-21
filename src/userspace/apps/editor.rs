@@ -7,7 +7,9 @@ use alloc::boxed::Box;
 #[derive(Clone, Debug)]
 pub struct TextEditor {
     pub content: String,
+    pub scroll_offset: isize,
     pub cursor_pos: usize,
+    
 }
 
 impl TextEditor {
@@ -15,6 +17,7 @@ impl TextEditor {
         Self {
             content: String::new(),
             cursor_pos: 0,
+            scroll_offset: 0,
         }
     }
 
@@ -39,6 +42,12 @@ impl TextEditor {
             }
         }
     }
+
+     pub fn scroll(&mut self, delta: isize, win_height: usize) {
+        let content_height = (self.content.lines().count() as isize + 1) * 16;
+        let max_offset = (content_height - win_height as isize + 20).max(0);
+        self.scroll_offset = (self.scroll_offset + delta).clamp(0, max_offset);
+    }
 }
 
 impl App for TextEditor {
@@ -47,7 +56,7 @@ impl App for TextEditor {
         let mut current_x = content_x;
         let mut current_y = win.y + 25;
         let line_height = 16;
-
+        
         // Draw text content
         for (i, ch) in self.content.chars().enumerate() {
             // Draw blinking cursor before the character at cursor_pos
@@ -74,10 +83,12 @@ impl App for TextEditor {
     fn handle_event(&mut self, event: &AppEvent) {
         if let AppEvent::KeyPress { key } = event {
             self.process_key(*key);
+        } else if let AppEvent::Scroll { delta } = event {
         }
     }
 
     fn box_clone(&self) -> Box<dyn App> {
         Box::new(self.clone())
     }
+
 }

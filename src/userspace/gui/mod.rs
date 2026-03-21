@@ -185,7 +185,17 @@ impl WindowManager {
 
         let mut mouse_moved = false;
 
-        while let Some(packet) = mouse::get_packet() {
+        // Process all pending mouse packets
+        // IMPORTANT: We must disable interrupts while reading the shared queue to prevent deadlocks.
+        // If an IRQ fires while we hold the queue lock, the handler will spin forever waiting for us.
+        loop {
+            let packet_opt = mouse::get_packet();
+            
+            let packet = match packet_opt {
+                Some(p) => p,
+                None => break,
+            };
+
             mouse_moved = true;
             let old_mouse_x = self.mouse_x;
             let old_mouse_y = self.mouse_y;
@@ -270,6 +280,16 @@ impl WindowManager {
                 self.mark_dirty(rect);
             }
 
+
+             // Scroll Wheel
+            if packet.wheel != 0 {
+                if let Some(target_id) = self.click_target_id {
+                if let Some(idx) = self.windows.iter().position(|w| w.id == target_id) {
+                if let WindowContent::App(app) = &mut self.windows[idx].content {
+                            app.handle_event(&AppEvent::Scroll { delta: packet.wheel as isize * 3 });
+
+            }}}}
+
             // Send MouseMove event to the active window if we are clicking/dragging on it
             if let Some(target_id) = self.click_target_id {
                 if self.drag_win_id.is_none() && self.resize_win_id.is_none() {
@@ -281,18 +301,25 @@ impl WindowManager {
                         
                         if let WindowContent::App(app) = &mut self.windows[idx].content {
                             // Use 22 for title height to match draw_window offset
-                            app.handle_event(&AppEvent::MouseMove { x: self.mouse_x - win_x, y: self.mouse_y - (win_y + 22) });
+                            let rel_x = self.mouse_x - win_x;
+                            let rel_y = self.mouse_y - (win_y + 22);
+                            if rel_x >= 0 && rel_x < win_w as isize && rel_y >= 0 && rel_y < win_h.saturating_sub(22) as isize {
+                                app.handle_event(&AppEvent::MouseMove { x: rel_x, y: rel_y });
+                            }
                         }
                     }
                 }
             }
         }
-
+      
         // Update cursor style based on what's under it
         self.update_cursor_style();
 
-        // Check for keyboard input and pass to focused window
-        while let Some(key) = keyboard::get_char() {
+        loop {
+            let key_opt = keyboard::get_char();
+            unsafe { asm!("sti", options(nomem, nostack)) };
+
+            if let Some(key) = key_opt {
             if let Some(&top_win_id) = self.z_order.last() {
                 if let Some(rect) = self.get_window_rect(top_win_id) {
                     self.mark_dirty(rect);
@@ -304,6 +331,7 @@ impl WindowManager {
                     }
                 }
             }
+            } else { break; }
         }
 
         if FULL_REDRAW_REQUESTED.load(Ordering::Relaxed) {

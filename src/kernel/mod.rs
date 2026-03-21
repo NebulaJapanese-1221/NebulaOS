@@ -14,7 +14,7 @@ pub mod gdt;
 pub mod syscall;
 pub mod process;
 
-pub const VERSION: &str = "0.0.2-dev2";
+pub const VERSION: &str = "0.0.2-dev3";
 
 fn draw_boot_screen() {   
     let mut fb = FRAMEBUFFER.lock();
@@ -119,10 +119,16 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     add_boot_status("[OK] Mouse Driver Initialized", 3);
     draw_progress_bar(60);
 
+    // Initialize the keyboard driver
+    crate::drivers::keyboard::init();
+
     // Now it is safe to enable interrupts
     interrupts::enable_interrupts();
     add_boot_status("[OK] Interrupts Enabled", 4);
     draw_progress_bar(90);
+
+    // Initialize ACPI
+    acpi::init();
 
     // NOTE: The old text-mode GUI has been disabled.
     // The next step is to build a new GUI that draws to the framebuffer.
