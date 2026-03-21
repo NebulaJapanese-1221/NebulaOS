@@ -28,9 +28,7 @@ cargo run
 *Requires QEMU and a nightly Rust toolchain.*
 
 ## Current Bugs
-- The keyboard does not work (in QEMU and real hardware)
-- The mouse freezes at random times (in QEMU and real hardware)
-- Shutdown always crashes the system (in QEMU and real hardware)
+[None]
 
 ## 📜 License
 
