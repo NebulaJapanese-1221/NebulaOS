@@ -179,7 +179,9 @@ pub fn draw_char(fb: &mut Framebuffer, x: isize, y: isize, character: char, colo
         width
     } else {
         // Japanese / Full-width character
-        let glyph_data = FONT_JP.iter().find(|(c, _)| *c == character).unwrap_or(&FONT_JP[3]); // Fallback to '？'
+        let glyph_data = FONT_JP.iter().find(|(c, _)| *c == character)
+            .or_else(|| FONT_JP.iter().find(|(c, _)| *c == '？'))
+            .unwrap_or(&FONT_JP[0]); // Absolute fallback
 
         let width = 16 * scale;
         let height = 16 * scale;

@@ -14,7 +14,7 @@ pub mod gdt;
 pub mod syscall;
 pub mod process;
 
-pub const VERSION: &str = "0.0.2-dev";
+pub const VERSION: &str = "0.0.2-dev2";
 
 fn draw_boot_screen() {   
     let mut fb = FRAMEBUFFER.lock();

@@ -1,5 +1,8 @@
 # NebulaOS Version History
 
+## v0.0.2-dev2 (03-21-2026)
+- Added full Hiragana and Katakana character sets with common Kanji characters to the Japanese font.
+
 ## v0.0.2-dev (03-21-2026)
 - Added a proper settings app to NebulaOS and added localisation support with basic (placeholder) support for Japanese
 
