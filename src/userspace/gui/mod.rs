@@ -91,6 +91,7 @@ pub struct WindowManager {
     resize_direction: ResizeDirection,
     cursor_style: CursorStyle,
     backbuffer: Vec<u32>,
+    drag_rect: Option<Rect>,
 }
 
 impl WindowManager {
@@ -115,6 +116,7 @@ impl WindowManager {
             resize_direction: ResizeDirection::None,
             cursor_style: CursorStyle::Arrow,
             backbuffer: Vec::new(),
+            drag_rect: None,
         }
     }
 
@@ -174,8 +176,12 @@ impl WindowManager {
         // Mark the cursor's starting position as dirty ONCE before processing packets
         self.mark_dirty(self.get_cursor_rect());
 
-        let start_interaction_id = self.resize_win_id.or(self.drag_win_id);
+        let start_interaction_id = self.resize_win_id;
         let start_interaction_rect = start_interaction_id.and_then(|id| self.get_window_rect(id));
+
+        if let Some(rect) = self.drag_rect {
+            self.mark_dirty(rect);
+        }
 
         let mut mouse_moved = false;
 
@@ -224,11 +230,11 @@ impl WindowManager {
             }
             // If dragging, update window position based on the new final mouse position
             else if let Some(id) = self.drag_win_id {
-                if let Some(idx) = self.windows.iter().position(|w| w.id == id) {
-                    // Update position without marking dirty inside the loop
-                    let win = &mut self.windows[idx];
-                    win.x = self.mouse_x - self.drag_offset_x;
-                    win.y = self.mouse_y - self.drag_offset_y;
+                if let Some(win) = self.windows.iter().find(|w| w.id == id) {
+                    // Don't move window, update drag_rect instead
+                    let new_x = self.mouse_x - self.drag_offset_x;
+                    let new_y = self.mouse_y - self.drag_offset_y;
+                    self.drag_rect = Some(Rect { x: new_x, y: new_y, width: win.width, height: win.height });
                 }
             }
         }
@@ -251,13 +257,17 @@ impl WindowManager {
             }
 
             // 3. If we switched to dragging a DIFFERENT window mid-loop (rare), mark it too
-            let end_interaction_id = self.resize_win_id.or(self.drag_win_id);
+            let end_interaction_id = self.resize_win_id;
             if end_interaction_id != start_interaction_id {
                 if let Some(id) = end_interaction_id {
                     if let Some(rect) = self.get_window_rect(id) {
                         self.mark_dirty(rect);
                     }
                 }
+            }
+
+            if let Some(rect) = self.drag_rect {
+                self.mark_dirty(rect);
             }
 
             // Send MouseMove event to the active window if we are clicking/dragging on it
@@ -273,7 +283,6 @@ impl WindowManager {
                             // Use 22 for title height to match draw_window offset
                             app.handle_event(&AppEvent::MouseMove { x: self.mouse_x - win_x, y: self.mouse_y - (win_y + 22) });
                         }
-                        self.mark_dirty(Rect { x: win_x, y: win_y, width: win_w, height: win_h });
                     }
                 }
             }
@@ -674,6 +683,7 @@ impl WindowManager {
                                 self.drag_win_id = Some(win_id);
                                 self.drag_offset_x = self.mouse_x - top_win.x;
                                 self.drag_offset_y = self.mouse_y - top_win.y;
+                                self.drag_rect = Some(Rect { x: top_win.x, y: top_win.y, width: top_win.width, height: top_win.height });
                             }
                         }
                     }
@@ -695,7 +705,21 @@ impl WindowManager {
             if self.resize_win_id.is_some() {
                 self.resize_win_id = None;
                 self.resize_direction = ResizeDirection::None;
-            } else if self.drag_win_id.is_none() { // Only process content click if not dragging
+            } else if let Some(win_id) = self.drag_win_id {
+                // Drag finished - Commit move
+                if let Some(rect) = self.drag_rect {
+                    if let Some(old_rect) = self.get_window_rect(win_id) {
+                        self.mark_dirty(old_rect);
+                    }
+                    if let Some(win) = self.windows.iter_mut().find(|w| w.id == win_id) {
+                        win.x = rect.x;
+                        win.y = rect.y;
+                    }
+                    self.mark_dirty(rect);
+                }
+                self.drag_win_id = None;
+                self.drag_rect = None;
+            } else { // Only process content click if not dragging
                 if let Some(target_id) = self.click_target_id {
                     let mut event_coords = None;
                     if let Some(win) = self.windows.iter().find(|w| w.id == target_id) {
@@ -718,7 +742,6 @@ impl WindowManager {
                     }
                 }
             }
-            self.drag_win_id = None;
             self.click_target_id = None;
         }
     }
@@ -847,6 +870,15 @@ impl WindowManager {
                 self.draw_context_menu(&mut local_fb, self.mouse_x, self.mouse_y, *dirty_rect);
             }
 
+            // Draw Drag Overlay
+            if let Some(rect) = self.drag_rect {
+                let border_color = 0x00_FF_FF_FF; // White outline
+                draw_rect(&mut local_fb, rect.x, rect.y, rect.width, 2, border_color, Some(*dirty_rect)); // Top
+                draw_rect(&mut local_fb, rect.x, rect.y + rect.height as isize - 2, rect.width, 2, border_color, Some(*dirty_rect)); // Bottom
+                draw_rect(&mut local_fb, rect.x, rect.y, 2, rect.height, border_color, Some(*dirty_rect)); // Left
+                draw_rect(&mut local_fb, rect.x + rect.width as isize - 2, rect.y, 2, rect.height, border_color, Some(*dirty_rect)); // Right
+            }
+
             // 5. Draw Mouse Cursor
             self.draw_cursor(&mut local_fb, self.mouse_x, self.mouse_y, *dirty_rect);
         }
@@ -923,7 +955,15 @@ impl WindowManager {
         // Draw title bar on top
         draw_rect(fb, win.x, win.y, win.width, title_height, title_color, Some(clip));
         // Draw title text
-        font::draw_string(fb, win.x + 6, win.y + 3, win.title, title_text_color, Some(clip));
+        // Clip text to title bar area to prevent spillover (especially with Large Text)
+        let title_rect = Rect { x: win.x, y: win.y, width: win.width, height: title_height };
+        
+        if let Some(title_clip) = clip.intersection(&title_rect) {
+            let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
+            // Vertically center text in title bar
+            let text_y = win.y + (title_height as isize - font_height) / 2;
+            font::draw_string(fb, win.x + 6, text_y, win.title, title_text_color, Some(title_clip));
+        }
 
         // Window control buttons
         let btn_y = win.y + 3;

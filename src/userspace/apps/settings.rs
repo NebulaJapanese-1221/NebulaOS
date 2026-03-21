@@ -188,6 +188,7 @@ impl App for Settings {
                 if btn_hc_rect.contains(*x, *y) {
                     let val = HIGH_CONTRAST.load(Ordering::Relaxed);
                     HIGH_CONTRAST.store(!val, Ordering::Relaxed);
+                    FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
                 } else if btn_lt_rect.contains(*x, *y) {
                     let val = LARGE_TEXT.load(Ordering::Relaxed);
                     LARGE_TEXT.store(!val, Ordering::Relaxed);
@@ -204,8 +205,10 @@ impl App for Settings {
 
                 if btn_en_rect.contains(*x, *y) {
                     localisation::set_language(Language::English);
+                    FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
                 } else if btn_ja_rect.contains(*x, *y) {
                     localisation::set_language(Language::Japanese);
+                    FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
                 }
             }
         }

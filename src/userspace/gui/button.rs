@@ -23,6 +23,18 @@ impl Button {
 
     pub fn draw(&self, fb: &mut framebuffer::Framebuffer, mouse_x: isize, mouse_y: isize, clip: Option<Rect>) {
         let is_hovered = self.contains(mouse_x, mouse_y);
+        
+        // Enforce clipping to the button's own rectangle to prevent spillover
+        let draw_clip = if let Some(c) = clip {
+            if let Some(intersection) = c.intersection(&self.rect) {
+                intersection
+            } else {
+                return; // Button is outside the dirty rect
+            }
+        } else {
+            self.rect
+        };
+
         let high_contrast = super::HIGH_CONTRAST.load(core::sync::atomic::Ordering::Relaxed);
 
         let draw_color = if is_hovered {
@@ -43,7 +55,7 @@ impl Button {
         } else {
             if high_contrast { 0x00_00_00_00 } else { self.bg_color }
         };
-        super::draw_rect(fb, self.rect.x, self.rect.y, self.rect.width, self.rect.height, draw_color, clip);
+        super::draw_rect(fb, self.rect.x, self.rect.y, self.rect.width, self.rect.height, draw_color, Some(draw_clip));
 
         // Add 3D bevel effect
         let (bright, dark) = if high_contrast {
@@ -52,13 +64,14 @@ impl Button {
             (0x00_FF_FF_FF, 0x00_40_40_40)
         };
         
-        super::draw_rect(fb, self.rect.x, self.rect.y, self.rect.width, 1, bright, clip); // Top
-        super::draw_rect(fb, self.rect.x, self.rect.y, 1, self.rect.height, bright, clip); // Left
-        super::draw_rect(fb, self.rect.x + self.rect.width as isize - 1, self.rect.y, 1, self.rect.height, dark, clip); // Right
-        super::draw_rect(fb, self.rect.x, self.rect.y + self.rect.height as isize - 1, self.rect.width, 1, dark, clip); // Bottom
+        super::draw_rect(fb, self.rect.x, self.rect.y, self.rect.width, 1, bright, Some(draw_clip)); // Top
+        super::draw_rect(fb, self.rect.x, self.rect.y, 1, self.rect.height, bright, Some(draw_clip)); // Left
+        super::draw_rect(fb, self.rect.x + self.rect.width as isize - 1, self.rect.y, 1, self.rect.height, dark, Some(draw_clip)); // Right
+        super::draw_rect(fb, self.rect.x, self.rect.y + self.rect.height as isize - 1, self.rect.width, 1, dark, Some(draw_clip)); // Bottom
 
+        let font_height = if super::LARGE_TEXT.load(core::sync::atomic::Ordering::Relaxed) { 32 } else { 16 };
         let text_x = self.rect.x + (self.rect.width as isize - font::string_width(self.text.as_str()) as isize) / 2;
-        let text_y = self.rect.y + (self.rect.height as isize - 16) / 2;
+        let text_y = self.rect.y + (self.rect.height as isize - font_height) / 2;
         
         let final_text_color = if high_contrast {
             if is_hovered { 0x00_00_00_00 } else { 0x00_FF_FF_FF }
@@ -66,7 +79,7 @@ impl Button {
             self.text_color
         };
         
-        font::draw_string(fb, text_x, text_y, self.text.as_str(), final_text_color, clip);
+        font::draw_string(fb, text_x, text_y, self.text.as_str(), final_text_color, Some(draw_clip));
     }
 
     pub fn contains(&self, x: isize, y: isize) -> bool {
