@@ -2,6 +2,9 @@
 
 use crate::drivers::framebuffer::Framebuffer;
 use super::rect::Rect;
+use super::font_jp::FONT_JP;
+use super::LARGE_TEXT;
+use core::sync::atomic::Ordering;
 
 // This font is a public domain 8x16 VGA font.
 static FONT: [[u8; 16]; 128] = [
@@ -136,38 +139,87 @@ static FONT: [[u8; 16]; 128] = [
 ];
 
 /// Draws a single character to the framebuffer.
-pub fn draw_char(fb: &mut Framebuffer, x: isize, y: isize, character: char, color: u32, clip: Option<Rect>) {
-    let char_idx = character as usize;
-    if char_idx >= FONT.len() {
-        return; // Character not in font, do nothing.
-    }
+/// Returns the width of the character drawn.
+pub fn draw_char(fb: &mut Framebuffer, x: isize, y: isize, character: char, color: u32, clip: Option<Rect>) -> usize {
+    let scale = if LARGE_TEXT.load(Ordering::Relaxed) { 2 } else { 1 };
+    
+    // For simplicity, we'll use a simple check for ASCII vs JP.
+    // A more robust solution would check Unicode ranges for CJK, etc.
+    if character.is_ascii() {
+        let char_idx = character as usize;
+        if char_idx >= FONT.len() { return 0; }
 
-    if let Some(c) = clip {
-        if !c.intersects(&Rect { x, y, width: 8, height: 16 }) { return; }
-    }
+        let width = 8 * scale;
+        let height = 16 * scale;
 
-    let glyph = FONT[char_idx];
+        if let Some(c) = clip {
+            if !c.intersects(&Rect { x, y, width, height }) { return width; }
+        }
 
-    for (row_idx, row) in glyph.iter().enumerate() {
-        for col_idx in 0..8 {
-            if (row >> (7 - col_idx)) & 1 == 1 {
-                let px = x + col_idx;
-                let py = y + row_idx as isize;
-                
-                let visible = if let Some(c) = clip { c.contains(px, py) } else { true };
+        let glyph = FONT[char_idx];
 
-                if visible && px >= 0 && py >= 0 {
-                    fb.set_pixel(px as usize, py as usize, color);
+        for (row_idx, row) in glyph.iter().enumerate() {
+            for col_idx in 0..8 {
+                if (row >> (7 - col_idx)) & 1 == 1 {
+                    for dy in 0..scale {
+                        for dx in 0..scale {
+                            let px = x + (col_idx as isize * scale as isize) + dx as isize;
+                            let py = y + (row_idx as isize * scale as isize) + dy as isize;
+                            
+                            let visible = if let Some(c) = clip { c.contains(px, py) } else { true };
+
+                            if visible && px >= 0 && py >= 0 {
+                                fb.set_pixel(px as usize, py as usize, color);
+                            }
+                        }
+                    }
                 }
             }
         }
+        width
+    } else {
+        // Japanese / Full-width character
+        let glyph_data = FONT_JP.iter().find(|(c, _)| *c == character).unwrap_or(&FONT_JP[3]); // Fallback to '？'
+
+        let width = 16 * scale;
+        let height = 16 * scale;
+
+        if let Some(c) = clip {
+            if !c.intersects(&Rect { x, y, width, height }) { return width; }
+        }
+
+        for (row_idx, row) in glyph_data.1.iter().enumerate() {
+            for col_idx in 0..16 {
+                if (row >> (15 - col_idx)) & 1 == 1 {
+                    for dy in 0..scale {
+                        for dx in 0..scale {
+                            let px = x + (col_idx as isize * scale as isize) + dx as isize;
+                            let py = y + (row_idx as isize * scale as isize) + dy as isize;
+
+                            let visible = if let Some(c) = clip { c.contains(px, py) } else { true };
+
+                            if visible && px >= 0 && py >= 0 {
+                                fb.set_pixel(px as usize, py as usize, color);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        width
     }
 }
 
 /// Draws a string of characters to the framebuffer.
 pub fn draw_string(fb: &mut Framebuffer, mut x: isize, y: isize, text: &str, color: u32, clip: Option<Rect>) {
     for character in text.chars() {
-        draw_char(fb, x, y, character, color, clip);
-        x += 8; // Advance x by character width
+        let char_width = draw_char(fb, x, y, character, color, clip);
+        x += char_width as isize; // Advance x by character width
     }
+}
+
+/// Calculates the pixel width of a string.
+pub fn string_width(text: &str) -> usize {
+    let scale = if LARGE_TEXT.load(Ordering::Relaxed) { 2 } else { 1 };
+    text.chars().map(|c| if c.is_ascii() { 8 * scale } else { 16 * scale }).sum()
 }

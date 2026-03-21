@@ -12,13 +12,21 @@ use crate::userspace::apps::{app::{App, AppEvent}, calculator::Calculator, edito
 use spin::Mutex;
 use alloc::boxed::Box;
 pub mod font;
-use core::sync::atomic::Ordering;
+pub mod font_jp;
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 pub mod rect;
 use self::rect::Rect;
 pub mod button;
 use self::button::Button;
+use crate::userspace::localisation;
 
 const MAX_WINDOWS: usize = 10;
+
+pub static DESKTOP_GRADIENT_START: AtomicU32 = AtomicU32::new(0x00_10_20_40);
+pub static DESKTOP_GRADIENT_END: AtomicU32 = AtomicU32::new(0x00_50_80_B0);
+pub static FULL_REDRAW_REQUESTED: AtomicBool = AtomicBool::new(false);
+pub static HIGH_CONTRAST: AtomicBool = AtomicBool::new(false);
+pub static LARGE_TEXT: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone)]
 pub struct Window {
@@ -251,6 +259,24 @@ impl WindowManager {
                     }
                 }
             }
+
+            // Send MouseMove event to the active window if we are clicking/dragging on it
+            if let Some(target_id) = self.click_target_id {
+                if self.drag_win_id.is_none() && self.resize_win_id.is_none() {
+                    if let Some(idx) = self.windows.iter().position(|w| w.id == target_id) {
+                        let (win_x, win_y, win_w, win_h) = {
+                            let w = &self.windows[idx];
+                            (w.x, w.y, w.width, w.height)
+                        };
+                        
+                        if let WindowContent::App(app) = &mut self.windows[idx].content {
+                            // Use 22 for title height to match draw_window offset
+                            app.handle_event(&AppEvent::MouseMove { x: self.mouse_x - win_x, y: self.mouse_y - (win_y + 22) });
+                        }
+                        self.mark_dirty(Rect { x: win_x, y: win_y, width: win_w, height: win_h });
+                    }
+                }
+            }
         }
 
         // Update cursor style based on what's under it
@@ -268,6 +294,13 @@ impl WindowManager {
                         app.handle_event(&AppEvent::KeyPress { key });
                     }
                 }
+            }
+        }
+
+        if FULL_REDRAW_REQUESTED.load(Ordering::Relaxed) {
+            FULL_REDRAW_REQUESTED.store(false, Ordering::Relaxed);
+            if let Some(info) = FRAMEBUFFER.lock().info.as_ref() {
+                self.mark_dirty(Rect { x: 0, y: 0, width: info.width, height: info.height });
             }
         }
 
@@ -349,20 +382,21 @@ impl WindowManager {
             let taskbar_height: usize = 40;
             let taskbar_y = screen_height - taskbar_height as isize;
             let start_button_width = 120;
-            let start_button = Button::new(0, taskbar_y, start_button_width, taskbar_height, "Start");
+            let locale = localisation::CURRENT_LOCALE.lock();
+            let start_button = Button::new(0, taskbar_y, start_button_width, taskbar_height, locale.start());
 
             if self.context_menu_open {
                 let menu_rect = Rect { x: self.context_menu_x, y: self.context_menu_y, width: 150, height: 100 };
                 if menu_rect.contains(self.mouse_x, self.mouse_y) {
-                    let btn1 = Button::new(self.context_menu_x + 5, self.context_menu_y + 5, 140, 25, "New Terminal");
-                    let btn2 = Button::new(self.context_menu_x + 5, self.context_menu_y + 35, 140, 25, "System Info");
-                    let btn3 = Button::new(self.context_menu_x + 5, self.context_menu_y + 65, 140, 25, "Properties");
+                    let btn1 = Button::new(self.context_menu_x + 5, self.context_menu_y + 5, 140, 25, locale.ctx_new_terminal());
+                    let btn2 = Button::new(self.context_menu_x + 5, self.context_menu_y + 35, 140, 25, locale.app_system_info());
+                    let btn3 = Button::new(self.context_menu_x + 5, self.context_menu_y + 65, 140, 25, locale.ctx_properties());
                     
                     if btn1.contains(self.mouse_x, self.mouse_y) {
                         self.add_window(Window {
                             id: 0, x: 100, y: 100, width: 480, height: 320,
                             color: 0x00_1E_1E_1E,
-                            title: "Terminal",
+                            title: locale.app_terminal(),
                             content: WindowContent::App(Box::new(Terminal::new())),
                             minimized: false, maximized: false, restore_rect: None,
                         });
@@ -373,7 +407,7 @@ impl WindowManager {
                          self.add_window(Window {
                             id: 0, x: 150, y: 150, width: 480, height: 320,
                             color: 0x00_1E_1E_1E,
-                            title: "System Info",
+                            title: locale.app_system_info(),
                             content: WindowContent::App(Box::new(term)),
                             minimized: false, maximized: false, restore_rect: None,
                         });
@@ -385,7 +419,7 @@ impl WindowManager {
                          self.add_window(Window {
                             id: 0, x: 200, y: 200, width: 300, height: 200,
                             color: 0x00_1E_1E_1E,
-                            title: "Properties",
+                            title: locale.ctx_properties(),
                             content: WindowContent::App(Box::new(term)),
                             minimized: false, maximized: false, restore_rect: None,
                         });
@@ -467,21 +501,21 @@ impl WindowManager {
                 let menu_width = 200;
                 let item_width = menu_width - 20;
 
-                let editor_button = Button::new(menu_x + 10, menu_y + 15, item_width, 30, "Text Editor");
-                let calc_button = Button::new(menu_x + 10, menu_y + 55, item_width, 30, "Calculator");
-                let settings_button = Button::new(menu_x + 10, menu_y + 95, item_width, 30, "Settings");
-                let terminal_button = Button::new(menu_x + 10, menu_y + 135, item_width, 30, "Terminal");
-                let shutdown_button = Button::new(menu_x + 10, menu_y + 300 - 45, item_width, 30, "Shutdown");
+                let editor_button = Button::new(menu_x + 10, menu_y + 15, item_width, 30, locale.app_text_editor());
+                let calc_button = Button::new(menu_x + 10, menu_y + 55, item_width, 30, locale.app_calculator());
+                let settings_button = Button::new(menu_x + 10, menu_y + 95, item_width, 30, locale.app_settings());
+                let terminal_button = Button::new(menu_x + 10, menu_y + 135, item_width, 30, locale.app_terminal());
+                let shutdown_button = Button::new(menu_x + 10, menu_y + 300 - 45, item_width, 30, locale.btn_shutdown());
 
                 self.mark_dirty(Rect { x: 0, y: menu_y, width: 200, height: 300 }); // Mark menu dirty on click
                 if settings_button.contains(self.mouse_x, self.mouse_y) {
                     // Clicked "Settings"
-                    let settings_open = self.windows.iter().any(|w| w.title == "Settings");
+                    let settings_open = self.windows.iter().any(|w| w.title == locale.app_settings());
                     if !settings_open {
                         self.add_window(Window {
-                            id: 0, x: 250, y: 250, width: 200, height: 150,
+                            id: 0, x: 250, y: 250, width: 300, height: 300,
                             color: 0x00_40_20_40, // Dark Purple
-                            title: "Settings",
+                            title: locale.app_settings(),
                             content: WindowContent::App(Box::new(Settings::new())),
                             minimized: false, maximized: false, restore_rect: None,
                         });
@@ -494,7 +528,7 @@ impl WindowManager {
                     self.add_window(Window {
                         id: 0, x: 100, y: 100, width: 480, height: 320,
                         color: 0x00_1E_1E_1E,
-                        title: "Terminal",
+                        title: locale.app_terminal(),
                         content: WindowContent::App(Box::new(Terminal::new())),
                         minimized: false, maximized: false, restore_rect: None,
                     });
@@ -509,7 +543,7 @@ impl WindowManager {
                     self.add_window(Window {
                         id: 0, x: 50, y: 350, width: 160, height: 220,
                         color: 0x00_20_20_20,
-                        title: "Calculator",
+                        title: locale.app_calculator(),
                         content: WindowContent::App(Box::new(Calculator::new())),
                         minimized: false, maximized: false, restore_rect: None,
                     });
@@ -520,7 +554,7 @@ impl WindowManager {
                     self.add_window(Window {
                         id: 0, x: 150, y: 150, width: 400, height: 300,
                         color: 0x00_1E_1E_1E, // Very dark gray
-                        title: "Text Editor",
+                        title: locale.app_text_editor(),
                         content: WindowContent::App(Box::new(TextEditor::new())),
                         minimized: false, maximized: false, restore_rect: None,
                     });
@@ -751,15 +785,35 @@ impl WindowManager {
                 if let Some(r) = dirty_rect.intersection(&screen_rect) {
                     let h = fb_info.height as isize;
                     for y in r.y..(r.y + r.height as isize) {
-                        // Interpolate from Deep Blue (0x10, 0x20, 0x40) to Lighter Blue (0x50, 0x80, 0xB0)
-                        let r_val = 0x10 + ((0x50 - 0x10) * y) / h;
-                        let g_val = 0x20 + ((0x80 - 0x20) * y) / h;
-                        let b_val = 0x40 + ((0xB0 - 0x40) * y) / h;
+                        let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
+                        let (start_c, end_c) = if high_contrast {
+                            (0x00_00_00_00, 0x00_00_00_00) // Solid black in high contrast
+                        } else {
+                            (DESKTOP_GRADIENT_START.load(Ordering::Relaxed), DESKTOP_GRADIENT_END.load(Ordering::Relaxed))
+                        };
+
+                        let (r1, g1, b1) = (((start_c >> 16) & 0xFF) as isize, ((start_c >> 8) & 0xFF) as isize, (start_c & 0xFF) as isize);
+                        let (r2, g2, b2) = (((end_c >> 16) & 0xFF) as isize, ((end_c >> 8) & 0xFF) as isize, (end_c & 0xFF) as isize);
+
+                        let r_val = r1 + ((r2 - r1) * y) / h;
+                        let g_val = g1 + ((g2 - g1) * y) / h;
+                        let b_val = b1 + ((b2 - b1) * y) / h;
+                        
                         let color = ((r_val as u32) << 16) | ((g_val as u32) << 8) | (b_val as u32);
                         
                         for x in r.x..(r.x + r.width as isize) {
                             local_fb.set_pixel(x as usize, y as usize, color);
                         }
+                    }
+                    
+                    // Draw version string on desktop (bottom right, above taskbar)
+                    let version = crate::kernel::VERSION;
+                    let v_w = font::string_width(version);
+                    let v_x = fb_info.width as isize - v_w as isize - 8;
+                    let v_y = fb_info.height as isize - 40 - 20; // 40 taskbar, 20 padding
+                    
+                    if dirty_rect.intersects(&Rect { x: v_x, y: v_y, width: v_w, height: 16 }) {
+                        font::draw_string(&mut local_fb, v_x, v_y, version, 0x00_FFFFFF, Some(*dirty_rect));
                     }
                 }
             } else {
@@ -832,11 +886,17 @@ impl WindowManager {
 
     fn draw_window(&self, fb: &mut framebuffer::Framebuffer, win: &Window, mouse_x: isize, mouse_y: isize, clip: Rect) {
         let is_active = self.z_order.last() == Some(&win.id);
-        let title_color = if is_active { 0x00_00_40_80 } else { 0x00_40_40_40 };
+        let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
+        
+        let (title_color, body_color, border_bright, border_dark, title_text_color) = if high_contrast {
+            (if is_active { 0x00_00_00_FF } else { 0x00_00_00_00 }, 0x00_00_00_00, 0x00_FF_FF_FF, 0x00_FF_FF_FF, 0x00_FF_FF_FF)
+        } else {
+            (if is_active { 0x00_00_40_80 } else { 0x00_40_40_40 }, win.color, 0x00_FF_FF_FF, 0x00_40_40_40, 0x00_FF_FF_FF)
+        };
         let title_height = 22;
 
         // Draw main window body
-        draw_rect(fb, win.x, win.y, win.width, win.height, win.color, Some(clip));
+        draw_rect(fb, win.x, win.y, win.width, win.height, body_color, Some(clip));
         
         // Draw Content
         let content_rect = Rect {
@@ -859,7 +919,7 @@ impl WindowManager {
         // Draw title bar on top
         draw_rect(fb, win.x, win.y, win.width, title_height, title_color, Some(clip));
         // Draw title text
-        font::draw_string(fb, win.x + 6, win.y + 3, win.title, 0x00_FFFFFF, Some(clip)); // White
+        font::draw_string(fb, win.x + 6, win.y + 3, win.title, title_text_color, Some(clip));
 
         // Window control buttons
         let btn_y = win.y + 3;
@@ -879,13 +939,11 @@ impl WindowManager {
         min_button.draw(fb, mouse_x, mouse_y, Some(clip));
 
         // Draw Bevel Frame (On top of everything)
-        let bright = 0x00_FF_FF_FF;
-        let dark = 0x00_40_40_40;
-        draw_rect(fb, win.x, win.y, win.width, 1, bright, Some(clip)); // Top
-        draw_rect(fb, win.x, win.y, 1, win.height, bright, Some(clip)); // Left
-        draw_rect(fb, win.x + win.width as isize - 1, win.y, 1, win.height, dark, Some(clip)); // Right
-        draw_rect(fb, win.x, win.y + win.height as isize - 1, win.width, 1, dark, Some(clip)); // Bottom
-        draw_rect(fb, win.x, win.y + title_height as isize, win.width, 1, dark, Some(clip)); // Header separator
+        draw_rect(fb, win.x, win.y, win.width, 1, border_bright, Some(clip)); // Top
+        draw_rect(fb, win.x, win.y, 1, win.height, border_bright, Some(clip)); // Left
+        draw_rect(fb, win.x + win.width as isize - 1, win.y, 1, win.height, border_dark, Some(clip)); // Right
+        draw_rect(fb, win.x, win.y + win.height as isize - 1, win.width, 1, border_dark, Some(clip)); // Bottom
+        draw_rect(fb, win.x, win.y + title_height as isize, win.width, 1, border_dark, Some(clip)); // Header separator
     }
 
     fn draw_taskbar(&self, fb: &mut framebuffer::Framebuffer, mouse_x: isize, mouse_y: isize, clip: Rect) {
@@ -897,14 +955,22 @@ impl WindowManager {
 
             let taskbar_height = 40;
             let taskbar_y = (height - taskbar_height) as isize;
+            let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
+            
+            let (bg_color, border_color) = if high_contrast {
+                (0x00_00_00_00, 0x00_FF_FF_FF)
+            } else {
+                (0x00_28_28_28, 0x00_50_50_50)
+            };
             
             // Dark sleek taskbar
-            draw_rect(fb, 0, taskbar_y, width, taskbar_height, 0x00_28_28_28, Some(clip));
-            draw_rect(fb, 0, taskbar_y, width, 1, 0x00_50_50_50, Some(clip)); // Top highlight
+            draw_rect(fb, 0, taskbar_y, width, taskbar_height, bg_color, Some(clip));
+            draw_rect(fb, 0, taskbar_y, width, 1, border_color, Some(clip)); // Top highlight
 
             let start_button_width = 120;
             // Give feedback if menu is open
-            let mut start_button = Button::new(0, taskbar_y, start_button_width, taskbar_height, "Start");
+            let locale = localisation::CURRENT_LOCALE.lock();
+            let mut start_button = Button::new(0, taskbar_y, start_button_width, taskbar_height, locale.start());
             start_button.bg_color = if self.start_menu_open { 0x00_40_40_40 } else { 0x00_30_30_30 };
             start_button.text_color = 0x00_FF_FF_FF;
             start_button.draw(fb, mouse_x, mouse_y, Some(clip));
@@ -914,10 +980,23 @@ impl WindowManager {
             let button_width = 100;
             for win in &self.windows {
                 // Truncate title to fit
-                let mut title = win.title;
-                if title.len() > 10 { title = &win.title[..10]; }
+                let title = if font::string_width(win.title) > button_width - 8 {
+                    let mut current_width = 0;
+                    let mut end_char_idx = 0;
+                    for (i, c) in win.title.char_indices() {
+                        let char_width = if c.is_ascii() { 8 } else { 16 };
+                        if current_width + char_width > button_width - 16 { // -16 for "..."
+                            break;
+                        }
+                        current_width += char_width;
+                        end_char_idx = i + c.len_utf8();
+                    }
+                    alloc::format!("{}...", &win.title[..end_char_idx])
+                } else {
+                    win.title.to_string()
+                };
 
-                let mut button = Button::new(x_offset, taskbar_y + 2, button_width, taskbar_height - 4, title);
+                let mut button = Button::new(x_offset, taskbar_y + 2, button_width, taskbar_height - 4, &title);
                 button.bg_color = if win.minimized { 0x00_30_30_30 } else { 0x00_50_50_50 };
                 button.text_color = 0x00_FF_FF_FF;
                 button.draw(fb, mouse_x, mouse_y, Some(clip));
@@ -933,11 +1012,13 @@ impl WindowManager {
         if let Some((width, height)) = fb.info.as_ref().map(|i| (i.width, i.height)) {
             let taskbar_height = 40;
             let taskbar_y = (height - taskbar_height) as isize;
+            let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
+            let bg_color = if high_contrast { 0x00_00_00_00 } else { 0x00_28_28_28 };
             
             // Clear the previous time area with taskbar background color
             let time_area_width = (8 * 8) + 20; // "HH:MM:SS" is 8 chars * 8px width + padding
             let time_x_start = width as isize - time_area_width;
-            draw_rect(fb, time_x_start, taskbar_y + 1, time_area_width as usize, taskbar_height - 1, 0x00_28_28_28, Some(clip));
+            draw_rect(fb, time_x_start, taskbar_y + 1, time_area_width as usize, taskbar_height - 1, bg_color, Some(clip));
 
             let time = CURRENT_DATETIME.lock(); // Read from global current time
             let mut time_str_bytes = [b' '; 8];
@@ -968,16 +1049,28 @@ impl WindowManager {
             let taskbar_height = 40;
             let menu_x = 0;
             let menu_y = (height - taskbar_height - menu_height) as isize;
+            let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
+            
+            let bg_color = if high_contrast { 0x00_00_00_00 } else { 0x00_C0_C0_C0 };
+            let border_color = if high_contrast { 0x00_FF_FF_FF } else { 0x00_C0_C0_C0 };
 
-            draw_rect(fb, menu_x, menu_y, menu_width, menu_height, 0x00_C0_C0_C0, Some(clip));
+            draw_rect(fb, menu_x, menu_y, menu_width, menu_height, bg_color, Some(clip));
+            
+            if high_contrast {
+                draw_rect(fb, menu_x, menu_y, menu_width, 1, border_color, Some(clip)); // Top
+                draw_rect(fb, menu_x, menu_y, 1, menu_height, border_color, Some(clip)); // Left
+                draw_rect(fb, menu_x + menu_width as isize - 1, menu_y, 1, menu_height, border_color, Some(clip)); // Right
+                draw_rect(fb, menu_x, menu_y + menu_height as isize - 1, menu_width, 1, border_color, Some(clip)); // Bottom
+            }
 
+            let locale = localisation::CURRENT_LOCALE.lock();
             let item_width = menu_width - 20;
-            Button::new(menu_x + 10, menu_y + 15, item_width, 30, "Text Editor").draw(fb, mouse_x, mouse_y, Some(clip));
-            Button::new(menu_x + 10, menu_y + 55, item_width, 30, "Calculator").draw(fb, mouse_x, mouse_y, Some(clip));
-            Button::new(menu_x + 10, menu_y + 95, item_width, 30, "Settings").draw(fb, mouse_x, mouse_y, Some(clip));
-            Button::new(menu_x + 10, menu_y + 135, item_width, 30, "Terminal").draw(fb, mouse_x, mouse_y, Some(clip));
+            Button::new(menu_x + 10, menu_y + 15, item_width, 30, locale.app_text_editor()).draw(fb, mouse_x, mouse_y, Some(clip));
+            Button::new(menu_x + 10, menu_y + 55, item_width, 30, locale.app_calculator()).draw(fb, mouse_x, mouse_y, Some(clip));
+            Button::new(menu_x + 10, menu_y + 95, item_width, 30, locale.app_settings()).draw(fb, mouse_x, mouse_y, Some(clip));
+            Button::new(menu_x + 10, menu_y + 135, item_width, 30, locale.app_terminal()).draw(fb, mouse_x, mouse_y, Some(clip));
 
-            let mut shutdown_button = Button::new(menu_x + 10, menu_y + menu_height as isize - 45, item_width, 30, "Shutdown");
+            let mut shutdown_button = Button::new(menu_x + 10, menu_y + menu_height as isize - 45, item_width, 30, locale.btn_shutdown());
             shutdown_button.bg_color = 0x00_FF_60_60; // Light red
             shutdown_button.draw(fb, mouse_x, mouse_y, Some(clip));
     }
@@ -987,17 +1080,23 @@ impl WindowManager {
         let menu_y = self.context_menu_y;
         let width = 150;
         let height = 100;
+        let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
+        
+        let bg_color = if high_contrast { 0x00_00_00_00 } else { 0x00_C0_C0_C0 };
+        let light = if high_contrast { 0x00_FF_FF_FF } else { 0x00_FFFFFF };
+        let dark = if high_contrast { 0x00_FF_FF_FF } else { 0x00_40_40_40 };
 
-        draw_rect(fb, menu_x, menu_y, width, height, 0x00_C0_C0_C0, Some(clip));
-        draw_rect(fb, menu_x, menu_y, width, 1, 0x00_FFFFFF, Some(clip));
-        draw_rect(fb, menu_x, menu_y, 1, height, 0x00_FFFFFF, Some(clip));
-        draw_rect(fb, menu_x + width as isize - 1, menu_y, 1, height, 0x00_40_40_40, Some(clip));
-        draw_rect(fb, menu_x, menu_y + height as isize - 1, width, 1, 0x00_40_40_40, Some(clip));
+        draw_rect(fb, menu_x, menu_y, width, height, bg_color, Some(clip));
+        draw_rect(fb, menu_x, menu_y, width, 1, light, Some(clip));
+        draw_rect(fb, menu_x, menu_y, 1, height, light, Some(clip));
+        draw_rect(fb, menu_x + width as isize - 1, menu_y, 1, height, dark, Some(clip));
+        draw_rect(fb, menu_x, menu_y + height as isize - 1, width, 1, dark, Some(clip));
 
+        let locale = localisation::CURRENT_LOCALE.lock();
         let item_width = width - 10;
-        Button::new(menu_x + 5, menu_y + 5, item_width, 25, "New Terminal").draw(fb, mouse_x, mouse_y, Some(clip));
-        Button::new(menu_x + 5, menu_y + 35, item_width, 25, "System Info").draw(fb, mouse_x, mouse_y, Some(clip));
-        Button::new(menu_x + 5, menu_y + 65, item_width, 25, "Properties").draw(fb, mouse_x, mouse_y, Some(clip));
+        Button::new(menu_x + 5, menu_y + 5, item_width, 25, locale.ctx_new_terminal()).draw(fb, mouse_x, mouse_y, Some(clip));
+        Button::new(menu_x + 5, menu_y + 35, item_width, 25, locale.app_system_info()).draw(fb, mouse_x, mouse_y, Some(clip));
+        Button::new(menu_x + 5, menu_y + 65, item_width, 25, locale.ctx_properties()).draw(fb, mouse_x, mouse_y, Some(clip));
     }
 
     fn draw_cursor(&self, fb: &mut framebuffer::Framebuffer, x: isize, y: isize, clip: Rect) {

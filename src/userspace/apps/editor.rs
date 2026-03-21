@@ -60,8 +60,8 @@ impl App for TextEditor {
                 current_y += line_height as isize;
                 current_x = content_x;
             } else {
-                font::draw_char(fb, current_x, current_y, ch, 0x00_FFFFFF, None);
-                current_x += 8;
+                let char_width = font::draw_char(fb, current_x, current_y, ch, 0x00_FFFFFF, None);
+                current_x += char_width as isize;
             }
         }
 

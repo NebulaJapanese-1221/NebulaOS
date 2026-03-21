@@ -120,7 +120,7 @@ impl App for Terminal {
         let input_line = alloc::format!("{}{}", self.prompt, self.input_buffer);
         if y < (win.y + win.height as isize - line_height as isize) {
              font::draw_string(fb, start_x, y, input_line.as_str(), 0x00_FFFFFF, None);
-             let cursor_x = start_x + (input_line.len() as isize * 8);
+             let cursor_x = start_x + font::string_width(&input_line) as isize;
              gui::draw_rect(fb, cursor_x, y, 8, line_height as usize, 0x00_FFFFFF, None);
         }
     }
