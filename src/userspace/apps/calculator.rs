@@ -115,7 +115,7 @@ impl App for Calculator {
     }
 
     fn handle_event(&mut self, event: &AppEvent) {
-        if let AppEvent::MouseClick { x, y } = event {
+        if let AppEvent::MouseClick { x, y, .. } = event {
             if *y < 40 { return; } // Clicked on display area
             let btn_y = (*y - 40) / 40;
             let btn_x = *x / 40;

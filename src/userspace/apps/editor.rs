@@ -83,7 +83,8 @@ impl App for TextEditor {
     fn handle_event(&mut self, event: &AppEvent) {
         if let AppEvent::KeyPress { key } = event {
             self.process_key(*key);
-        } else if let AppEvent::Scroll { delta } = event {
+        } else if let AppEvent::Scroll { delta, width: _, height } = event {
+            self.scroll(*delta, *height);
         }
     }
 

@@ -57,7 +57,7 @@ impl Settings {
                 bg_color,
                 text_color: 0x00_FF_FF_FF,
             };
-            btn.draw(fb, 0, 0, Some(win.rect)); // Mouse hover not supported in this context yet
+            btn.draw(fb, 0, 0, Some(Rect { x: win.x, y: win.y, width: win.width, height: win.height })); // Mouse hover not supported in this context yet
             
         if is_active {
                 crate::userspace::gui::draw_rect(fb, x, start_y + bar_height as isize - 2, tab_width, 2, 0x00_00_AA_FF, None);
@@ -167,8 +167,8 @@ impl App for Settings {
 
     fn handle_event(&mut self, event: &AppEvent) {
         let (x, y) = match event {
-            AppEvent::MouseClick { x, y } => (*x, *y),
-            AppEvent::MouseMove { x, y } => (*x, *y),
+            AppEvent::MouseClick { x, y, .. } => (*x, *y),
+            AppEvent::MouseMove { x, y, .. } => (*x, *y),
             _ => return,
         };
 
@@ -186,7 +186,7 @@ impl App for Settings {
         
         if self.current_tab == Tab::Accessibility {
             // Toggles on Click only
-            if let AppEvent::MouseClick { x, y } = event {
+            if let AppEvent::MouseClick { x, y, .. } = event {
                 let content_y_rel = 32;
                 let btn_hc_rect = Rect { x: 8, y: content_y_rel + 20, width: 140, height: 20 };
                 let btn_lt_rect = Rect { x: 8, y: content_y_rel + 45, width: 140, height: 20 };
@@ -204,7 +204,7 @@ impl App for Settings {
         }
 
         if self.current_tab == Tab::Language {
-            if let AppEvent::MouseClick { x, y } = event {
+            if let AppEvent::MouseClick { x, y, .. } = event {
                 let content_y_rel = 32;
                 let btn_en_rect = Rect { x: 8, y: content_y_rel + 20, width: 120, height: 25 };
                 let btn_ja_rect = Rect { x: 8, y: content_y_rel + 50, width: 120, height: 25 };
@@ -260,7 +260,7 @@ impl App for Settings {
             }
 
             // Preset Buttons (Click only)
-            if let AppEvent::MouseClick { x, y } = event {
+            if let AppEvent::MouseClick { x, y, .. } = event {
                 let presets_y_rel = 32 + 110;
                 let start_x = 8;
                 let btn_w = 80;

@@ -2,7 +2,6 @@ use spin::Mutex;
 use super::ps2;
 use crate::kernel::interrupts::InterruptStackFrame;
 use crate::kernel::io;
-use core::arch::asm;
 
 /// A simple ring buffer for buffering key presses.
 pub struct KeyBuffer {
@@ -24,8 +23,8 @@ impl KeyBuffer {
                 ctrl: false,
                 alt: false,
                 capslock: false,
-                last_scancode: todo!(),
-                repeat_count: todo!(),
+                last_scancode: 0,
+                repeat_count: 0,
             },
         }
     }
@@ -181,6 +180,11 @@ pub fn scancode_to_char(scancode: u8) -> Option<char> {
     }
 }
 
+unsafe fn send_cmd(byte: u8) {
+    while (ps2::read_status() & 0x02) != 0 {}
+    ps2::write_data(byte);
+}
+
 pub fn init() {
     unsafe {
         // 1. Disable PS/2 devices to prevent them from sending data during setup
@@ -202,17 +206,17 @@ pub fn init() {
 
         // 4. Send commands to the keyboard itself
         // Reset keyboard first to ensure clean state
-        ps2::write_keyboard_command(0xFF); // Reset
+        send_cmd(0xFF); // Reset
         ps2::read_data(); // Consume ACK
 
-        ps2::write_keyboard_command(0xF0); // Set Scan Code Set
-        ps2::write_keyboard_command(0x02); // Scan Code Set 2
+        send_cmd(0xF0); // Set Scan Code Set
+        send_cmd(0x02); // Scan Code Set 2
         ps2::read_data(); // Consume ACK
 
-        ps2::write_keyboard_command(0xF6); // Set Defaults
+        send_cmd(0xF6); // Set Defaults
         ps2::read_data(); // Consume ACK
 
-        ps2::write_keyboard_command(0xF4); // Enable Scanning
+        send_cmd(0xF4); // Enable Scanning
         ps2::read_data(); // Consume ACK
 
         // 5. Enable the devices

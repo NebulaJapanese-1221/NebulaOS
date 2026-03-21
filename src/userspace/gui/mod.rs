@@ -19,6 +19,7 @@ use self::rect::Rect;
 pub mod button;
 use self::button::Button;
 use crate::userspace::localisation;
+use core::arch::asm;
 
 const MAX_WINDOWS: usize = 10;
 
@@ -174,7 +175,7 @@ impl WindowManager {
         };
 
         // Mark the cursor's starting position as dirty ONCE before processing packets
-        self.mark_dirty(self.get_cursor_rect());
+        let initial_cursor_rect = self.get_cursor_rect();
 
         let start_interaction_id = self.resize_win_id;
         let start_interaction_rect = start_interaction_id.and_then(|id| self.get_window_rect(id));
@@ -247,10 +248,27 @@ impl WindowManager {
                     self.drag_rect = Some(Rect { x: new_x, y: new_y, width: win.width, height: win.height });
                 }
             }
+
+            // Scroll Wheel
+            if packet.wheel != 0 {
+                if let Some(target_id) = self.click_target_id {
+                    if let Some(idx) = self.windows.iter().position(|w| w.id == target_id) {
+                        let width = self.windows[idx].width;
+                        let height = self.windows[idx].height;
+                        if let WindowContent::App(app) = &mut self.windows[idx].content {
+                            app.handle_event(&AppEvent::Scroll { delta: packet.wheel as isize * 3, width, height });
+                            if let Some(rect) = self.get_window_rect(target_id) {
+                                self.mark_dirty(rect);
+                            }
+                        }
+                    }
+                }
+            }
         }
         
         // Mark the cursor's final position as dirty ONCE after processing packets
         if mouse_moved {
+            self.mark_dirty(initial_cursor_rect);
             self.mark_dirty(self.get_cursor_rect());
 
             // Handle window dirty rects efficiently
@@ -280,16 +298,6 @@ impl WindowManager {
                 self.mark_dirty(rect);
             }
 
-
-             // Scroll Wheel
-            if packet.wheel != 0 {
-                if let Some(target_id) = self.click_target_id {
-                if let Some(idx) = self.windows.iter().position(|w| w.id == target_id) {
-                if let WindowContent::App(app) = &mut self.windows[idx].content {
-                            app.handle_event(&AppEvent::Scroll { delta: packet.wheel as isize * 3 });
-
-            }}}}
-
             // Send MouseMove event to the active window if we are clicking/dragging on it
             if let Some(target_id) = self.click_target_id {
                 if self.drag_win_id.is_none() && self.resize_win_id.is_none() {
@@ -304,7 +312,7 @@ impl WindowManager {
                             let rel_x = self.mouse_x - win_x;
                             let rel_y = self.mouse_y - (win_y + 22);
                             if rel_x >= 0 && rel_x < win_w as isize && rel_y >= 0 && rel_y < win_h.saturating_sub(22) as isize {
-                                app.handle_event(&AppEvent::MouseMove { x: rel_x, y: rel_y });
+                                app.handle_event(&AppEvent::MouseMove { x: rel_x, y: rel_y, width: win_w, height: win_h });
                             }
                         }
                     }
@@ -764,7 +772,7 @@ impl WindowManager {
                         }
                         if let Some(win) = self.windows.iter_mut().find(|w| w.id == target_id) {
                              if let WindowContent::App(app) = &mut win.content {
-                                app.handle_event(&AppEvent::MouseClick { x: rel_x, y: rel_y });
+                                app.handle_event(&AppEvent::MouseClick { x: rel_x, y: rel_y, width: win.width, height: win.height });
                             }
                         }
                     }

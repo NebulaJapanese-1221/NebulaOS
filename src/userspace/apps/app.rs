@@ -3,17 +3,16 @@ use crate::userspace::gui::Window;
 use alloc::boxed::Box;
 
 pub enum AppEvent {
-    MouseClick { x: isize, y: isize },
-    MouseMove { x: isize, y: isize },
+    MouseClick { x: isize, y: isize, width: usize, height: usize },
+    MouseMove { x: isize, y: isize, width: usize, height: usize },
     KeyPress { key: char },
-    Scroll {delta: isize},
+    Scroll { delta: isize, width: usize, height: usize },
 }
 
 pub trait App: Send {
     fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window);
     fn handle_event(&mut self, event: &AppEvent);
     fn box_clone(&self) -> Box<dyn App>;
-    fn handle_scroll(&mut self, delta: isize, win_height: usize) {}
 }
 
 impl Clone for Box<dyn App> {

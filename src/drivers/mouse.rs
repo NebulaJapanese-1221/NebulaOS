@@ -8,6 +8,7 @@ pub struct MousePacket {
     pub x: i16,
     pub y: i16,
     pub buttons: u8,
+    pub wheel: i8,
 }
 
 const BUFFER_SIZE: usize = 256;
@@ -20,7 +21,7 @@ pub struct MouseBuffer {
 impl MouseBuffer {
     pub const fn new() -> Self {
         Self {
-            packets: [MousePacket { x: 0, y: 0, buttons: 0 }; BUFFER_SIZE],
+            packets: [MousePacket { x: 0, y: 0, buttons: 0, wheel: 0 }; BUFFER_SIZE],
             head: 0,
             tail: 0,
         }
@@ -39,7 +40,8 @@ pub static MOUSE_BUFFER: Mutex<MouseBuffer> = Mutex::new(MouseBuffer::new());
 
 // State for the interrupt handler to track packet assembly
 static mut BYTE_CYCLE: u8 = 0;
-static mut BYTES: [u8; 3] = [0; 3];
+static mut BYTES: [u8; 4] = [0; 4];
+static mut MOUSE_ID: u8 = 0;
 
 pub fn initialize() {
     unsafe {
@@ -71,8 +73,21 @@ pub fn initialize() {
             crate::serial_println!("[MOUSE] Reset failed");
         }
 
-        if !ps2::write_mouse_command(0xF6) { crate::serial_println!("[MOUSE] Set defaults failed"); }
-        if !ps2::write_mouse_command(0xF4) { crate::serial_println!("[MOUSE] Enable scanning failed"); }
+        // Set Defaults (Note: this often disables extensions, so we do it before the magic sequence)
+        ps2::write_mouse_command(0xF6);
+
+        // Enable Intellimouse Extensions (Magic Sequence: 200, 100, 80)
+        ps2::write_mouse_command(0xF3); ps2::write_mouse_command(200);
+        ps2::write_mouse_command(0xF3); ps2::write_mouse_command(100);
+        ps2::write_mouse_command(0xF3); ps2::write_mouse_command(80);
+
+        // Get Device ID to verify extension is enabled (should be 3 or 4)
+        ps2::write_mouse_command(0xF2);
+        if ps2::wait_output_avail() {
+            MOUSE_ID = ps2::read_data();
+        }
+
+        ps2::write_mouse_command(0xF4); // Enable Scanning
 
         // 5. Enable the devices
         ps2::write_command(0xAE); // Enable keyboard
@@ -106,18 +121,47 @@ pub fn handle_interrupt() {
                         BYTES[2] = byte;
                         BYTE_CYCLE = 0;
 
+                        // If Intellimouse (ID 3 or 4), expect a 4th byte
+                        if MOUSE_ID == 3 || MOUSE_ID == 4 {
+                            BYTE_CYCLE = 3;
+                        } else {
+                            let mut x = BYTES[1] as i16;
+                            let mut y = BYTES[2] as i16;
+                            
+                            // Handle PS/2 9-bit signed values by checking sign bits in Byte 0
+                            if (BYTES[0] & 0x10) != 0 { x |= 0xFF00u16 as i16; }
+                            if (BYTES[0] & 0x20) != 0 { y |= 0xFF00u16 as i16; }
+
+                            // Packet complete, push to buffer
+                            MOUSE_BUFFER.lock().push(MousePacket {
+                                buttons: BYTES[0] & 0x07,
+                                x,
+                                y,
+                                wheel: 0,
+                            });
+                        }
+                    }
+                    3 => {
+                        BYTES[3] = byte;
+                        BYTE_CYCLE = 0;
+
                         let mut x = BYTES[1] as i16;
                         let mut y = BYTES[2] as i16;
-                        
-                        // Handle PS/2 9-bit signed values by checking sign bits in Byte 0
                         if (BYTES[0] & 0x10) != 0 { x |= 0xFF00u16 as i16; }
                         if (BYTES[0] & 0x20) != 0 { y |= 0xFF00u16 as i16; }
 
-                        // Packet complete, push to buffer
+                        let wheel = if MOUSE_ID == 3 {
+                            byte as i8 // ID 3: standard signed byte
+                        } else if MOUSE_ID == 4 {
+                            let val = byte & 0x0F; // ID 4: lower 4 bits are wheel
+                            if (val & 0x08) != 0 { (val | 0xF0) as i8 } else { val as i8 }
+                        } else { 0 };
+
                         MOUSE_BUFFER.lock().push(MousePacket {
                             buttons: BYTES[0] & 0x07,
                             x,
                             y,
+                            wheel,
                         });
                     }
                     _ => {
