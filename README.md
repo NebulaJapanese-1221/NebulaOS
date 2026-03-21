@@ -15,6 +15,7 @@ Included in the userspace:
 *   **Terminal**: Command-line interface with history and basic commands (`uname`, etc.).
 *   **Calculator**: Basic arithmetic utility.
 *   **Settings**: For system configuration.
+*   **Text Editor**
 
 ## 🛠️ Build & Run
 
