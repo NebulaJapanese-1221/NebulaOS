@@ -382,7 +382,8 @@ impl WindowManager {
             let taskbar_height: usize = 40;
             let taskbar_y = screen_height - taskbar_height as isize;
             let start_button_width = 120;
-            let locale = localisation::CURRENT_LOCALE.lock();
+            let locale_guard = localisation::CURRENT_LOCALE.lock();
+            let locale = locale_guard.as_ref().unwrap();
             let start_button = Button::new(0, taskbar_y, start_button_width, taskbar_height, locale.start());
 
             if self.context_menu_open {
@@ -780,10 +781,13 @@ impl WindowManager {
         // No VRAM writes happen here, so no flickering can occur.
         for dirty_rect in &final_rects {
             // 1. Draw Desktop Background (Clear the region)
-            if let Some(fb_info) = local_fb.info.as_ref() {
-                let screen_rect = Rect { x: 0, y: 0, width: fb_info.width, height: fb_info.height };
+            // Extract info to avoid holding an immutable borrow on local_fb while calling set_pixel (mutable borrow)
+            let (screen_width, screen_height) = if let Some(info) = &local_fb.info { (info.width, info.height) } else { (0, 0) };
+            
+            if screen_width > 0 {
+                let screen_rect = Rect { x: 0, y: 0, width: screen_width, height: screen_height };
                 if let Some(r) = dirty_rect.intersection(&screen_rect) {
-                    let h = fb_info.height as isize;
+                    let h = screen_height as isize;
                     for y in r.y..(r.y + r.height as isize) {
                         let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
                         let (start_c, end_c) = if high_contrast {
@@ -809,8 +813,8 @@ impl WindowManager {
                     // Draw version string on desktop (bottom right, above taskbar)
                     let version = crate::kernel::VERSION;
                     let v_w = font::string_width(version);
-                    let v_x = fb_info.width as isize - v_w as isize - 8;
-                    let v_y = fb_info.height as isize - 40 - 20; // 40 taskbar, 20 padding
+                    let v_x = screen_width as isize - v_w as isize - 8;
+                    let v_y = screen_height as isize - 40 - 20; // 40 taskbar, 20 padding
                     
                     if dirty_rect.intersects(&Rect { x: v_x, y: v_y, width: v_w, height: 16 }) {
                         font::draw_string(&mut local_fb, v_x, v_y, version, 0x00_FFFFFF, Some(*dirty_rect));
@@ -969,7 +973,8 @@ impl WindowManager {
 
             let start_button_width = 120;
             // Give feedback if menu is open
-            let locale = localisation::CURRENT_LOCALE.lock();
+            let locale_guard = localisation::CURRENT_LOCALE.lock();
+            let locale = locale_guard.as_ref().unwrap();
             let mut start_button = Button::new(0, taskbar_y, start_button_width, taskbar_height, locale.start());
             start_button.bg_color = if self.start_menu_open { 0x00_40_40_40 } else { 0x00_30_30_30 };
             start_button.text_color = 0x00_FF_FF_FF;
@@ -1062,8 +1067,8 @@ impl WindowManager {
                 draw_rect(fb, menu_x + menu_width as isize - 1, menu_y, 1, menu_height, border_color, Some(clip)); // Right
                 draw_rect(fb, menu_x, menu_y + menu_height as isize - 1, menu_width, 1, border_color, Some(clip)); // Bottom
             }
-
-            let locale = localisation::CURRENT_LOCALE.lock();
+            let locale_guard = localisation::CURRENT_LOCALE.lock();
+            let locale = locale_guard.as_ref().unwrap();
             let item_width = menu_width - 20;
             Button::new(menu_x + 10, menu_y + 15, item_width, 30, locale.app_text_editor()).draw(fb, mouse_x, mouse_y, Some(clip));
             Button::new(menu_x + 10, menu_y + 55, item_width, 30, locale.app_calculator()).draw(fb, mouse_x, mouse_y, Some(clip));
@@ -1092,7 +1097,8 @@ impl WindowManager {
         draw_rect(fb, menu_x + width as isize - 1, menu_y, 1, height, dark, Some(clip));
         draw_rect(fb, menu_x, menu_y + height as isize - 1, width, 1, dark, Some(clip));
 
-        let locale = localisation::CURRENT_LOCALE.lock();
+        let locale_guard = localisation::CURRENT_LOCALE.lock();
+        let locale = locale_guard.as_ref().unwrap();
         let item_width = width - 10;
         Button::new(menu_x + 5, menu_y + 5, item_width, 25, locale.ctx_new_terminal()).draw(fb, mouse_x, mouse_y, Some(clip));
         Button::new(menu_x + 5, menu_y + 35, item_width, 25, locale.app_system_info()).draw(fb, mouse_x, mouse_y, Some(clip));

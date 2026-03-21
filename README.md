@@ -13,10 +13,8 @@ NebulaOS is currently in alpha. Problems can range from apps crashing to the OS 
 
 Included in the userspace:
 *   **Terminal**: Command-line interface with history and basic commands (`uname`, etc.).
-*   **Text Editor**: Graphical text editing with cursor support.
 *   **Calculator**: Basic arithmetic utility.
-*   **System Info**: Displays kernel version and system details.
-*   **Settings**: Placeholder for system configuration.
+*   **Settings**: For system configuration.
 
 ## 🛠️ Build & Run
 

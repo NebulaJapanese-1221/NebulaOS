@@ -129,6 +129,9 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     add_boot_status("[OK] Initializing GUI...", 5);
     draw_progress_bar(100);
     
+    // Initialize localisation before GUI
+    crate::userspace::localisation::init();
+    
     crate::userspace::gui::init();
     
     // Halt loop (The scheduler will hijack execution on the next timer tick)

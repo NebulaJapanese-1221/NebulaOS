@@ -1,7 +1,7 @@
 use super::rect::Rect;
 use crate::drivers::framebuffer;
 use super::font;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 
 #[derive(Clone)]
 pub struct Button {
@@ -57,7 +57,7 @@ impl Button {
         super::draw_rect(fb, self.rect.x + self.rect.width as isize - 1, self.rect.y, 1, self.rect.height, dark, clip); // Right
         super::draw_rect(fb, self.rect.x, self.rect.y + self.rect.height as isize - 1, self.rect.width, 1, dark, clip); // Bottom
 
-        let text_x = self.rect.x + (self.rect.width as isize - font::string_width(&self.text) as isize) / 2;
+        let text_x = self.rect.x + (self.rect.width as isize - font::string_width(self.text.as_str()) as isize) / 2;
         let text_y = self.rect.y + (self.rect.height as isize - 16) / 2;
         
         let final_text_color = if high_contrast {

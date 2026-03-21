@@ -4,6 +4,7 @@ use alloc::boxed::Box;
 
 pub enum AppEvent {
     MouseClick { x: isize, y: isize },
+    MouseMove { x: isize, y: isize },
     KeyPress { key: char },
 }
 

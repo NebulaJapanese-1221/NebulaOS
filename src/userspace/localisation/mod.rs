@@ -91,7 +91,7 @@ impl Localisation for ja_jp::JaJp {
     fn lang_japanese(&self) -> &'static str { ja_jp::LANG_JAPANESE }
 }
 
-pub static CURRENT_LOCALE: Mutex<Arc<dyn Localisation>> = Mutex::new(Arc::new(EnUs));
+pub static CURRENT_LOCALE: Mutex<Option<Arc<dyn Localisation>>> = Mutex::new(None);
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Language {
@@ -99,12 +99,17 @@ pub enum Language {
     Japanese,
 }
 
+pub fn init() {
+    // Set default language
+    *CURRENT_LOCALE.lock() = Some(Arc::new(EnUs));
+}
+
 pub fn set_language(lang: Language) {
     let new_locale: Arc<dyn Localisation> = match lang {
         Language::English => Arc::new(EnUs),
         Language::Japanese => Arc::new(ja_jp::JaJp),
     };
-    *CURRENT_LOCALE.lock() = new_locale;
+    *CURRENT_LOCALE.lock() = Some(new_locale);
     // Request a full redraw to update all text
     super::gui::FULL_REDRAW_REQUESTED.store(true, core::sync::atomic::Ordering::Relaxed);
 }

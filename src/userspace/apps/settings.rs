@@ -5,7 +5,8 @@ use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::ToString;
 use core::sync::atomic::Ordering;
-use crate::userspace::gui::{DESKTOP_GRADIENT_START, DESKTOP_GRADIENT_END, FULL_REDRAW_REQUESTED, HIGH_CONTRAST, LARGE_TEXT, localisation::{self, Language}};
+use crate::userspace::gui::{DESKTOP_GRADIENT_START, DESKTOP_GRADIENT_END, FULL_REDRAW_REQUESTED, HIGH_CONTRAST, LARGE_TEXT};
+use crate::userspace::localisation::{self, Language};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Tab {
@@ -30,7 +31,8 @@ impl Settings {
     fn draw_tabs(&self, fb: &mut framebuffer::Framebuffer, win: &Window) {
         let bar_height = 25;
         let start_y = win.y + 22; // Start just below title bar
-        let locale = localisation::CURRENT_LOCALE.lock();
+        let locale_guard = localisation::CURRENT_LOCALE.lock();
+        let locale = locale_guard.as_ref().unwrap();
         
         let tab_labels = [
             (Tab::System, locale.settings_tab_system()),
@@ -64,7 +66,8 @@ impl Settings {
     fn draw_content(&self, fb: &mut framebuffer::Framebuffer, win: &Window) {
         let content_y = win.y + 22 + 30; // Title(22) + TabBar(25) + Padding
         let content_x = win.x + 8;
-        let locale = localisation::CURRENT_LOCALE.lock();
+        let locale_guard = localisation::CURRENT_LOCALE.lock();
+        let locale = locale_guard.as_ref().unwrap();
 
         match self.current_tab {
             Tab::System => {
@@ -80,8 +83,10 @@ impl Settings {
                 let hc = HIGH_CONTRAST.load(Ordering::Relaxed);
                 let lt = LARGE_TEXT.load(Ordering::Relaxed);
 
-                let btn_hc = Button { rect: Rect { x: content_x, y: content_y + 20, width: 140, height: 20 }, text: format!(if hc { "[x] {}" } else { "[ ] {}" }, locale.option_high_contrast()), bg_color: 0x00_30_30_30, text_color: 0xFFFFFF };
-                let btn_lt = Button { rect: Rect { x: content_x, y: content_y + 45, width: 140, height: 20 }, text: format!(if lt { "[x] {}" } else { "[ ] {}" }, locale.option_large_text()), bg_color: 0x00_30_30_30, text_color: 0xFFFFFF };
+                let btn_hc_text = format!("{} {}", if hc { "[x]" } else { "[ ]" }, locale.option_high_contrast());
+                let btn_hc = Button { rect: Rect { x: content_x, y: content_y + 20, width: 140, height: 20 }, text: btn_hc_text, bg_color: 0x00_30_30_30, text_color: 0xFFFFFF };
+                let btn_lt_text = format!("{} {}", if lt { "[x]" } else { "[ ]" }, locale.option_large_text());
+                let btn_lt = Button { rect: Rect { x: content_x, y: content_y + 45, width: 140, height: 20 }, text: btn_lt_text, bg_color: 0x00_30_30_30, text_color: 0xFFFFFF };
                 btn_hc.draw(fb, 0, 0, None);
                 btn_lt.draw(fb, 0, 0, None);
             },
@@ -219,7 +224,7 @@ impl App for Settings {
             let g_rect = Rect { x: slider_x_rel, y: content_y_rel + 45 - 5, width: slider_w, height: 12 };
             let b_rect = Rect { x: slider_x_rel, y: content_y_rel + 65 - 5, width: slider_w, height: 12 };
 
-            let mut current_color = DESKTOP_GRADIENT_START.load(Ordering::Relaxed);
+            let current_color = DESKTOP_GRADIENT_START.load(Ordering::Relaxed);
             let mut r = (current_color >> 16) & 0xFF;
             let mut g = (current_color >> 8) & 0xFF;
             let mut b = current_color & 0xFF;
