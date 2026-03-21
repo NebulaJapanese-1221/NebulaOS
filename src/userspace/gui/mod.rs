@@ -795,7 +795,7 @@ impl WindowManager {
 
         // STEP 2: Blit the local backbuffer to the actual Video Memory.
         // We lock the global framebuffer only for this step.
-        let mut fb = FRAMEBUFFER.lock();
+        let fb = FRAMEBUFFER.lock();
         
         // We can't use fb.present_rect() because that copies from fb.draw_buffer.
         // We need to copy from local_fb.draw_buffer to VRAM.
@@ -889,13 +889,18 @@ impl WindowManager {
     }
 
     fn draw_taskbar(&self, fb: &mut framebuffer::Framebuffer, mouse_x: isize, mouse_y: isize, clip: Rect) {
-        if let Some(ref fb_info) = fb.info {
+        let (width, height) = if let Some(ref info) = fb.info {
+            (info.width, info.height)
+        } else {
+            return;
+        };
+
             let taskbar_height = 40;
-            let taskbar_y = (fb_info.height - taskbar_height) as isize;
+            let taskbar_y = (height - taskbar_height) as isize;
             
             // Dark sleek taskbar
-            draw_rect(fb, 0, taskbar_y, fb_info.width, taskbar_height, 0x00_28_28_28, Some(clip));
-            draw_rect(fb, 0, taskbar_y, fb_info.width, 1, 0x00_50_50_50, Some(clip)); // Top highlight
+            draw_rect(fb, 0, taskbar_y, width, taskbar_height, 0x00_28_28_28, Some(clip));
+            draw_rect(fb, 0, taskbar_y, width, 1, 0x00_50_50_50, Some(clip)); // Top highlight
 
             let start_button_width = 120;
             // Give feedback if menu is open
@@ -921,7 +926,6 @@ impl WindowManager {
 
             // Draw the time on the right side
             self.draw_clock_on_taskbar(fb, clip);
-        }
     }
 
     // New function to draw only the clock area on the taskbar
@@ -953,12 +957,17 @@ impl WindowManager {
     }
 
     fn draw_start_menu(&self, fb: &mut framebuffer::Framebuffer, mouse_x: isize, mouse_y: isize, clip: Rect) {
-        if let Some(ref fb_info) = fb.info {
+        let height = if let Some(ref info) = fb.info {
+            info.height
+        } else {
+            return;
+        };
+
             let menu_width = 200;
             let menu_height = 300;
             let taskbar_height = 40;
             let menu_x = 0;
-            let menu_y = (fb_info.height - taskbar_height - menu_height) as isize;
+            let menu_y = (height - taskbar_height - menu_height) as isize;
 
             draw_rect(fb, menu_x, menu_y, menu_width, menu_height, 0x00_C0_C0_C0, Some(clip));
 
@@ -971,7 +980,6 @@ impl WindowManager {
             let mut shutdown_button = Button::new(menu_x + 10, menu_y + menu_height as isize - 45, item_width, 30, "Shutdown");
             shutdown_button.bg_color = 0x00_FF_60_60; // Light red
             shutdown_button.draw(fb, mouse_x, mouse_y, Some(clip));
-        }
     }
 
     fn draw_context_menu(&self, fb: &mut framebuffer::Framebuffer, mouse_x: isize, mouse_y: isize, clip: Rect) {
@@ -993,9 +1001,12 @@ impl WindowManager {
     }
 
     fn draw_cursor(&self, fb: &mut framebuffer::Framebuffer, x: isize, y: isize, clip: Rect) {
-        if let Some(fb_info) = fb.info.as_ref() {
-            let width = fb_info.width as isize;
-            let height = fb_info.height as isize;
+        let (width, height) = if let Some(ref info) = fb.info {
+            (info.width as isize, info.height as isize)
+        } else {
+            return;
+        };
+
             // Standard Arrow Cursor Bitmap (12x17)
             // 0 = Transparent, 1 = Black Border, 2 = White Fill
             let cursor_bitmap = match self.cursor_style {
@@ -1109,7 +1120,6 @@ impl WindowManager {
                     }
                 }
             }
-        }
     }
 }
 
