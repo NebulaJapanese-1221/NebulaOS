@@ -80,6 +80,29 @@ impl Settings {
                 font::draw_string(fb, content_x, content_y + (font_height as isize + 4), &v_str, 0x00_CC_CC_CC, None);
                 font::draw_string(fb, content_x, content_y + (font_height as isize + 4) * 2, &format!("{} Nebula Kernel", locale.info_kernel()), 0x00_CC_CC_CC, None);
                 font::draw_string(fb, content_x, content_y + (font_height as isize + 4) * 3, &format!("{} i686", locale.info_target()), 0x00_CC_CC_CC, None);
+
+                // Resolution
+                let res_str = if let Some(info) = fb.info.as_ref() {
+                    format!("{} {}x{}", locale.info_resolution(), info.width, info.height)
+                } else {
+                    format!("{} Unknown", locale.info_resolution())
+                };
+                font::draw_string(fb, content_x, content_y + (font_height as isize + 4) * 4, &res_str, 0x00_CC_CC_CC, None);
+
+                // Memory
+                let mem_bytes = crate::kernel::TOTAL_MEMORY.load(Ordering::Relaxed);
+                let mem_mb = mem_bytes / 1024 / 1024;
+                let mem_str = format!("{} {} MB", locale.info_memory(), mem_mb);
+                font::draw_string(fb, content_x, content_y + (font_height as isize + 4) * 5, &mem_str, 0x00_CC_CC_CC, None);
+
+                // Uptime
+                let total_seconds = crate::kernel::process::TICKS.load(Ordering::Relaxed) / 1000;
+                let hours = total_seconds / 3600;
+                let minutes = (total_seconds % 3600) / 60;
+                let seconds = total_seconds % 60;
+                let time_str = format!("{} {:02}:{:02}:{:02}", locale.info_uptime(), hours, minutes, seconds);
+                font::draw_string(fb, content_x, content_y + (font_height as isize + 4) * 6, &time_str, 0x00_CC_CC_CC, None);
+
             },
             Tab::Accessibility => {
                 font::draw_string(fb, content_x, content_y, locale.settings_tab_a11y(), 0x00_FF_FF_FF, None);
@@ -168,121 +191,101 @@ impl App for Settings {
     }
 
     fn handle_event(&mut self, event: &AppEvent) {
-        let (x, y) = match event {
-            AppEvent::MouseClick { x, y, .. } => (*x, *y),
-            AppEvent::MouseMove { x, y, .. } => (*x, *y),
-            _ => return,
-        };
+        let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
+        let bar_height = font_height + 9;
+        let content_pane_y_start = bar_height as isize + 5;
+        let content_pane_x_start = 8;
 
-        // Tab selection only on Click
-        if let AppEvent::MouseClick { .. } = event {
-            // Check for tab bar clicks (approx coords relative to content area)
-            if y >= 2 && y <= 27 {
-                let tab_width = 300 / 4; // win.width / num_tabs
-                if x < tab_width { self.current_tab = Tab::System; }
-                else if x < tab_width * 2 { self.current_tab = Tab::Accessibility; }
-                else if x < tab_width * 3 { self.current_tab = Tab::Theme; }
-                else { self.current_tab = Tab::Language; }
-            }
-        }
-        
-        if self.current_tab == Tab::Accessibility {
-            let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
-            let content_y_rel = (font_height as isize + 6) + (font_height as isize + 9) + 5;
+        match event {
+            AppEvent::MouseClick { x, y, width, .. } => {
+                // 1. Tab selection
+                if *y >= 0 && *y < bar_height as isize {
+                    let tab_width = *width / 4;
+                    if *x < tab_width as isize { self.current_tab = Tab::System; }
+                    else if *x < (tab_width * 2) as isize { self.current_tab = Tab::Accessibility; }
+                    else if *x < (tab_width * 3) as isize { self.current_tab = Tab::Theme; }
+                    else { self.current_tab = Tab::Language; }
+                    return;
+                }
 
-            // Toggles on Click only
-            if let AppEvent::MouseClick { x, y, .. } = event {
-                let btn_hc_rect = Rect { x: 8, y: content_y_rel + (font_height as isize + 4), width: 280, height: (font_height + 4) };
-                let btn_lt_rect = Rect { x: 8, y: content_y_rel + (font_height as isize + 4) * 2 + 5, width: 280, height: (font_height + 4) };
+                // 2. Content pane click
+                if *y >= content_pane_y_start {
+                    let rel_y = *y - content_pane_y_start;
+                    let rel_x = *x - content_pane_x_start;
 
-                if btn_hc_rect.contains(*x, *y) {
-                    let val = HIGH_CONTRAST.load(Ordering::Relaxed);
-                    HIGH_CONTRAST.store(!val, Ordering::Relaxed);
-                    FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
-                } else if btn_lt_rect.contains(*x, *y) {
-                    let val = LARGE_TEXT.load(Ordering::Relaxed);
-                    LARGE_TEXT.store(!val, Ordering::Relaxed);
-                    FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
+                    match self.current_tab {
+                        Tab::Accessibility => {
+                            let btn_hc_rect = Rect { x: 0, y: (font_height as isize + 4), width: 280, height: (font_height + 4) };
+                            let btn_lt_rect = Rect { x: 0, y: (font_height as isize + 4) * 2 + 5, width: 280, height: (font_height + 4) };
+                            if btn_hc_rect.contains(rel_x, rel_y) {
+                                HIGH_CONTRAST.fetch_xor(true, Ordering::Relaxed);
+                                FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
+                            } else if btn_lt_rect.contains(rel_x, rel_y) {
+                                LARGE_TEXT.fetch_xor(true, Ordering::Relaxed);
+                                FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
+                            }
+                        }
+                        Tab::Language => {
+                            let btn_en_rect = Rect { x: 0, y: (font_height as isize + 4), width: 120, height: font_height + 9 };
+                            let btn_ja_rect = Rect { x: 0, y: (font_height as isize + 4) * 2 + 5, width: 120, height: font_height + 9 };
+                            if btn_en_rect.contains(rel_x, rel_y) {
+                                localisation::set_language(Language::English);
+                            } else if btn_ja_rect.contains(rel_x, rel_y) {
+                                localisation::set_language(Language::Japanese);
+                            }
+                        }
+                        Tab::Theme => {
+                            let presets_y = (font_height as isize + 9) + 90;
+                            let btn_w = 80;
+                            let btn_h = font_height + 9;
+                            let btn_neb = Rect { x: 0, y: presets_y + (font_height as isize + 4), width: btn_w, height: btn_h };
+                            let btn_sun = Rect { x: 90, y: presets_y + (font_height as isize + 4), width: btn_w, height: btn_h };
+
+                            if btn_neb.contains(rel_x, rel_y) {
+                                DESKTOP_GRADIENT_START.store(0x00_10_20_40, Ordering::Relaxed);
+                                DESKTOP_GRADIENT_END.store(0x00_50_80_B0, Ordering::Relaxed);
+                                FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
+                            } else if btn_sun.contains(rel_x, rel_y) {
+                                DESKTOP_GRADIENT_START.store(0x00_40_10_10, Ordering::Relaxed);
+                                DESKTOP_GRADIENT_END.store(0x00_FF_80_40, Ordering::Relaxed);
+                                FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             }
-        }
+            AppEvent::MouseMove { x, y, .. } if self.current_tab == Tab::Theme => {
+                if *y >= content_pane_y_start {
+                    let rel_y = *y - content_pane_y_start;
+                    let rel_x = *x - content_pane_x_start;
+                    let slider_x_rel = 30;
+                    let slider_w = 150;
 
-        if self.current_tab == Tab::Language {
-            let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
-            let content_y_rel = (font_height as isize + 6) + (font_height as isize + 9) + 5;
-            if let AppEvent::MouseClick { x, y, .. } = event {
-                let btn_en_rect = Rect { x: 8, y: content_y_rel + (font_height as isize + 4), width: 120, height: font_height + 9 };
-                let btn_ja_rect = Rect { x: 8, y: content_y_rel + (font_height as isize + 4) * 2 + 5, width: 120, height: font_height + 9 };
+                    let r_rect = Rect { x: slider_x_rel, y: (font_height as isize + 9) - 5, width: slider_w, height: 12 };
+                    let g_rect = Rect { x: slider_x_rel, y: (font_height as isize + 9) + 20 - 5, width: slider_w, height: 12 };
+                    let b_rect = Rect { x: slider_x_rel, y: (font_height as isize + 9) + 40 - 5, width: slider_w, height: 12 };
 
-                if btn_en_rect.contains(*x, *y) {
-                    localisation::set_language(Language::English);
-                    FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
-                } else if btn_ja_rect.contains(*x, *y) {
-                    localisation::set_language(Language::Japanese);
-                    FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
+                    let current_color = DESKTOP_GRADIENT_START.load(Ordering::Relaxed);
+                    let mut r = (current_color >> 16) & 0xFF;
+                    let mut g = (current_color >> 8) & 0xFF;
+                    let mut b = current_color & 0xFF;
+                    let mut changed = false;
+
+                    if r_rect.contains(rel_x, rel_y) { r = (((rel_x - slider_x_rel) * 255) / slider_w as isize) as u32; changed = true; }
+                    else if g_rect.contains(rel_x, rel_y) { g = (((rel_x - slider_x_rel) * 255) / slider_w as isize) as u32; changed = true; }
+                    else if b_rect.contains(rel_x, rel_y) { b = (((rel_x - slider_x_rel) * 255) / slider_w as isize) as u32; changed = true; }
+
+                    if changed {
+                        let new_start = (r << 16) | (g << 8) | b;
+                        let new_end = (r.saturating_add(0x30).min(255) << 16) | (g.saturating_add(0x30).min(255) << 8) | (b.saturating_add(0x40).min(255));
+                        DESKTOP_GRADIENT_START.store(new_start, Ordering::Relaxed);
+                        DESKTOP_GRADIENT_END.store(new_end, Ordering::Relaxed);
+                        FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
+                    }
                 }
             }
-        }
-
-        // Slider logic works on both Click and Move (drag)
-        if self.current_tab == Tab::Theme {
-            // Calculate relative positions for sliders
-            // draw_content uses: content_y = win.y + 52.
-            // handle_event receives y relative to (win.y + 20).
-            let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
-            let content_y_rel = (font_height as isize + 6) + (font_height as isize + 9) + 5;
-            let slider_x_rel = 8 + 30; // content_x (8) + 30
-            let slider_w = 150;
-            
-            let r_rect = Rect { x: slider_x_rel, y: content_y_rel + (font_height as isize + 9) - 5, width: slider_w, height: 12 };
-            let g_rect = Rect { x: slider_x_rel, y: content_y_rel + (font_height as isize + 9) + 20 - 5, width: slider_w, height: 12 };
-            let b_rect = Rect { x: slider_x_rel, y: content_y_rel + (font_height as isize + 9) + 40 - 5, width: slider_w, height: 12 };
-
-            let current_color = DESKTOP_GRADIENT_START.load(Ordering::Relaxed);
-            let mut r = (current_color >> 16) & 0xFF;
-            let mut g = (current_color >> 8) & 0xFF;
-            let mut b = current_color & 0xFF;
-            let mut changed = false;
-
-            if r_rect.contains(x, y) {
-                r = (((x - slider_x_rel) * 255) / slider_w as isize) as u32;
-                changed = true;
-            } else if g_rect.contains(x, y) {
-                g = (((x - slider_x_rel) * 255) / slider_w as isize) as u32;
-                changed = true;
-            } else if b_rect.contains(x, y) {
-                b = (((x - slider_x_rel) * 255) / slider_w as isize) as u32;
-                changed = true;
-            }
-
-            if changed {
-                let new_start = (r << 16) | (g << 8) | b;
-                let new_end = (r.saturating_add(0x30).min(255) << 16) | (g.saturating_add(0x30).min(255) << 8) | (b.saturating_add(0x40).min(255));
-                
-                DESKTOP_GRADIENT_START.store(new_start, Ordering::Relaxed);
-                DESKTOP_GRADIENT_END.store(new_end, Ordering::Relaxed);
-                FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
-            }
-
-            // Preset Buttons (Click only)
-            if let AppEvent::MouseClick { x, y, .. } = event {
-                let presets_y_rel = content_y_rel + (font_height as isize + 9) + 90;
-                let start_x = 8;
-                let btn_w = 80;
-                let btn_h = font_height + 9;
-
-                let btn_neb = Rect { x: start_x, y: presets_y_rel + (font_height as isize + 4), width: btn_w, height: btn_h };
-                let btn_sun = Rect { x: start_x + 90, y: presets_y_rel + (font_height as isize + 4), width: btn_w, height: btn_h };
-
-                if btn_neb.contains(*x, *y) {
-                    DESKTOP_GRADIENT_START.store(0x00_10_20_40, Ordering::Relaxed);
-                    DESKTOP_GRADIENT_END.store(0x00_50_80_B0, Ordering::Relaxed);
-                } else if btn_sun.contains(*x, *y) {
-                    DESKTOP_GRADIENT_START.store(0x00_40_10_10, Ordering::Relaxed);
-                    DESKTOP_GRADIENT_END.store(0x00_FF_80_40, Ordering::Relaxed);
-                }
-                FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
-            }
+            _ => {}
         }
     }
 

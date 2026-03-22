@@ -10,11 +10,13 @@ pub trait Localisation: Send + Sync {
     fn app_terminal(&self) -> &'static str;
     fn app_text_editor(&self) -> &'static str;
     fn app_calculator(&self) -> &'static str;
+    fn app_paint(&self) -> &'static str;
     fn app_system_info(&self) -> &'static str;
     fn ctx_new_terminal(&self) -> &'static str;
     fn ctx_properties(&self) -> &'static str;
     fn ctx_refresh(&self) -> &'static str;
     fn btn_shutdown(&self) -> &'static str;
+    fn btn_reboot(&self) -> &'static str;
     fn settings_tab_system(&self) -> &'static str;
     fn settings_tab_a11y(&self) -> &'static str;
     fn settings_tab_theme(&self) -> &'static str;
@@ -26,6 +28,9 @@ pub trait Localisation: Send + Sync {
     fn info_version(&self) -> &'static str;
     fn info_kernel(&self) -> &'static str;
     fn info_target(&self) -> &'static str;
+    fn info_resolution(&self) -> &'static str;
+    fn info_memory(&self) -> &'static str;
+    fn info_uptime(&self) -> &'static str;
     fn preset_nebula(&self) -> &'static str;
     fn preset_sunset(&self) -> &'static str;
     fn settings_tab_language(&self) -> &'static str;
@@ -41,11 +46,13 @@ impl Localisation for EnUs {
     fn app_terminal(&self) -> &'static str { "Terminal" }
     fn app_text_editor(&self) -> &'static str { "Text Editor" }
     fn app_calculator(&self) -> &'static str { "Calculator" }
+    fn app_paint(&self) -> &'static str { "Paint" }
     fn app_system_info(&self) -> &'static str { "System Info" }
     fn ctx_new_terminal(&self) -> &'static str { "New Terminal" }
     fn ctx_properties(&self) -> &'static str { "Properties" }
     fn ctx_refresh(&self) -> &'static str { "Refresh" }
     fn btn_shutdown(&self) -> &'static str { "Shutdown" }
+    fn btn_reboot(&self) -> &'static str { "Reboot" }
     fn settings_tab_system(&self) -> &'static str { "System" }
     fn settings_tab_a11y(&self) -> &'static str { "Accessibility" }
     fn settings_tab_theme(&self) -> &'static str { "Theme" }
@@ -57,6 +64,9 @@ impl Localisation for EnUs {
     fn info_version(&self) -> &'static str { "Version:" }
     fn info_kernel(&self) -> &'static str { "Kernel:" }
     fn info_target(&self) -> &'static str { "Target:" }
+    fn info_resolution(&self) -> &'static str { "Resolution:" }
+    fn info_memory(&self) -> &'static str { "Memory:" }
+    fn info_uptime(&self) -> &'static str { "Uptime:" }
     fn preset_nebula(&self) -> &'static str { "Nebula" }
     fn preset_sunset(&self) -> &'static str { "Sunset" }
     fn settings_tab_language(&self) -> &'static str { "Language" }
@@ -71,11 +81,13 @@ impl Localisation for ja_jp::JaJp {
     fn app_terminal(&self) -> &'static str { ja_jp::APP_TERMINAL }
     fn app_text_editor(&self) -> &'static str { ja_jp::APP_TEXT_EDITOR }
     fn app_calculator(&self) -> &'static str { ja_jp::APP_CALCULATOR }
+    fn app_paint(&self) -> &'static str { ja_jp::APP_PAINT }
     fn app_system_info(&self) -> &'static str { ja_jp::APP_SYSTEM_INFO }
     fn ctx_new_terminal(&self) -> &'static str { ja_jp::CTX_NEW_TERMINAL }
     fn ctx_properties(&self) -> &'static str { ja_jp::CTX_PROPERTIES }
     fn ctx_refresh(&self) -> &'static str { ja_jp::CTX_REFRESH }
     fn btn_shutdown(&self) -> &'static str { ja_jp::BTN_SHUTDOWN }
+    fn btn_reboot(&self) -> &'static str { ja_jp::BTN_REBOOT }
     fn settings_tab_system(&self) -> &'static str { ja_jp::SETTINGS_TAB_SYSTEM }
     fn settings_tab_a11y(&self) -> &'static str { ja_jp::SETTINGS_TAB_A11Y }
     fn settings_tab_theme(&self) -> &'static str { ja_jp::SETTINGS_TAB_THEME }
@@ -87,6 +99,9 @@ impl Localisation for ja_jp::JaJp {
     fn info_version(&self) -> &'static str { ja_jp::INFO_VERSION }
     fn info_kernel(&self) -> &'static str { ja_jp::INFO_KERNEL }
     fn info_target(&self) -> &'static str { ja_jp::INFO_TARGET }
+    fn info_resolution(&self) -> &'static str { ja_jp::INFO_RESOLUTION }
+    fn info_memory(&self) -> &'static str { ja_jp::INFO_MEMORY }
+    fn info_uptime(&self) -> &'static str { ja_jp::INFO_UPTIME }
     fn preset_nebula(&self) -> &'static str { ja_jp::PRESET_NEBULA }
     fn preset_sunset(&self) -> &'static str { ja_jp::PRESET_SUNSET }
     fn settings_tab_language(&self) -> &'static str { ja_jp::SETTINGS_TAB_LANGUAGE }

@@ -8,17 +8,19 @@ use crate::drivers::rtc::{self, CURRENT_DATETIME, TIME_NEEDS_UPDATE};
 use crate::drivers::keyboard;
 use alloc::vec::Vec;
 use alloc::string::ToString;
-use crate::userspace::apps::{app::{App, AppEvent}, calculator::Calculator, editor::TextEditor, settings::Settings, terminal::Terminal};
+use alloc::format;
+use crate::userspace::apps::{app::{App, AppEvent}, calculator::Calculator, editor::TextEditor, paint::Paint, settings::Settings, terminal::Terminal};
 use spin::Mutex;
 use alloc::boxed::Box;
-pub mod font;
-pub mod font_jp;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 pub mod rect;
 use self::rect::Rect;
 pub mod button;
 use self::button::Button;
 use crate::userspace::localisation;
+
+// Re-export fonts from their new location so existing references to gui::font work
+pub use crate::userspace::fonts::font;
 
 const MAX_WINDOWS: usize = 10;
 
@@ -583,9 +585,11 @@ impl WindowManager {
 
                 let editor_button = Button::new(menu_x + 10, menu_y + 15, item_width, 30, locale.app_text_editor());
                 let calc_button = Button::new(menu_x + 10, menu_y + 55, item_width, 30, locale.app_calculator());
-                let settings_button = Button::new(menu_x + 10, menu_y + 95, item_width, 30, locale.app_settings());
-                let terminal_button = Button::new(menu_x + 10, menu_y + 135, item_width, 30, locale.app_terminal());
+                let paint_button = Button::new(menu_x + 10, menu_y + 95, item_width, 30, locale.app_paint());
+                let settings_button = Button::new(menu_x + 10, menu_y + 135, item_width, 30, locale.app_settings());
+                let terminal_button = Button::new(menu_x + 10, menu_y + 175, item_width, 30, locale.app_terminal());
                 let shutdown_button = Button::new(menu_x + 10, menu_y + 345 - 45, item_width, 30, locale.btn_shutdown());
+                let reboot_button = Button::new(menu_x + 10, menu_y + 345 - 85, item_width, 30, locale.btn_reboot());
 
                 self.mark_dirty(Rect { x: 0, y: menu_y, width: 200, height: 345 }); // Mark menu dirty on click
                 if settings_button.contains(self.input.mouse_x, self.input.mouse_y) {
@@ -618,13 +622,28 @@ impl WindowManager {
                     crate::kernel::power::shutdown();
                 }
 
+                if reboot_button.contains(self.input.mouse_x, self.input.mouse_y) {
+                    crate::kernel::power::reboot();
+                }
+
                 if calc_button.contains(self.input.mouse_x, self.input.mouse_y) {
                     // Clicked "Calculator"
                     self.add_window(Window {
-                        id: 0, x: 50, y: 350, width: 160, height: 220,
+                        id: 0, x: 50, y: 350, width: 200, height: 220,
                         color: 0x00_20_20_20,
                         title: locale.app_calculator(),
                         content: WindowContent::App(Box::new(Calculator::new())),
+                        minimized: false, maximized: false, restore_rect: None,
+                    });
+                }
+
+                if paint_button.contains(self.input.mouse_x, self.input.mouse_y) {
+                    // Clicked "Paint"
+                    self.add_window(Window {
+                        id: 0, x: 180, y: 100, width: 400, height: 300,
+                        color: 0x00_20_20_20,
+                        title: locale.app_paint(),
+                        content: WindowContent::App(Box::new(Paint::new())),
                         minimized: false, maximized: false, restore_rect: None,
                     });
                 }
@@ -791,10 +810,12 @@ impl WindowManager {
                 if let Some(target_id) = self.click_target_id {
                     let mut event_coords = None;
                     if let Some(win) = self.windows.iter().find(|w| w.id == target_id) {
+                        let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
+                        let title_height = font_height + 6;
                         // Check if click is inside the window content area (below titlebar)
                         if self.input.mouse_x >= win.x && self.input.mouse_x < win.x + win.width as isize &&
-                           self.input.mouse_y >= win.y + 20 && self.input.mouse_y < win.y + win.height as isize {
-                             event_coords = Some((self.input.mouse_x - win.x, self.input.mouse_y - (win.y + 20)));
+                           self.input.mouse_y >= win.y + title_height as isize && self.input.mouse_y < win.y + win.height as isize {
+                             event_coords = Some((self.input.mouse_x - win.x, self.input.mouse_y - (win.y + title_height as isize)));
                         }
                     }
 
@@ -902,13 +923,13 @@ impl WindowManager {
                     }
                     
                     // Draw version string on desktop (bottom right, above taskbar)
-                    let version = crate::kernel::VERSION;
-                    let v_w = font::string_width(version);
+                    let version = format!("NebulaOS {}", crate::kernel::VERSION);
+                    let v_w = font::string_width(&version);
                     let v_x = screen_width as isize - v_w as isize - 8;
                     let v_y = screen_height as isize - 40 - 20; // 40 taskbar, 20 padding
                     
                     if dirty_rect.intersects(&Rect { x: v_x, y: v_y, width: v_w, height: 16 }) {
-                        font::draw_string(&mut local_fb, v_x, v_y, version, 0x00_FFFFFF, Some(*dirty_rect));
+                        font::draw_string(&mut local_fb, v_x, v_y, &version, 0x00_FFFFFF, Some(*dirty_rect));
                     }
                 }
             } else {
@@ -1180,8 +1201,13 @@ impl WindowManager {
             let item_width = menu_width - 20;
             Button::new(menu_x + 10, menu_y + 15, item_width, 30, locale.app_text_editor()).draw(fb, mouse_x, mouse_y, Some(clip));
             Button::new(menu_x + 10, menu_y + 55, item_width, 30, locale.app_calculator()).draw(fb, mouse_x, mouse_y, Some(clip));
-            Button::new(menu_x + 10, menu_y + 95, item_width, 30, locale.app_settings()).draw(fb, mouse_x, mouse_y, Some(clip));
-            Button::new(menu_x + 10, menu_y + 135, item_width, 30, locale.app_terminal()).draw(fb, mouse_x, mouse_y, Some(clip));
+            Button::new(menu_x + 10, menu_y + 95, item_width, 30, locale.app_paint()).draw(fb, mouse_x, mouse_y, Some(clip));
+            Button::new(menu_x + 10, menu_y + 135, item_width, 30, locale.app_settings()).draw(fb, mouse_x, mouse_y, Some(clip));
+            Button::new(menu_x + 10, menu_y + 175, item_width, 30, locale.app_terminal()).draw(fb, mouse_x, mouse_y, Some(clip));
+
+            let mut reboot_button = Button::new(menu_x + 10, menu_y + menu_height as isize - 85, item_width, 30, locale.btn_reboot());
+            reboot_button.bg_color = 0x00_FF_A0_40; // Orange
+            reboot_button.draw(fb, mouse_x, mouse_y, Some(clip));
 
             let mut shutdown_button = Button::new(menu_x + 10, menu_y + menu_height as isize - 45, item_width, 30, locale.btn_shutdown());
             shutdown_button.bg_color = 0x00_FF_60_60; // Light red

@@ -2,7 +2,8 @@
 use core::panic::PanicInfo;
 use core::arch::asm; 
 use crate::drivers::framebuffer::FRAMEBUFFER;
-use crate::userspace::gui::font;
+use crate::userspace::fonts::font;
+use core::sync::atomic::{AtomicUsize, Ordering};
 pub mod io;
 pub mod interrupts;
 pub mod multiboot;
@@ -14,7 +15,9 @@ pub mod gdt;
 pub mod syscall;
 pub mod process;
 
-pub const VERSION: &str = "0.0.2-dev3";
+pub const VERSION: &str = "0.0.2";
+
+pub static TOTAL_MEMORY: AtomicUsize = AtomicUsize::new(0);
 
 fn draw_boot_screen() {   
     let mut fb = FRAMEBUFFER.lock();
@@ -29,8 +32,9 @@ fn draw_boot_screen() {
     fb.clear(0x00_000033); // Dark blue background
 
     let title = "NebulaOS";
-    let x_title = (width / 2) - ((title.len() * 8) / 2);
-    let y_title = (height / 2) - 20;
+    let x_title = (width / 2).saturating_sub((title.len() * 8) / 2);
+    let y_title = (height / 2).saturating_sub(16 / 2);
+    
     font::draw_string(&mut fb, x_title as isize, y_title as isize, title, 0x00_FFFFFF, None);
 
     fb.present();
@@ -88,6 +92,7 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     if let Some((heap_start, heap_size)) = heap_region {
         unsafe {
             allocator::ALLOCATOR.lock().init(heap_start as *mut u8, heap_size);
+            TOTAL_MEMORY.store(heap_size, Ordering::Relaxed);
         }
     } else {
         crate::serial_println!("ERROR: Could not find a suitable heap region!");

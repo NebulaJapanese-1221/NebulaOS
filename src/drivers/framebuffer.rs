@@ -75,6 +75,29 @@ impl Framebuffer {
             buffer.fill(color);
         }
     }
+
+    /// Draws a bitmap image to the buffer.
+    /// `data` is a slice of u32 pixels (ARGB/RGBA).
+    /// Assumes 0x00 in the alpha channel (highest byte) is fully transparent.
+    pub fn draw_bitmap(&mut self, x: usize, y: usize, width: usize, height: usize, data: &[u32]) {
+        if let (Some(ref info), Some(ref mut buffer)) = (&self.info, &mut self.draw_buffer) {
+            for j in 0..height {
+                for i in 0..width {
+                    let color = data[j * width + i];
+                    // Skip transparent pixels (assuming alpha is high bits, 0 = transparent)
+                    if (color >> 24) == 0 { continue; }
+                    
+                    let px = x + i;
+                    let py = y + j;
+                    
+                    if px < info.width && py < info.height {
+                        buffer[py * info.width + px] = color;
+                    }
+                }
+            }
+        }
+    }
+
     /// Copies the off-screen draw buffer to the visible framebuffer memory.
     /// This makes the changes visible on screen.
     pub fn present(&self) {

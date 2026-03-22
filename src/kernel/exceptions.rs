@@ -1,7 +1,7 @@
 use core::arch::{asm, naked_asm};
 use core::fmt;
 use crate::drivers::framebuffer::{self, FRAMEBUFFER};
-use crate::userspace::gui::font;
+use crate::userspace::fonts::font;
 use super::interrupts::InterruptStackFrame;
 
 // --- Panic/Exception Screen Implementation ---

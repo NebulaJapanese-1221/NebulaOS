@@ -1,11 +1,30 @@
 use super::acpi;
 use crate::drivers::framebuffer::FRAMEBUFFER;
-use crate::userspace::gui::font;
+use crate::userspace::fonts::font;
 use core::arch::asm;
 use super::io;
 
 /// Shuts down the machine using ACPI.
 pub fn shutdown() {
+    // Disable interrupts to prevent other tasks from drawing over the screen
+    unsafe { asm!("cli", options(nomem, nostack)); }
+
+    // Draw "Shutting Down" screen
+    {
+        let mut fb = FRAMEBUFFER.lock();
+        if let Some(info) = fb.info.as_ref() {
+            // Manually clone dims to release lock on info if needed, though here we hold fb lock
+            let width = info.width;
+            let height = info.height;
+            fb.clear(0x00_00_00_00); // Black screen
+            let msg = "Shutting Down...";
+            let x = (width / 2).saturating_sub((msg.len() * 8) / 2);
+            let y = height / 2;
+            font::draw_string(&mut fb, x as isize, y as isize, msg, 0x00_FFFFFF, None);
+            fb.present();
+        }
+    }
+
     // This will attempt to perform an ACPI shutdown.
     // It may not work on all hardware or emulators, but it is more portable.
     acpi::acpi_shutdown();
@@ -18,7 +37,6 @@ pub fn shutdown() {
     }
 
     // If ACPI shutdown fails, fall back to a manual screen.
-    unsafe { asm!("cli", options(nomem, nostack)); } // Disable interrupts
 
     let mut fb = FRAMEBUFFER.lock();
     // Extract dimensions to avoid borrowing issues
@@ -43,6 +61,23 @@ pub fn shutdown() {
 /// Reboots the machine using the keyboard controller.
 pub fn reboot() -> ! {
     unsafe {
+        asm!("cli", options(nomem, nostack)); // Disable interrupts
+        
+        // Draw "Rebooting" screen
+        {
+            let mut fb = FRAMEBUFFER.lock();
+            // Extract dimensions first to avoid holding an immutable borrow while calling clear() (mutable borrow)
+            let dims = fb.info.as_ref().map(|i| (i.width, i.height));
+            if let Some((width, height)) = dims {
+                fb.clear(0x00_00_00_00);
+                let msg = "Rebooting...";
+                let x = (width / 2).saturating_sub((msg.len() * 8) / 2);
+                let y = height / 2;
+                font::draw_string(&mut fb, x as isize, y as isize, msg, 0x00_FFFFFF, None);
+                fb.present();
+            }
+        }
+
         // Use the keyboard controller (port 0x64) to trigger a system reset.
         // This is a common and reliable method.
         let mut good = false;

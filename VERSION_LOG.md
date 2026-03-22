@@ -1,5 +1,14 @@
 # NebulaOS Version History
 
+## v0.0.2 (03-22-2026)
+- Added basic `Paint` application
+- Greatly expanded the Japanese font with more common-use Kanji.
+- Updated Japanese localization to use more Kanji strings.
+- Fixed some issues with resizing windows
+- Removed ALL filesystem code as it was unused.
+- Added detailed system information (Resolution, Memory, Uptime) to Settings.
+- Added Scientific Mode to Calculator (Mod, Pow, Sqrt, Factorial).
+
 ## 0.0.2-dev3 (03-21-2026)
 - Fixed keyboard not working (QEMU and Real Hardware)
 - Fixed mouse freezing at random times (QEMU and Real Hardware)
