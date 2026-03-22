@@ -159,16 +159,17 @@ fn panic(info: &PanicInfo) -> ! {
 
     // Draw to screen
     let mut fb = FRAMEBUFFER.lock();
-    fb.clear(0x00_0000FF); // Blue
+    fb.clear(0x00_CC0000); // Red (RSOD)
     
-    let mut writer = exceptions::PanicWriter::new(&mut fb, 20, 20);
+    font::draw_string(&mut fb, 30, 30, ":(", 0xFFFFFFFF, None);
+    font::draw_string(&mut fb, 30, 60, "NebulaOS ran into a problem and needs to restart.", 0xFFFFFFFF, None);
+
+    let mut writer = exceptions::PanicWriter::new(&mut fb, 30, 90);
     use core::fmt::Write;
-    let _ = writeln!(writer, "\n\n");
-    let _ = writeln!(writer, "NebulaOS has encountered a problem and needs to restart.\n");
-    let _ = writeln!(writer, "KERNEL PANIC");
-    let _ = writeln!(writer, "{}", info);
+    let _ = writeln!(writer, "Stop Code: KERNEL_PANIC");
+    let _ = writeln!(writer, "Details: {}", info);
+    let _ = writeln!(writer, "\nTechnical Information:\n----------------------");
     unsafe { exceptions::print_stack_trace_to(&mut writer); }
-    let _ = writeln!(writer, "\n\nSYSTEM HALTED");
     
     fb.present();
 

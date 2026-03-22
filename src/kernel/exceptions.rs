@@ -107,20 +107,20 @@ pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code
     unsafe { print_stack_trace(); }
 
     let mut fb = FRAMEBUFFER.lock();
-    fb.clear(0x00_0000FF); // Blue background
+    fb.clear(0x00_CC0000); // Red background (RSOD)
 
-    let mut writer = PanicWriter::new(&mut fb, 20, 20);
+    font::draw_string(&mut fb, 30, 30, ":(", 0xFFFFFFFF, None);
+    font::draw_string(&mut fb, 30, 60, "NebulaOS ran into a problem and needs to restart.", 0xFFFFFFFF, None);
+
+    let mut writer = PanicWriter::new(&mut fb, 30, 90);
     
     use core::fmt::Write;
-    let _ = writeln!(writer, "\n\n"); // Padding
-    let _ = writeln!(writer, "NebulaOS has encountered a problem and needs to restart.\n");
-    let _ = writeln!(writer, "ERROR: {}", name);
+    let _ = writeln!(writer, "Stop Code: {}", name);
     if let Some(code) = error_code {
-        let _ = writeln!(writer, "CODE:  {:#x}", code);
+        let _ = writeln!(writer, "Error Code: {:#x}", code);
     }
-    let _ = writeln!(writer, "\nCONTEXT:\nIP: {:#010x}  CS: {:#06x}  FLAGS: {:#010x}", frame.instruction_pointer, frame.code_segment, frame.cpu_flags);
+    let _ = writeln!(writer, "\nTechnical Information:\n----------------------\nIP: {:#010x}  CS: {:#06x}  FLAGS: {:#010x}", frame.instruction_pointer, frame.code_segment, frame.cpu_flags);
     unsafe { print_stack_trace_to(&mut writer); }
-    let _ = writeln!(writer, "\n\nSYSTEM HALTED");
     
     fb.present();
 
