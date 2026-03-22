@@ -16,6 +16,7 @@ Included in the userspace:
 *   **Calculator**: Basic arithmetic utility.
 *   **Settings**: For system configuration.
 *   **Text Editor**
+*   **Paint**
 
 ## 🛠️ Build & Run
 
