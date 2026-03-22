@@ -14,10 +14,13 @@ pub mod power;
 pub mod gdt;
 pub mod syscall;
 pub mod process;
+pub mod cpu;
+pub mod elf;
 
-pub const VERSION: &str = "0.0.2";
+pub const VERSION: &str = "0.0.3-dev";
 
 pub static TOTAL_MEMORY: AtomicUsize = AtomicUsize::new(0);
+pub static CPU_CORES: AtomicUsize = AtomicUsize::new(1);
 
 fn draw_boot_screen() {   
     let mut fb = FRAMEBUFFER.lock();
@@ -135,9 +138,13 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     // Initialize ACPI
     acpi::init();
 
+    // Initialize CPU Info detection (CPUID)
+    cpu::init();
+    add_boot_status("[OK] CPU Info Detected", 5);
+
     // NOTE: The old text-mode GUI has been disabled.
     // The next step is to build a new GUI that draws to the framebuffer.
-    add_boot_status("[OK] Initializing GUI...", 5);
+    add_boot_status("[OK] Initializing GUI...", 6);
     draw_progress_bar(100);
     
     // Initialize localisation before GUI
@@ -148,8 +155,13 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     // Halt loop (The scheduler will hijack execution on the next timer tick)
     loop {
         crate::userspace::gui::update();
+        
+        // Mark as idle right before halting
+        crate::kernel::cpu::IS_IDLE.store(true, Ordering::Relaxed);
         // Halt CPU until next interrupt to save power (and prevent 100% CPU usage)
         unsafe { asm!("hlt") };
+        // Mark as active immediately after waking up
+        crate::kernel::cpu::IS_IDLE.store(false, Ordering::Relaxed);
     }
 }
 

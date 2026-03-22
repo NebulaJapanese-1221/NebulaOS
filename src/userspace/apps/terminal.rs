@@ -71,10 +71,47 @@ impl Terminal {
                 self.history.push(format!("NebulaOS v{}", crate::kernel::VERSION));
             }
             "uname" => {
-                if parts.len() > 1 && parts[1] == "-a" {
-                    self.history.push(format!("NebulaOS {} i686", crate::kernel::VERSION));
-                } else {
-                    self.history.push("NebulaOS".to_string());
+                let arg = if parts.len() > 1 { parts[1] } else { "" };
+                match arg {
+                    "-a" | "--all" => { 
+                         let brand_guard = crate::kernel::cpu::CPU_BRAND.lock();
+                         let cpu = brand_guard.as_deref().unwrap_or("i686");
+                         let cores = crate::kernel::CPU_CORES.load(core::sync::atomic::Ordering::Relaxed);
+                         self.history.push(format!("NebulaOS nebula {} {} ({} cores)", crate::kernel::VERSION, cpu, cores));
+                    }
+                    "-s" | "--kernel-name" | "" => {
+                        self.history.push("NebulaOS".to_string());
+                    }
+                    "-n" | "--nodename" => {
+                        self.history.push("nebula".to_string());
+                    }
+                    "-r" | "--kernel-release" => {
+                        self.history.push(format!("{}", crate::kernel::VERSION));
+                    }
+                    "-v" | "--kernel-version" => {
+                        self.history.push("custom-build".to_string());
+                    }
+                    "-m" | "--machine" => {
+                        self.history.push("i686".to_string());
+                    }
+                    "-p" | "--processor" => {
+                        let brand_guard = crate::kernel::cpu::CPU_BRAND.lock();
+                        self.history.push(brand_guard.as_deref().unwrap_or("unknown").to_string());
+                    }
+                    "--help" => {
+                        self.history.push("Usage: uname [OPTION]...".to_string());
+                        self.history.push("Print certain system information.".to_string());
+                        self.history.push(" -a, --all                print all information".to_string());
+                        self.history.push(" -s, --kernel-name        print the kernel name".to_string());
+                        self.history.push(" -n, --nodename           print the network node hostname".to_string());
+                        self.history.push(" -r, --kernel-release     print the kernel release".to_string());
+                        self.history.push(" -v, --kernel-version     print the kernel version".to_string());
+                        self.history.push(" -m, --machine            print the machine hardware name".to_string());
+                        self.history.push(" -p, --processor          print the processor type".to_string());
+                    }
+                    _ => {
+                        self.history.push(format!("uname: invalid option -- '{}'", arg));
+                    }
                 }
             }
             "ps" => {

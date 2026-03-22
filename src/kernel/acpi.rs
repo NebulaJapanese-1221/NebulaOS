@@ -133,6 +133,37 @@ unsafe fn get_s5_val(dsdt_ptr: *const SdtHeader) -> Option<u8> {
     None
 }
 
+unsafe fn parse_madt(madt_ptr: *const SdtHeader) {
+    // MADT Structure: Header (44 bytes) + Interrupt Controller Structures
+    let len = core::ptr::addr_of!((*madt_ptr).length).read_unaligned() as usize;
+    if len < 44 { return; }
+    
+    // Skip the standard header (36 bytes) + Local APIC Address (4) + Flags (4) = 44 bytes
+    let mut current_ptr = (madt_ptr as *const u8).add(44);
+    let end_ptr = (madt_ptr as *const u8).add(len);
+
+    let mut cores = 0;
+
+    while current_ptr < end_ptr {
+        let entry_type = *current_ptr;
+        let entry_len = *current_ptr.add(1);
+
+        if entry_type == 0 { // Processor Local APIC
+            // Offset 4 is the Flags field (u32). Bit 0 is 'Processor Enabled'.
+            let flags = (current_ptr.add(4) as *const u32).read_unaligned();
+            if (flags & 1) == 1 {
+                cores += 1;
+            }
+        }
+
+        current_ptr = current_ptr.add(entry_len as usize);
+    }
+
+    if cores > 0 {
+        crate::kernel::CPU_CORES.store(cores, Ordering::Relaxed);
+    }
+}
+
 pub fn init() {
     if let Some(rsdp) = find_rsdp() {
         let rsdt_ptr = unsafe { core::ptr::addr_of!((*rsdp).rsdt_address).read_unaligned() } as *const SdtHeader;
@@ -153,6 +184,11 @@ pub fn init() {
             
             PM1A_CNT_BLK.store(pm1a_cnt_port as u32, Ordering::Relaxed);
             SHUTDOWN_CMD.store(shutdown_val, Ordering::Relaxed);
+        }
+
+        // Parse MADT for core count
+        if let Some(madt_ptr) = find_sdt_in_rsdt(rsdt_ptr, b"APIC") {
+            unsafe { parse_madt(madt_ptr); }
         }
     }
 }

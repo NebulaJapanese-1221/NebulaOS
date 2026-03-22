@@ -14,6 +14,7 @@ pub struct Scheduler {
     pub tasks: Vec<Task>,
     pub current_index: usize,
     kernel_esp: usize,
+    last_tsc: u64,
     initialized: bool,
 }
 
@@ -23,10 +24,57 @@ impl Scheduler {
             tasks: Vec::new(),
             current_index: 0, // This will be updated on first schedule
             kernel_esp: 0,
+            last_tsc: 0,
             initialized: false,
         }
     }
 
+    /// Creates a new task jumping to the given entry point.
+    pub fn add_task(&mut self, entry_point: usize) {
+        let id = self.tasks.len();
+        
+        // Allocate a kernel stack for this task
+        let stack_size = 8192;
+        let mut stack = Vec::with_capacity(stack_size);
+        stack.resize(stack_size, 0);
+        
+        // Calculate the top of the stack (high address)
+        let stack_top = stack.as_ptr() as usize + stack_size;
+        let mut sp = stack_top;
+
+        unsafe {
+            // Helper to push a value onto the stack
+            let mut push = |val: usize| {
+                sp -= 4;
+                *(sp as *mut usize) = val;
+            };
+
+            // Setup stack frame to match `timer_handler` expectations (iret context)
+            // 1. IRET Frame
+            push(0x202);      // EFLAGS (Interrupts Enabled)
+            push(0x08);       // CS (Kernel Code Segment)
+            push(entry_point);// EIP
+
+            // 2. Error Code / Dummy
+            push(0);
+
+            // 3. Segment Registers
+            push(0x10); // GS
+            push(0x10); // FS
+            push(0x10); // ES
+            push(0x10); // DS
+
+            // 4. General Purpose Registers (pusha)
+            // EDI, ESI, EBP, ESP, EBX, EDX, ECX, EAX
+            for _ in 0..8 { push(0); }
+        }
+
+        self.tasks.push(Task {
+            id,
+            kernel_stack: stack,
+            kernel_esp: sp,
+        });
+    }
 }
 
 pub static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
@@ -54,7 +102,20 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
         // We set the current index to represent this kernel "task".
         scheduler.current_index = total_user_tasks;
         scheduler.initialized = true;
+        scheduler.last_tsc = crate::kernel::cpu::read_tsc();
     }
+
+    // --- CPU Usage Calculation ---
+    let now = crate::kernel::cpu::read_tsc();
+    if scheduler.last_tsc > 0 && now > scheduler.last_tsc {
+        let delta = now - scheduler.last_tsc;
+        let is_kernel = scheduler.current_index >= total_user_tasks;
+        // If we were in the kernel task and the IS_IDLE flag was set, count as idle.
+        // Otherwise (User task or Kernel doing GUI work), count as active.
+        let was_idle = is_kernel && crate::kernel::cpu::IS_IDLE.load(Ordering::Relaxed);
+        crate::kernel::cpu::accumulate_usage(delta, was_idle);
+    }
+    scheduler.last_tsc = now;
 
     // 2. Save ESP of the task we are switching FROM
     let current_task_index = scheduler.current_index;

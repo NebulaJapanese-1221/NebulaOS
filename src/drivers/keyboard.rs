@@ -137,6 +137,16 @@ pub fn is_capslock_enabled() -> bool {
     kb.modifiers.capslock
 }
 
+pub fn is_alt_pressed() -> bool {
+    let kb = KEY_BUFFER.lock();
+    kb.modifiers.alt
+}
+
+pub fn is_ctrl_pressed() -> bool {
+    let kb = KEY_BUFFER.lock();
+    kb.modifiers.ctrl
+}
+
 static SCANCODE_SET1: [char; 128] = [
     '\0', '\x1B', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\x08', '\t',
     'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\n', '\0', 'a', 's',

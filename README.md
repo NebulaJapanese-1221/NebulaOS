@@ -17,6 +17,7 @@ Included in the userspace:
 *   **Settings**: For system configuration.
 *   **Text Editor**
 *   **Paint**
+*   **Task Manager**: Monitor running processes and system resources.
 
 ## 🛠️ Build & Run
 

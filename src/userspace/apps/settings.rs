@@ -7,6 +7,7 @@ use alloc::string::ToString;
 use core::sync::atomic::Ordering;
 use crate::userspace::gui::{DESKTOP_GRADIENT_START, DESKTOP_GRADIENT_END, FULL_REDRAW_REQUESTED, HIGH_CONTRAST, LARGE_TEXT};
 use crate::userspace::localisation::{self, Language};
+use crate::kernel::cpu::CPU_BRAND;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Tab {
@@ -78,8 +79,18 @@ impl Settings {
                 font::draw_string(fb, content_x, content_y, locale.app_system_info(), 0x00_FF_FF_FF, None);
                 let v_str = format!("{} {}", locale.info_version(), crate::kernel::VERSION);
                 font::draw_string(fb, content_x, content_y + (font_height as isize + 4), &v_str, 0x00_CC_CC_CC, None);
-                font::draw_string(fb, content_x, content_y + (font_height as isize + 4) * 2, &format!("{} Nebula Kernel", locale.info_kernel()), 0x00_CC_CC_CC, None);
-                font::draw_string(fb, content_x, content_y + (font_height as isize + 4) * 3, &format!("{} i686", locale.info_target()), 0x00_CC_CC_CC, None);
+                
+                // CPU Info
+                let brand_guard = CPU_BRAND.lock();
+                let cpu_name = brand_guard.as_deref().unwrap_or("Unknown CPU");
+                let cores = crate::kernel::CPU_CORES.load(Ordering::Relaxed);
+                let core_str = if cores == 1 { "Core" } else { "Cores" };
+                
+                // Truncate CPU string if too long for display
+                let cpu_display = if cpu_name.len() > 30 { &cpu_name[..30] } else { cpu_name };
+                
+                font::draw_string(fb, content_x, content_y + (font_height as isize + 4) * 2, &format!("Processor: {}", cpu_display), 0x00_CC_CC_CC, None);
+                font::draw_string(fb, content_x, content_y + (font_height as isize + 4) * 3, &format!("Cores: {} {}", cores, core_str), 0x00_CC_CC_CC, None);
 
                 // Resolution
                 let res_str = if let Some(info) = fb.info.as_ref() {

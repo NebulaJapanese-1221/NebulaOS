@@ -36,6 +36,19 @@ pub extern "C" fn syscall_dispatcher(
             }
             len // Return bytes written
         }
+        2 => {
+            // Syscall 2: Exec (ebx = ptr, ecx = len)
+            // Loads and executes an ELF binary from memory.
+            let ptr = ebx as *const u8;
+            let len = ecx;
+            
+            let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
+            if crate::kernel::elf::load_and_run(slice) {
+                1 // Success
+            } else {
+                0 // Fail
+            }
+        }
         _ => {
             crate::serial_println!("Unknown Syscall: {}", eax);
             usize::MAX

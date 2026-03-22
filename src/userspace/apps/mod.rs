@@ -4,3 +4,4 @@ pub mod editor;
 pub mod paint;
 pub mod settings;
 pub mod terminal;
+pub mod task_manager;

@@ -9,7 +9,7 @@ use crate::drivers::keyboard;
 use alloc::vec::Vec;
 use alloc::string::ToString;
 use alloc::format;
-use crate::userspace::apps::{app::{App, AppEvent}, calculator::Calculator, editor::TextEditor, paint::Paint, settings::Settings, terminal::Terminal};
+use crate::userspace::apps::{app::{App, AppEvent}, calculator::Calculator, editor::TextEditor, paint::Paint, settings::Settings, terminal::Terminal, task_manager::TaskManager};
 use spin::Mutex;
 use alloc::boxed::Box;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -99,6 +99,9 @@ pub struct InputManager {
     pub mouse_y: isize,
     pub left_button_pressed: bool,
     pub right_button_pressed: bool,
+    pub alt_pressed: bool,
+    pub ctrl_pressed: bool,
+    pub shift_pressed: bool,
     pub event_queue: Vec<InputEvent>,
 }
 
@@ -109,6 +112,9 @@ impl InputManager {
             mouse_y: 12,
             left_button_pressed: false,
             right_button_pressed: false,
+            alt_pressed: false,
+            ctrl_pressed: false,
+            shift_pressed: false,
             event_queue: Vec::new(),
         }
     }
@@ -143,6 +149,11 @@ impl InputManager {
             }
         }
 
+        // Poll modifier states from the keyboard driver
+        self.alt_pressed = keyboard::is_alt_pressed(); 
+        self.ctrl_pressed = keyboard::is_ctrl_pressed();
+        self.shift_pressed = keyboard::is_shift_pressed();
+
         while let Some(key) = keyboard::get_char() {
             // Interrupts are handled inside get_char, so this is safe to loop
             self.event_queue.push(InputEvent::KeyPress { key });
@@ -169,6 +180,8 @@ pub struct WindowManager {
     cursor_style: CursorStyle,
     backbuffer: Vec<u32>,
     drag_rect: Option<Rect>,
+    task_switcher_open: bool,
+    task_switcher_index: usize,
 }
 
 impl WindowManager {
@@ -192,6 +205,8 @@ impl WindowManager {
             cursor_style: CursorStyle::Arrow,
             backbuffer: Vec::new(),
             drag_rect: None,
+            task_switcher_open: false,
+            task_switcher_index: 0,
         }
     }
 
@@ -329,14 +344,65 @@ impl WindowManager {
                     self.handle_mouse_button_event(button, down, screen_height);
                 }
                 InputEvent::KeyPress { key } => {
-                    if let Some(&top_win_id) = self.z_order.last() {
-                        if let Some(rect) = self.get_window_rect(top_win_id) {
-                            self.mark_dirty(rect);
+                    // Check for Alt+Tab (simulated logic as we rely on get_char)
+                    // In a real scenario, we'd check self.input.alt_pressed && key == '\t'
+                    // For this refactor, we'll assume a specific key combo or if modifiers worked.
+                    
+                    // Temporary: using F1 as "Alt+Tab" for demonstration if modifiers aren't fully hooked up in driver
+                    // Or strictly use modifiers if the driver supported it.
+                    // Let's implement the logic assuming we can detect the "switch" intent.
+                    
+                    // Basic Window Switching Logic
+                    if key == '\t' && self.input.alt_pressed {
+                        if !self.task_switcher_open {
+                            self.task_switcher_open = true;
+                            self.task_switcher_index = 0; // Start at current
+                            // Mark screen dirty to draw switcher overlay
+                            self.mark_dirty(Rect { x: 0, y: 0, width: screen_width as usize, height: screen_height as usize });
                         }
 
-                        if let Some(win) = self.windows.iter_mut().find(|w| w.id == top_win_id) {
-                            if let WindowContent::App(app) = &mut win.content {
-                                app.handle_event(&AppEvent::KeyPress { key });
+                        // Cycle to next window
+                        if !self.windows.is_empty() {
+                            self.task_switcher_index = (self.task_switcher_index + 1) % self.windows.len();
+                        }
+                    } else {
+                        if self.task_switcher_open && !self.input.alt_pressed {
+                            // Alt released, switch to selected window
+                            self.task_switcher_open = false;
+                            
+                            if !self.windows.is_empty() {
+                                // The Z-order is usually sorted back-to-front. 
+                                // We want to pick the window at the visual index.
+                                // Simple implementation: rotate z-order to bring selected to front
+                                // Here we just pick based on the z-order list reversed (Top down)
+                                if self.task_switcher_index < self.z_order.len() {
+                                    // Find win_id at that index from the top
+                                    let win_id = self.z_order[self.z_order.len() - 1 - self.task_switcher_index];
+                                    
+                                    // Move to top
+                                    if let Some(pos) = self.z_order.iter().position(|&id| id == win_id) {
+                                        self.z_order.remove(pos);
+                                        self.z_order.push(win_id);
+                                    }
+                                    // Restore if minimized
+                                    if let Some(win) = self.windows.iter_mut().find(|w| w.id == win_id) {
+                                        win.minimized = false;
+                                    }
+                                }
+                            }
+                             self.mark_dirty(Rect { x: 0, y: 0, width: screen_width as usize, height: screen_height as usize });
+                        } else {
+                            // Normal key handling
+                             if let Some(&top_win_id) = self.z_order.last() {
+                                if let Some(rect) = self.get_window_rect(top_win_id) {
+                                    self.mark_dirty(rect);
+                                }
+
+                                if let Some(win) = self.windows.iter_mut().find(|w| w.id == top_win_id) {
+                                    if let WindowContent::App(app) = &mut win.content {
+                                        app.handle_event(&AppEvent::KeyPress { key });
+                                    }
+                                }
                             }
                         }
                     }
@@ -344,6 +410,13 @@ impl WindowManager {
             }
         }
         
+        // Handle Alt release if not caught in KeyPress (e.g. if loop finished)
+        if self.task_switcher_open && !self.input.alt_pressed {
+             self.task_switcher_open = false;
+             // Finalize switch logic handled above or here
+             self.mark_dirty(Rect { x: 0, y: 0, width: screen_width as usize, height: screen_height as usize });
+        }
+
         // Mark the cursor's final position as dirty ONCE after processing packets
         if mouse_moved {
             self.mark_dirty(initial_cursor_rect);
@@ -588,6 +661,7 @@ impl WindowManager {
                 let paint_button = Button::new(menu_x + 10, menu_y + 95, item_width, 30, locale.app_paint());
                 let settings_button = Button::new(menu_x + 10, menu_y + 135, item_width, 30, locale.app_settings());
                 let terminal_button = Button::new(menu_x + 10, menu_y + 175, item_width, 30, locale.app_terminal());
+                let taskmgr_button = Button::new(menu_x + 10, menu_y + 215, item_width, 30, "Task Manager");
                 let shutdown_button = Button::new(menu_x + 10, menu_y + 345 - 45, item_width, 30, locale.btn_shutdown());
                 let reboot_button = Button::new(menu_x + 10, menu_y + 345 - 85, item_width, 30, locale.btn_reboot());
 
@@ -607,6 +681,17 @@ impl WindowManager {
                 }
                 self.start_menu_open = false; // Close menu after click
                 
+                if taskmgr_button.contains(self.input.mouse_x, self.input.mouse_y) {
+                    // Clicked "Task Manager"
+                    self.add_window(Window {
+                        id: 0, x: 150, y: 150, width: 300, height: 400,
+                        color: 0x00_00_40_40,
+                        title: "Task Manager",
+                        content: WindowContent::App(Box::new(TaskManager::new())),
+                        minimized: false, maximized: false, restore_rect: None,
+                    });
+                }
+
                 if terminal_button.contains(self.input.mouse_x, self.input.mouse_y) {
                     // Clicked "Terminal"
                     self.add_window(Window {
@@ -959,6 +1044,11 @@ impl WindowManager {
                 self.draw_context_menu(&mut local_fb, self.input.mouse_x, self.input.mouse_y, *dirty_rect);
             }
 
+            // Draw Task Switcher
+            if self.task_switcher_open {
+                self.draw_task_switcher(&mut local_fb, *dirty_rect);
+            }
+
             // Draw Drag Overlay
             if let Some(rect) = self.drag_rect {
                 let border_color = 0x00_FF_FF_FF; // White outline
@@ -1204,6 +1294,7 @@ impl WindowManager {
             Button::new(menu_x + 10, menu_y + 95, item_width, 30, locale.app_paint()).draw(fb, mouse_x, mouse_y, Some(clip));
             Button::new(menu_x + 10, menu_y + 135, item_width, 30, locale.app_settings()).draw(fb, mouse_x, mouse_y, Some(clip));
             Button::new(menu_x + 10, menu_y + 175, item_width, 30, locale.app_terminal()).draw(fb, mouse_x, mouse_y, Some(clip));
+            Button::new(menu_x + 10, menu_y + 215, item_width, 30, "Task Manager").draw(fb, mouse_x, mouse_y, Some(clip));
 
             let mut reboot_button = Button::new(menu_x + 10, menu_y + menu_height as isize - 85, item_width, 30, locale.btn_reboot());
             reboot_button.bg_color = 0x00_FF_A0_40; // Orange
@@ -1236,6 +1327,43 @@ impl WindowManager {
         let item_width = width - 10;
         Button::new(menu_x + 5, menu_y + 5, item_width, 25, locale.ctx_refresh()).draw(fb, mouse_x, mouse_y, Some(clip));
         Button::new(menu_x + 5, menu_y + 35, item_width, 25, locale.ctx_properties()).draw(fb, mouse_x, mouse_y, Some(clip));
+    }
+
+    fn draw_task_switcher(&self, fb: &mut framebuffer::Framebuffer, clip: Rect) {
+        if let Some(info) = fb.info.as_ref() {
+            let width = 400;
+            let height = 100;
+            let x = (info.width / 2) - (width / 2);
+            let y = (info.height / 2) - (height / 2);
+
+            // Draw background
+            draw_rect(fb, x as isize, y as isize, width, height, 0x00_30_30_30, Some(clip));
+            draw_rect(fb, x as isize, y as isize, width, 1, 0x00_FF_FF_FF, Some(clip));
+            draw_rect(fb, x as isize, y as isize, 1, height, 0x00_FF_FF_FF, Some(clip));
+            draw_rect(fb, x as isize + width as isize - 1, y as isize, 1, height, 0x00_00_00_00, Some(clip));
+            draw_rect(fb, x as isize, y as isize + height as isize - 1, width, 1, 0x00_00_00_00, Some(clip));
+
+            font::draw_string(fb, x as isize + 10, y as isize + 10, "Task Switcher", 0x00_FF_FF_FF, Some(clip));
+
+            // Draw icons/list
+            let start_x = x as isize + 20;
+            let start_y = y as isize + 40;
+            let icon_size = 40;
+            let padding = 10;
+
+            // We iterate z_order backwards (Top to Bottom) to show most recent first
+            for (i, &win_id) in self.z_order.iter().rev().enumerate() {
+                if i >= 6 { break; } // Limit to 6 items for now
+                let win = self.windows.iter().find(|w| w.id == win_id).unwrap();
+                
+                let item_x = start_x + (i as isize * (icon_size + padding));
+                let color = if i == self.task_switcher_index { 0x00_50_50_90 } else { 0x00_40_40_40 };
+                
+                draw_rect(fb, item_x, start_y, icon_size as usize, icon_size as usize, color, Some(clip));
+                // Draw simple char as icon representation
+                font::draw_char(fb, item_x + 12, start_y + 12, win.title.chars().next().unwrap_or('?'), 0x00_FFFFFF, Some(clip));
+            }
+        }
     }
 
     fn draw_cursor(&self, fb: &mut framebuffer::Framebuffer, x: isize, y: isize, clip: Rect) {

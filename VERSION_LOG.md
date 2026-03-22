@@ -1,11 +1,21 @@
 # NebulaOS Version History
 
+## v0.0.3-dev (03-22-2026)
+- Added proper System Information detection (CPUID for Brand String).
+- Added basic support for detecting multiple CPU cores (SMP detection).
+- Added a task manager app.
+- Refactored `InputManager` to support modifier keys and shortcuts.
+- Added `Alt+Tab` window switching.
+- Added CPU Usage detection logic (for task manager)
+- Added ELF Executable Loader (kernel support).
+- Standardized application format to `.app` (ELF binaries).
+
 ## v0.0.2 (03-22-2026)
 - Added basic `Paint` application
 - Greatly expanded the Japanese font with more common-use Kanji.
 - Updated Japanese localization to use more Kanji strings.
 - Fixed some issues with resizing windows
-- Removed ALL filesystem code as it was unused.
+- Removed Virtual File System (VFS) filesystem code as it was unused.
 - Added detailed system information (Resolution, Memory, Uptime) to Settings.
 - Added Scientific Mode to Calculator (Mod, Pow, Sqrt, Factorial).
 
