@@ -28,8 +28,8 @@ pub trait INode: Send + Sync {
     fn list(&self) -> Result<Vec<String>, String>;
 }
 
-/// A VFS node backed by NebulaFS (currently simulated via VdevRam for structure).
-pub struct NebulaNode {
+/// A VFS node backed by RAM (simulated filesystem).
+pub struct FSNode {
     name: String,
     // In a real implementation, this would hold the Object ID (u64) from NebulaFS
     // and a reference to the DMU.
@@ -40,7 +40,7 @@ pub struct NebulaNode {
     file_type: FileType,
 }
 
-impl NebulaNode {
+impl FSNode {
     pub fn new_dir(name: &str) -> Self {
         Self {
             name: String::from(name),
@@ -60,7 +60,7 @@ impl NebulaNode {
     }
 }
 
-impl INode for NebulaNode {
+impl INode for FSNode {
     fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize, String> {
         if self.file_type == FileType::Directory {
             return Err("Is a directory".to_string());
@@ -104,9 +104,9 @@ impl INode for NebulaNode {
             return Err("File exists".to_string());
         }
         let node = Arc::new(match file_type {
-            FileType::File => NebulaNode::new_file(name),
-            FileType::Directory => NebulaNode::new_dir(name),
-            FileType::Device => NebulaNode::new_file(name), // Treat as file for now
+            FileType::File => FSNode::new_file(name),
+            FileType::Directory => FSNode::new_dir(name),
+            FileType::Device => FSNode::new_file(name), // Treat as file for now
         });
         children.insert(String::from(name), node.clone());
         Ok(node)
@@ -130,7 +130,7 @@ impl INode for NebulaNode {
 }
 
 pub struct FileSystem {
-    root: Arc<NebulaNode>,
+    root: Arc<FSNode>,
     // The underlying storage device for NebulaFS
     _device: Mutex<VdevRam>,
 }
@@ -141,7 +141,7 @@ impl FileSystem {
         let ram_disk = VdevRam::new(0, 64 * 1024 * 1024);
         
         Self {
-            root: Arc::new(NebulaNode::new_dir("/")),
+            root: Arc::new(FSNode::new_dir("/")),
             _device: Mutex::new(ram_disk),
         }
     }
@@ -166,7 +166,7 @@ pub fn init() {
 
     // Create a default file
     if let Ok(readme) = root.create("README.txt", FileType::File) {
-        let text = "Welcome to NebulaOS!\n\nFilesystem: NebulaFS (ZFS-like)\nStorage: VdevRam (64MB)";
+        let text = "Welcome to NebulaOS!\n\nFilesystem: RamFS\nStorage: VdevRam (64MB)";
         let _ = readme.write(0, text.as_bytes());
     }
     
@@ -175,7 +175,7 @@ pub fn init() {
         let _ = home.create("user", FileType::Directory);
         if let Ok(user) = home.lookup("user") {
             if let Ok(notes) = user.create("notes.txt", FileType::File) {
-                let _ = notes.write(0, b"NebulaFS is active.");
+                let _ = notes.write(0, b"RamFS is active.");
             }
         }
     }

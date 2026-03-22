@@ -7,6 +7,7 @@
 - Added mouse wheel support (Intellimouse extension)
 - Added `uptime` command to Terminal
 - Fixed input freezing/deadlocks in keyboard driver and scrolling in Text Editor
+- Fixed some UI issues
 
 
 ## v0.0.2-dev2 (03-21-2026)

@@ -72,7 +72,7 @@ impl Terminal {
             }
             "uname" => {
                 if parts.len() > 1 && parts[1] == "-a" {
-                    self.history.push(format!("NebulaOS {} i686 NebulaFS", crate::kernel::VERSION));
+                    self.history.push(format!("NebulaOS {} i686 RamFS", crate::kernel::VERSION));
                 } else {
                     self.history.push("NebulaOS".to_string());
                 }

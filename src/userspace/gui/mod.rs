@@ -2,7 +2,7 @@
 //! NOTE: This module is currently being refactored to support a graphical framebuffer
 //! instead of the old text-mode VGA buffer. The drawing logic is temporarily disabled.
 
-use crate::drivers::mouse::{self, MousePacket};
+use crate::drivers::mouse;
 use crate::drivers::framebuffer::{self, FRAMEBUFFER};
 use crate::drivers::rtc::{self, CURRENT_DATETIME, TIME_NEEDS_UPDATE};
 use crate::drivers::keyboard;
@@ -19,7 +19,6 @@ use self::rect::Rect;
 pub mod button;
 use self::button::Button;
 use crate::userspace::localisation;
-use core::arch::asm;
 
 const MAX_WINDOWS: usize = 10;
 
@@ -78,16 +77,85 @@ enum ResizeDirection {
     BottomRight,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum InputEvent {
+    MouseMove { x: isize, y: isize, dx: isize, dy: isize },
+    MouseButton { button: MouseButton, down: bool, x: isize, y: isize },
+    Scroll { delta: isize },
+    KeyPress { key: char },
+}
+
+pub struct InputManager {
+    pub mouse_x: isize,
+    pub mouse_y: isize,
+    pub left_button_pressed: bool,
+    pub right_button_pressed: bool,
+    pub event_queue: Vec<InputEvent>,
+}
+
+impl InputManager {
+    pub const fn new() -> Self {
+        Self {
+            mouse_x: 40,
+            mouse_y: 12,
+            left_button_pressed: false,
+            right_button_pressed: false,
+            event_queue: Vec::new(),
+        }
+    }
+
+    pub fn update(&mut self, max_w: isize, max_h: isize) {
+        self.event_queue.clear();
+
+        while let Some(packet) = mouse::get_packet() {
+            let dx = packet.x as isize;
+            let dy = -(packet.y as isize); // PS/2 Y-axis is inverted
+            self.mouse_x = (self.mouse_x + dx).clamp(0, max_w - 1);
+            self.mouse_y = (self.mouse_y + dy).clamp(0, max_h - 1);
+
+            if dx != 0 || dy != 0 {
+                self.event_queue.push(InputEvent::MouseMove { x: self.mouse_x, y: self.mouse_y, dx, dy });
+            }
+
+            let left = (packet.buttons & 0x1) != 0;
+            let right = (packet.buttons & 0x2) != 0;
+
+            if left != self.left_button_pressed {
+                self.left_button_pressed = left;
+                self.event_queue.push(InputEvent::MouseButton { button: MouseButton::Left, down: left, x: self.mouse_x, y: self.mouse_y });
+            }
+            if right != self.right_button_pressed {
+                self.right_button_pressed = right;
+                self.event_queue.push(InputEvent::MouseButton { button: MouseButton::Right, down: right, x: self.mouse_x, y: self.mouse_y });
+            }
+
+            if packet.wheel != 0 {
+                self.event_queue.push(InputEvent::Scroll { delta: packet.wheel as isize });
+            }
+        }
+
+        while let Some(key) = keyboard::get_char() {
+            // Interrupts are handled inside get_char, so this is safe to loop
+            self.event_queue.push(InputEvent::KeyPress { key });
+        }
+    }
+}
+
 pub struct WindowManager {
     windows: Vec<Window>,
     z_order: Vec<usize>,
     next_win_id: usize,
-    mouse_x: isize,
-    mouse_y: isize,
+    input: InputManager,
     drag_win_id: Option<usize>,
     drag_offset_x: isize,
     drag_offset_y: isize,
-    left_button_pressed: bool,
     click_target_id: Option<usize>,
     start_menu_open: bool,
     dirty_rects: Vec<Rect>,
@@ -107,12 +175,10 @@ impl WindowManager {
             windows: Vec::new(),
             z_order: Vec::new(),
             next_win_id: 0,
-            mouse_x: 40,
-            mouse_y: 12,
+            input: InputManager::new(), // Now creates Vec, so non-const
             drag_win_id: None,
             drag_offset_x: 0,
             drag_offset_y: 0,
-            left_button_pressed: false,
             click_target_id: None,
             start_menu_open: false,
             dirty_rects: Vec::new(),
@@ -142,7 +208,7 @@ impl WindowManager {
     }
 
     fn get_cursor_rect(&self) -> Rect {
-        Rect { x: self.mouse_x, y: self.mouse_y, width: 12, height: 17 }
+        Rect { x: self.input.mouse_x, y: self.input.mouse_y, width: 12, height: 17 }
     }
 
     fn get_window_rect(&self, win_id: usize) -> Option<Rect> {
@@ -190,38 +256,23 @@ impl WindowManager {
             self.mark_dirty(rect);
         }
 
+        // Poll all drivers and buffer events
+        self.input.update(screen_width, screen_height);
+
         let mut mouse_moved = false;
+        
+        // Process buffered events
+        let events = core::mem::take(&mut self.input.event_queue);
+        for event in events {
+            match event {
+                InputEvent::MouseMove { x, y, dx, dy } => {
+                    mouse_moved = true;
+                    // Update "current" input state for other methods that might rely on it
+                    // (though we try to use x,y from event)
+                    self.input.mouse_x = x;
+                    self.input.mouse_y = y;
 
-        // Process all pending mouse packets
-        // IMPORTANT: We must disable interrupts while reading the shared queue to prevent deadlocks.
-        // If an IRQ fires while we hold the queue lock, the handler will spin forever waiting for us.
-        loop {
-            let packet_opt = mouse::get_packet();
-            
-            let packet = match packet_opt {
-                Some(p) => p,
-                None => break,
-            };
-
-            mouse_moved = true;
-            let old_mouse_x = self.mouse_x;
-            let old_mouse_y = self.mouse_y;
-
-            self.mouse_x += packet.x as isize;
-            self.mouse_y -= packet.y as isize; // PS/2 Y-axis is often inverted
-
-            // Clamp final position to screen bounds. This prevents the "bounce" effect
-            // by ensuring the cursor stops cleanly at the edge.
-            self.mouse_x = self.mouse_x.clamp(0, screen_width - 1);
-            self.mouse_y = self.mouse_y.clamp(0, screen_height - 1);
-
-            // Process clicks/drags immediately to maintain synchronization with position
-            self.handle_mouse_buttons(packet, screen_height);
-
-            let dx = self.mouse_x - old_mouse_x;
-            let dy = self.mouse_y - old_mouse_y;
-
-            if let Some(id) = self.resize_win_id {
+                    if let Some(id) = self.resize_win_id {
                 if let Some(win) = self.windows.iter_mut().find(|w| w.id == id) {
 
                     let min_width: isize = 80;
@@ -249,22 +300,41 @@ impl WindowManager {
             else if let Some(id) = self.drag_win_id {
                 if let Some(win) = self.windows.iter().find(|w| w.id == id) {
                     // Don't move window, update drag_rect instead
-                    let new_x = self.mouse_x - self.drag_offset_x;
-                    let new_y = self.mouse_y - self.drag_offset_y;
+                    let new_x = self.input.mouse_x - self.drag_offset_x;
+                            let new_y = self.input.mouse_y - self.drag_offset_y;
                     self.drag_rect = Some(Rect { x: new_x, y: new_y, width: win.width, height: win.height });
                 }
             }
-
-            // Scroll Wheel
-            if packet.wheel != 0 {
+                }
+                InputEvent::Scroll { delta } => {
                 if let Some(target_id) = self.click_target_id {
                     if let Some(idx) = self.windows.iter().position(|w| w.id == target_id) {
                         let width = self.windows[idx].width;
                         let height = self.windows[idx].height;
                         if let WindowContent::App(app) = &mut self.windows[idx].content {
-                            app.handle_event(&AppEvent::Scroll { delta: packet.wheel as isize * 3, width, height });
+                                    app.handle_event(&AppEvent::Scroll { delta: delta * 3, width, height });
                             if let Some(rect) = self.get_window_rect(target_id) {
                                 self.mark_dirty(rect);
+                            }
+                        }
+                    }
+                }
+            }
+                InputEvent::MouseButton { button, down, x, y } => {
+                    // Sync state for handle method
+                    self.input.mouse_x = x;
+                    self.input.mouse_y = y;
+                    self.handle_mouse_button_event(button, down, screen_height);
+                }
+                InputEvent::KeyPress { key } => {
+                    if let Some(&top_win_id) = self.z_order.last() {
+                        if let Some(rect) = self.get_window_rect(top_win_id) {
+                            self.mark_dirty(rect);
+                        }
+
+                        if let Some(win) = self.windows.iter_mut().find(|w| w.id == top_win_id) {
+                            if let WindowContent::App(app) = &mut win.content {
+                                app.handle_event(&AppEvent::KeyPress { key });
                             }
                         }
                     }
@@ -315,8 +385,8 @@ impl WindowManager {
                         
                         if let WindowContent::App(app) = &mut self.windows[idx].content {
                             // Use 22 for title height to match draw_window offset
-                            let rel_x = self.mouse_x - win_x;
-                            let rel_y = self.mouse_y - (win_y + 22);
+                            let rel_x = self.input.mouse_x - win_x;
+                            let rel_y = self.input.mouse_y - (win_y + 22);
                             if rel_x >= 0 && rel_x < win_w as isize && rel_y >= 0 && rel_y < win_h.saturating_sub(22) as isize {
                                 app.handle_event(&AppEvent::MouseMove { x: rel_x, y: rel_y, width: win_w, height: win_h });
                             }
@@ -328,25 +398,6 @@ impl WindowManager {
       
         // Update cursor style based on what's under it
         self.update_cursor_style();
-
-        loop {
-            let key_opt = keyboard::get_char();
-            unsafe { asm!("sti", options(nomem, nostack)) };
-
-            if let Some(key) = key_opt {
-            if let Some(&top_win_id) = self.z_order.last() {
-                if let Some(rect) = self.get_window_rect(top_win_id) {
-                    self.mark_dirty(rect);
-                }
-
-                if let Some(win) = self.windows.iter_mut().find(|w| w.id == top_win_id) {
-                    if let WindowContent::App(app) = &mut win.content {
-                        app.handle_event(&AppEvent::KeyPress { key });
-                    }
-                }
-            }
-            } else { break; }
-        }
 
         if FULL_REDRAW_REQUESTED.load(Ordering::Relaxed) {
             FULL_REDRAW_REQUESTED.store(false, Ordering::Relaxed);
@@ -369,13 +420,13 @@ impl WindowManager {
             if let Some(&top_win_id) = self.z_order.last() {
                 if let Some(win) = self.windows.iter().find(|w| w.id == top_win_id) {
                     if !win.minimized && !win.maximized {
-                        let in_x_body = self.mouse_x >= win.x && self.mouse_x < win.x + win.width as isize;
-                        let in_y_body = self.mouse_y >= win.y && self.mouse_y < win.y + win.height as isize;
+                        let in_x_body = self.input.mouse_x >= win.x && self.input.mouse_x < win.x + win.width as isize;
+                        let in_y_body = self.input.mouse_y >= win.y && self.input.mouse_y < win.y + win.height as isize;
 
-                        let on_left = self.mouse_x >= win.x - BORDER_SIZE && self.mouse_x < win.x + BORDER_SIZE;
-                        let on_right = self.mouse_x >= win.x + win.width as isize - BORDER_SIZE && self.mouse_x < win.x + win.width as isize;
-                        let on_top = self.mouse_y >= win.y - BORDER_SIZE && self.mouse_y < win.y + BORDER_SIZE;
-                        let on_bottom = self.mouse_y >= win.y + win.height as isize - BORDER_SIZE && self.mouse_y < win.y + win.height as isize;
+                        let on_left = self.input.mouse_x >= win.x - BORDER_SIZE && self.input.mouse_x < win.x + BORDER_SIZE;
+                        let on_right = self.input.mouse_x >= win.x + win.width as isize - BORDER_SIZE && self.input.mouse_x < win.x + win.width as isize;
+                        let on_top = self.input.mouse_y >= win.y - BORDER_SIZE && self.input.mouse_y < win.y + BORDER_SIZE;
+                        let on_bottom = self.input.mouse_y >= win.y + win.height as isize - BORDER_SIZE && self.input.mouse_y < win.y + win.height as isize;
 
                         if (on_top && on_left) || (on_bottom && on_right) {
                             new_style = CursorStyle::ResizeNWSE;
@@ -398,24 +449,21 @@ impl WindowManager {
         }
     }
 
-    fn handle_mouse_buttons(&mut self, packet: MousePacket, screen_height: isize) {
-        let left_down = (packet.buttons & 0x1) != 0;
-        let right_down = (packet.buttons & 0x2) != 0;
-
-        if right_down {
+    fn handle_mouse_button_event(&mut self, button: MouseButton, down: bool, screen_height: isize) {
+        if let (MouseButton::Right, true) = (button, down) {
             let taskbar_height: usize = 40;
             let taskbar_y = screen_height - taskbar_height as isize;
 
             // Check if right click is on desktop (not on taskbar)
-            if self.mouse_y < taskbar_y {
+            if self.input.mouse_y < taskbar_y {
                  // Mark old menu dirty if open
                  if self.context_menu_open {
                      self.mark_dirty(Rect { x: self.context_menu_x, y: self.context_menu_y, width: 150, height: 100 });
                  }
 
                  self.context_menu_open = true;
-                 self.context_menu_x = self.mouse_x;
-                 self.context_menu_y = self.mouse_y;
+                 self.context_menu_x = self.input.mouse_x;
+                 self.context_menu_y = self.input.mouse_y;
                  self.start_menu_open = false; // Close start menu
                  
                  // Mark new menu dirty
@@ -427,9 +475,7 @@ impl WindowManager {
             }
         }
 
-        if left_down && !self.left_button_pressed {
-            // Click started
-            self.left_button_pressed = true;
+        if let (MouseButton::Left, true) = (button, down) {
             let taskbar_height: usize = 40;
             let taskbar_y = screen_height - taskbar_height as isize;
             let start_button_width = 120;
@@ -439,31 +485,13 @@ impl WindowManager {
 
             if self.context_menu_open {
                 let menu_rect = Rect { x: self.context_menu_x, y: self.context_menu_y, width: 150, height: 100 };
-                if menu_rect.contains(self.mouse_x, self.mouse_y) {
-                    let btn1 = Button::new(self.context_menu_x + 5, self.context_menu_y + 5, 140, 25, locale.ctx_new_terminal());
-                    let btn2 = Button::new(self.context_menu_x + 5, self.context_menu_y + 35, 140, 25, locale.app_system_info());
-                    let btn3 = Button::new(self.context_menu_x + 5, self.context_menu_y + 65, 140, 25, locale.ctx_properties());
+                if menu_rect.contains(self.input.mouse_x, self.input.mouse_y) {
+                    let btn_refresh = Button::new(self.context_menu_x + 5, self.context_menu_y + 5, 140, 25, locale.ctx_refresh());
+                    let btn_props = Button::new(self.context_menu_x + 5, self.context_menu_y + 35, 140, 25, locale.ctx_properties());
                     
-                    if btn1.contains(self.mouse_x, self.mouse_y) {
-                        self.add_window(Window {
-                            id: 0, x: 100, y: 100, width: 480, height: 320,
-                            color: 0x00_1E_1E_1E,
-                            title: locale.app_terminal(),
-                            content: WindowContent::App(Box::new(Terminal::new())),
-                            minimized: false, maximized: false, restore_rect: None,
-                        });
-                    } else if btn2.contains(self.mouse_x, self.mouse_y) {
-                         let mut term = Terminal::new();
-                         term.history.push("> uname -a".to_string());
-                         term.history.push(alloc::format!("NebulaOS {} i686 NebulaFS", crate::kernel::VERSION));
-                         self.add_window(Window {
-                            id: 0, x: 150, y: 150, width: 480, height: 320,
-                            color: 0x00_1E_1E_1E,
-                            title: locale.app_system_info(),
-                            content: WindowContent::App(Box::new(term)),
-                            minimized: false, maximized: false, restore_rect: None,
-                        });
-                    } else if btn3.contains(self.mouse_x, self.mouse_y) {
+                    if btn_refresh.contains(self.input.mouse_x, self.input.mouse_y) {
+                        FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
+                    } else if btn_props.contains(self.input.mouse_x, self.input.mouse_y) {
                          let mut term = Terminal::new();
                          term.history.push("Name: Desktop".to_string());
                          term.history.push("Type: Workspace".to_string());
@@ -486,17 +514,17 @@ impl WindowManager {
             }
 
             // 1. Check for click on start button
-            if start_button.contains(self.mouse_x, self.mouse_y) {
+            if start_button.contains(self.input.mouse_x, self.input.mouse_y) {
                 // Toggle Start Menu
                 let was_open = self.start_menu_open;
                 self.start_menu_open = !self.start_menu_open;
                 self.drag_win_id = None;
                 if was_open || self.start_menu_open {
-                     let menu_height: usize = 300;
+                     let menu_height: usize = 345; // Increased slightly to fit items better
                      let menu_width: usize = 200;
                      self.mark_dirty(Rect { x: 0, y: taskbar_y - menu_height as isize, width: menu_width, height: menu_height });
                 }
-            } else if self.mouse_y >= taskbar_y && self.mouse_x >= start_button_width as isize {
+            } else if self.input.mouse_y >= taskbar_y && self.input.mouse_x >= start_button_width as isize {
                 // Taskbar Window List Click
                 // Start after the start button + padding
                 let mut x_offset = start_button_width as isize + 10;
@@ -506,7 +534,7 @@ impl WindowManager {
                 // First, find which window was clicked without holding a mutable borrow
                 for win in &self.windows {
                     let button = Button::new(x_offset, taskbar_y + 2, button_width, taskbar_height - 4, "");
-                    if button.contains(self.mouse_x, self.mouse_y) {
+                    if button.contains(self.input.mouse_x, self.input.mouse_y) {
                         clicked_win_id = Some(win.id);
                         break;
                     }
@@ -546,9 +574,9 @@ impl WindowManager {
                     self.mark_dirty(Rect { x: 0, y: taskbar_y, width: 800, height: 40 });
                 }
 
-            } else if self.start_menu_open && self.mouse_x < 200 && self.mouse_y < taskbar_y{
+            } else if self.start_menu_open && self.input.mouse_x < 200 && self.input.mouse_y < taskbar_y{
                 // --- Start Menu Item Click Logic ---
-                let menu_y = screen_height - 40 - 300;
+                let menu_y = screen_height - 40 - 345;
                 let menu_x = 0;
                 let menu_width = 200;
                 let item_width = menu_width - 20;
@@ -557,10 +585,10 @@ impl WindowManager {
                 let calc_button = Button::new(menu_x + 10, menu_y + 55, item_width, 30, locale.app_calculator());
                 let settings_button = Button::new(menu_x + 10, menu_y + 95, item_width, 30, locale.app_settings());
                 let terminal_button = Button::new(menu_x + 10, menu_y + 135, item_width, 30, locale.app_terminal());
-                let shutdown_button = Button::new(menu_x + 10, menu_y + 300 - 45, item_width, 30, locale.btn_shutdown());
+                let shutdown_button = Button::new(menu_x + 10, menu_y + 345 - 45, item_width, 30, locale.btn_shutdown());
 
-                self.mark_dirty(Rect { x: 0, y: menu_y, width: 200, height: 300 }); // Mark menu dirty on click
-                if settings_button.contains(self.mouse_x, self.mouse_y) {
+                self.mark_dirty(Rect { x: 0, y: menu_y, width: 200, height: 345 }); // Mark menu dirty on click
+                if settings_button.contains(self.input.mouse_x, self.input.mouse_y) {
                     // Clicked "Settings"
                     let settings_open = self.windows.iter().any(|w| w.title == locale.app_settings());
                     if !settings_open {
@@ -575,7 +603,7 @@ impl WindowManager {
                 }
                 self.start_menu_open = false; // Close menu after click
                 
-                if terminal_button.contains(self.mouse_x, self.mouse_y) {
+                if terminal_button.contains(self.input.mouse_x, self.input.mouse_y) {
                     // Clicked "Terminal"
                     self.add_window(Window {
                         id: 0, x: 100, y: 100, width: 480, height: 320,
@@ -586,11 +614,11 @@ impl WindowManager {
                     });
                 }
 
-                if shutdown_button.contains(self.mouse_x, self.mouse_y) {
+                if shutdown_button.contains(self.input.mouse_x, self.input.mouse_y) {
                     crate::kernel::power::shutdown();
                 }
 
-                if calc_button.contains(self.mouse_x, self.mouse_y) {
+                if calc_button.contains(self.input.mouse_x, self.input.mouse_y) {
                     // Clicked "Calculator"
                     self.add_window(Window {
                         id: 0, x: 50, y: 350, width: 160, height: 220,
@@ -601,7 +629,7 @@ impl WindowManager {
                     });
                 }
 
-                if editor_button.contains(self.mouse_x, self.mouse_y) {
+                if editor_button.contains(self.input.mouse_x, self.input.mouse_y) {
                     // Clicked "Text Editor"
                     self.add_window(Window {
                         id: 0, x: 150, y: 150, width: 400, height: 300,
@@ -621,15 +649,15 @@ impl WindowManager {
                     if let Some(win) = self.windows.iter().find(|w| w.id == win_id) {
                         if win.minimized { continue; } // Skip minimized windows
 
-                        let in_x_body = self.mouse_x >= win.x && self.mouse_x < win.x + win.width as isize;
-                        let in_y_body = self.mouse_y >= win.y && self.mouse_y < win.y + win.height as isize;
+                        let in_x_body = self.input.mouse_x >= win.x && self.input.mouse_x < win.x + win.width as isize;
+                        let in_y_body = self.input.mouse_y >= win.y && self.input.mouse_y < win.y + win.height as isize;
 
                         // Check for resize handles if window is not maximized
                         if !win.maximized {
-                            let on_left = self.mouse_x >= win.x - BORDER_SIZE && self.mouse_x < win.x + BORDER_SIZE;
-                            let on_right = self.mouse_x >= win.x + win.width as isize - BORDER_SIZE && self.mouse_x < win.x + win.width as isize;
-                            let on_top = self.mouse_y >= win.y - BORDER_SIZE && self.mouse_y < win.y + BORDER_SIZE;
-                            let on_bottom = self.mouse_y >= win.y + win.height as isize - BORDER_SIZE && self.mouse_y < win.y + win.height as isize;
+                            let on_left = self.input.mouse_x >= win.x - BORDER_SIZE && self.input.mouse_x < win.x + BORDER_SIZE;
+                            let on_right = self.input.mouse_x >= win.x + win.width as isize - BORDER_SIZE && self.input.mouse_x < win.x + win.width as isize;
+                            let on_top = self.input.mouse_y >= win.y - BORDER_SIZE && self.input.mouse_y < win.y + BORDER_SIZE;
+                            let on_bottom = self.input.mouse_y >= win.y + win.height as isize - BORDER_SIZE && self.input.mouse_y < win.y + win.height as isize;
 
                             if on_top && on_left { resize_dir = ResizeDirection::TopLeft; }
                             else if on_top && on_right { resize_dir = ResizeDirection::TopRight; }
@@ -677,15 +705,15 @@ impl WindowManager {
                         let max_button = Button::new(win_x + win_width as isize - 40, win_y + 2, 16, 16, "+");
                         let min_button = Button::new(win_x + win_width as isize - 60, win_y + 2, 16, 16, "-");
 
-                        if self.mouse_y < win_y + 20 { // Clicked title bar
-                            if close_button.contains(self.mouse_x, self.mouse_y) {
+                        if self.input.mouse_y < win_y + 20 { // Clicked title bar
+                            if close_button.contains(self.input.mouse_x, self.input.mouse_y) {
                                 // Remove window
                                 // The rect was already marked dirty when the window was clicked.
                                 self.windows.retain(|w| w.id != win_id);
                                 self.z_order.retain(|&id| id != win_id);
                                 // Mark taskbar dirty to remove button
                                 self.mark_dirty(Rect { x: 0, y: taskbar_y, width: 800, height: 40 });
-                            } else if max_button.contains(self.mouse_x, self.mouse_y) {
+                            } else if max_button.contains(self.input.mouse_x, self.input.mouse_y) {
                                 // Maximize Toggle
                                 let fb_info_w = FRAMEBUFFER.lock().info.as_ref().map(|i| i.width).unwrap_or(800);
                                 let fb_info_h = FRAMEBUFFER.lock().info.as_ref().map(|i| i.height).unwrap_or(600);
@@ -711,7 +739,7 @@ impl WindowManager {
                                 };
                                 self.mark_dirty(old_rect);
                                 self.mark_dirty(new_rect);
-                            } else if min_button.contains(self.mouse_x, self.mouse_y) {
+                            } else if min_button.contains(self.input.mouse_x, self.input.mouse_y) {
                                 // Minimize
                                 let old_rect = {
                                     let top_win = self.windows.iter_mut().find(|w| w.id == win_id).unwrap();
@@ -723,8 +751,8 @@ impl WindowManager {
                             } else if !win_maximized { // Start drag (only if not maximized)
                                 let top_win = self.windows.iter().find(|w| w.id == win_id).unwrap();
                                 self.drag_win_id = Some(win_id);
-                                self.drag_offset_x = self.mouse_x - top_win.x;
-                                self.drag_offset_y = self.mouse_y - top_win.y;
+                                self.drag_offset_x = self.input.mouse_x - top_win.x;
+                                self.drag_offset_y = self.input.mouse_y - top_win.y;
                                 self.drag_rect = Some(Rect { x: top_win.x, y: top_win.y, width: top_win.width, height: top_win.height });
                             }
                         }
@@ -733,16 +761,14 @@ impl WindowManager {
                     // Clicked on desktop
                     self.click_target_id = None;
                     if self.start_menu_open {
-                        let menu_height: usize = 300;
+                        let menu_height: usize = 345;
                         let menu_width: usize = 200;
                         self.mark_dirty(Rect { x: 0, y: taskbar_y - menu_height as isize, width: menu_width, height: menu_height });
                         self.start_menu_open = false;
                     }
                 }
             }
-        } else if !left_down && self.left_button_pressed {
-            // Click released
-            self.left_button_pressed = false;
+        } else if let (MouseButton::Left, false) = (button, down) {
 
             if self.resize_win_id.is_some() {
                 self.resize_win_id = None;
@@ -766,9 +792,9 @@ impl WindowManager {
                     let mut event_coords = None;
                     if let Some(win) = self.windows.iter().find(|w| w.id == target_id) {
                         // Check if click is inside the window content area (below titlebar)
-                        if self.mouse_x >= win.x && self.mouse_x < win.x + win.width as isize &&
-                           self.mouse_y >= win.y + 20 && self.mouse_y < win.y + win.height as isize {
-                             event_coords = Some((self.mouse_x - win.x, self.mouse_y - (win.y + 20)));
+                        if self.input.mouse_x >= win.x && self.input.mouse_x < win.x + win.width as isize &&
+                           self.input.mouse_y >= win.y + 20 && self.input.mouse_y < win.y + win.height as isize {
+                             event_coords = Some((self.input.mouse_x - win.x, self.input.mouse_y - (win.y + 20)));
                         }
                     }
 
@@ -895,21 +921,21 @@ impl WindowManager {
                     if win.minimized { continue; }
                     let win_rect = Rect { x: win.x, y: win.y, width: win.width, height: win.height };
                     if dirty_rect.intersects(&win_rect) {
-                        self.draw_window(&mut local_fb, win, self.mouse_x, self.mouse_y, *dirty_rect);
+                        self.draw_window(&mut local_fb, win, self.input.mouse_x, self.input.mouse_y, *dirty_rect);
                     }
                 }
             }
 
             // 3. Draw Taskbar
-            self.draw_taskbar(&mut local_fb, self.mouse_x, self.mouse_y, *dirty_rect);
+            self.draw_taskbar(&mut local_fb, self.input.mouse_x, self.input.mouse_y, *dirty_rect);
 
             // 4. Draw Start Menu if open
             if self.start_menu_open {
-                self.draw_start_menu(&mut local_fb, self.mouse_x, self.mouse_y, *dirty_rect);
+                self.draw_start_menu(&mut local_fb, self.input.mouse_x, self.input.mouse_y, *dirty_rect);
             }
 
             if self.context_menu_open {
-                self.draw_context_menu(&mut local_fb, self.mouse_x, self.mouse_y, *dirty_rect);
+                self.draw_context_menu(&mut local_fb, self.input.mouse_x, self.input.mouse_y, *dirty_rect);
             }
 
             // Draw Drag Overlay
@@ -922,7 +948,7 @@ impl WindowManager {
             }
 
             // 5. Draw Mouse Cursor
-            self.draw_cursor(&mut local_fb, self.mouse_x, self.mouse_y, *dirty_rect);
+            self.draw_cursor(&mut local_fb, self.input.mouse_x, self.input.mouse_y, *dirty_rect);
         }
 
         // STEP 2: Blit the local backbuffer to the actual Video Memory.
@@ -971,7 +997,8 @@ impl WindowManager {
         } else {
             (if is_active { 0x00_00_40_80 } else { 0x00_40_40_40 }, win.color, 0x00_FF_FF_FF, 0x00_40_40_40, 0x00_FF_FF_FF)
         };
-        let title_height = 22;
+        let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
+        let title_height = font_height + 6;
 
         // Draw main window body
         draw_rect(fb, win.x, win.y, win.width, win.height, body_color, Some(clip));
@@ -1001,9 +1028,8 @@ impl WindowManager {
         let title_rect = Rect { x: win.x, y: win.y, width: win.width, height: title_height };
         
         if let Some(title_clip) = clip.intersection(&title_rect) {
-            let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
             // Vertically center text in title bar
-            let text_y = win.y + (title_height as isize - font_height) / 2;
+            let text_y = win.y + (title_height as isize - font_height as isize) / 2;
             font::draw_string(fb, win.x + 6, text_y, win.title, title_text_color, Some(title_clip));
         }
 
@@ -1132,7 +1158,7 @@ impl WindowManager {
         };
 
             let menu_width = 200;
-            let menu_height = 300;
+            let menu_height = 345;
             let taskbar_height = 40;
             let menu_x = 0;
             let menu_y = (height - taskbar_height - menu_height) as isize;
@@ -1166,7 +1192,7 @@ impl WindowManager {
         let menu_x = self.context_menu_x;
         let menu_y = self.context_menu_y;
         let width = 150;
-        let height = 100;
+        let height = 70; // Reduced height since items removed
         let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
         
         let bg_color = if high_contrast { 0x00_00_00_00 } else { 0x00_C0_C0_C0 };
@@ -1182,9 +1208,8 @@ impl WindowManager {
         let locale_guard = localisation::CURRENT_LOCALE.lock();
         let locale = locale_guard.as_ref().unwrap();
         let item_width = width - 10;
-        Button::new(menu_x + 5, menu_y + 5, item_width, 25, locale.ctx_new_terminal()).draw(fb, mouse_x, mouse_y, Some(clip));
-        Button::new(menu_x + 5, menu_y + 35, item_width, 25, locale.app_system_info()).draw(fb, mouse_x, mouse_y, Some(clip));
-        Button::new(menu_x + 5, menu_y + 65, item_width, 25, locale.ctx_properties()).draw(fb, mouse_x, mouse_y, Some(clip));
+        Button::new(menu_x + 5, menu_y + 5, item_width, 25, locale.ctx_refresh()).draw(fb, mouse_x, mouse_y, Some(clip));
+        Button::new(menu_x + 5, menu_y + 35, item_width, 25, locale.ctx_properties()).draw(fb, mouse_x, mouse_y, Some(clip));
     }
 
     fn draw_cursor(&self, fb: &mut framebuffer::Framebuffer, x: isize, y: isize, clip: Rect) {
@@ -1337,7 +1362,7 @@ pub fn draw_rect(fb: &mut framebuffer::Framebuffer, x: isize, y: isize, width: u
     }
 }
 
-pub static WINDOW_MANAGER: Mutex<WindowManager> = Mutex::new(WindowManager::new());
+pub static WINDOW_MANAGER: Mutex<WindowManager> = Mutex::new(WindowManager::new()); // Must be non-const because of Vec::new in InputManager? No, Vec::new is const.
 
 pub fn init() {
     let mut wm = WINDOW_MANAGER.lock();

@@ -16,6 +16,7 @@ pub const APP_SYSTEM_INFO: &str = "システム情報";
 // Context Menu
 pub const CTX_NEW_TERMINAL: &str = "新しいターミナル";
 pub const CTX_PROPERTIES: &str = "プロパティ";
+pub const CTX_REFRESH: &str = "更新";
 
 // Start Menu
 pub const BTN_SHUTDOWN: &str = "シャットダウン";

@@ -13,6 +13,7 @@ pub trait Localisation: Send + Sync {
     fn app_system_info(&self) -> &'static str;
     fn ctx_new_terminal(&self) -> &'static str;
     fn ctx_properties(&self) -> &'static str;
+    fn ctx_refresh(&self) -> &'static str;
     fn btn_shutdown(&self) -> &'static str;
     fn settings_tab_system(&self) -> &'static str;
     fn settings_tab_a11y(&self) -> &'static str;
@@ -43,6 +44,7 @@ impl Localisation for EnUs {
     fn app_system_info(&self) -> &'static str { "System Info" }
     fn ctx_new_terminal(&self) -> &'static str { "New Terminal" }
     fn ctx_properties(&self) -> &'static str { "Properties" }
+    fn ctx_refresh(&self) -> &'static str { "Refresh" }
     fn btn_shutdown(&self) -> &'static str { "Shutdown" }
     fn settings_tab_system(&self) -> &'static str { "System" }
     fn settings_tab_a11y(&self) -> &'static str { "Accessibility" }
@@ -72,6 +74,7 @@ impl Localisation for ja_jp::JaJp {
     fn app_system_info(&self) -> &'static str { ja_jp::APP_SYSTEM_INFO }
     fn ctx_new_terminal(&self) -> &'static str { ja_jp::CTX_NEW_TERMINAL }
     fn ctx_properties(&self) -> &'static str { ja_jp::CTX_PROPERTIES }
+    fn ctx_refresh(&self) -> &'static str { ja_jp::CTX_REFRESH }
     fn btn_shutdown(&self) -> &'static str { ja_jp::BTN_SHUTDOWN }
     fn settings_tab_system(&self) -> &'static str { ja_jp::SETTINGS_TAB_SYSTEM }
     fn settings_tab_a11y(&self) -> &'static str { ja_jp::SETTINGS_TAB_A11Y }

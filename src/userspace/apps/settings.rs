@@ -29,8 +29,10 @@ impl Settings {
     }
 
     fn draw_tabs(&self, fb: &mut framebuffer::Framebuffer, win: &Window) {
-        let bar_height = 25;
-        let start_y = win.y + 22; // Start just below title bar
+        let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
+        let title_height = font_height + 6;
+        let bar_height = font_height + 9;
+        let start_y = win.y + title_height as isize; // Start just below title bar
         let locale_guard = localisation::CURRENT_LOCALE.lock();
         let locale = locale_guard.as_ref().unwrap();
         
@@ -64,7 +66,9 @@ impl Settings {
     }
 
     fn draw_content(&self, fb: &mut framebuffer::Framebuffer, win: &Window) {
-        let content_y = win.y + 22 + 30; // Title(22) + TabBar(25) + Padding
+        let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
+        let title_height = font_height + 6;
+        let content_y = win.y + title_height as isize + (font_height as isize + 9) + 5; // Title + TabBar + Padding
         let content_x = win.x + 8;
         let locale_guard = localisation::CURRENT_LOCALE.lock();
         let locale = locale_guard.as_ref().unwrap();
@@ -73,9 +77,9 @@ impl Settings {
             Tab::System => {
                 font::draw_string(fb, content_x, content_y, locale.app_system_info(), 0x00_FF_FF_FF, None);
                 let v_str = format!("{} {}", locale.info_version(), crate::kernel::VERSION);
-                font::draw_string(fb, content_x, content_y + 20, &v_str, 0x00_CC_CC_CC, None);
-                font::draw_string(fb, content_x, content_y + 40, &format!("{} Nebula Kernel", locale.info_kernel()), 0x00_CC_CC_CC, None);
-                font::draw_string(fb, content_x, content_y + 60, &format!("{} i686", locale.info_target()), 0x00_CC_CC_CC, None);
+                font::draw_string(fb, content_x, content_y + (font_height as isize + 4), &v_str, 0x00_CC_CC_CC, None);
+                font::draw_string(fb, content_x, content_y + (font_height as isize + 4) * 2, &format!("{} Nebula Kernel", locale.info_kernel()), 0x00_CC_CC_CC, None);
+                font::draw_string(fb, content_x, content_y + (font_height as isize + 4) * 3, &format!("{} i686", locale.info_target()), 0x00_CC_CC_CC, None);
             },
             Tab::Accessibility => {
                 font::draw_string(fb, content_x, content_y, locale.settings_tab_a11y(), 0x00_FF_FF_FF, None);
@@ -85,10 +89,10 @@ impl Settings {
 
                 let btn_hc_text = format!("{}  {}", if hc { "[x]" } else { "[ ]" }, locale.option_high_contrast());
                 
-                let btn_hc = Button { rect: Rect { x: content_x, y: content_y + 20, width: 140, height: 20 }, text: btn_hc_text, bg_color: 0x00_30_30_30, text_color: 0xFFFFFF };
+                let btn_hc = Button { rect: Rect { x: content_x, y: content_y + (font_height as isize + 4), width: 280, height: (font_height + 4) }, text: btn_hc_text, bg_color: 0x00_30_30_30, text_color: 0xFFFFFF };
                 let btn_lt_text = format!("{}  {}", if lt { "[x]" } else { "[ ]" }, locale.option_large_text());
 
-                let btn_lt = Button { rect: Rect { x: content_x, y: content_y + 45, width: 140, height: 20 }, text: btn_lt_text, bg_color: 0x00_30_30_30, text_color: 0xFFFFFF };
+                let btn_lt = Button { rect: Rect { x: content_x, y: content_y + (font_height as isize + 4) * 2 + 5, width: 280, height: (font_height + 4) }, text: btn_lt_text, bg_color: 0x00_30_30_30, text_color: 0xFFFFFF };
                 btn_hc.draw(fb, 0, 0, None);
                 btn_lt.draw(fb, 0, 0, None);
             },
@@ -105,49 +109,49 @@ impl Settings {
                 let slider_h = 2; // Track height
 
                 // Red Slider
-                let ry = content_y + 25;
+                let ry = content_y + (font_height as isize + 9);
                 font::draw_string(fb, content_x, ry - 4, "R", 0x00_FF_40_40, None);
                 crate::userspace::gui::draw_rect(fb, slider_x, ry, slider_w, slider_h, 0x00_80_80_80, None);
                 let rx_pos = slider_x + ((r_val as usize * slider_w) / 255) as isize;
                 crate::userspace::gui::draw_rect(fb, rx_pos - 2, ry - 4, 4, 10, 0x00_FF_FF_FF, None);
 
                 // Green Slider
-                let gy = content_y + 45;
+                let gy = content_y + (font_height as isize + 9) + 20;
                 font::draw_string(fb, content_x, gy - 4, "G", 0x00_40_FF_40, None);
                 crate::userspace::gui::draw_rect(fb, slider_x, gy, slider_w, slider_h, 0x00_80_80_80, None);
                 let gx_pos = slider_x + ((g_val as usize * slider_w) / 255) as isize;
                 crate::userspace::gui::draw_rect(fb, gx_pos - 2, gy - 4, 4, 10, 0x00_FF_FF_FF, None);
 
                 // Blue Slider
-                let by = content_y + 65;
+                let by = content_y + (font_height as isize + 9) + 40;
                 font::draw_string(fb, content_x, by - 4, "B", 0x00_40_40_FF, None);
                 crate::userspace::gui::draw_rect(fb, slider_x, by, slider_w, slider_h, 0x00_80_80_80, None);
                 let bx_pos = slider_x + ((b_val as usize * slider_w) / 255) as isize;
                 crate::userspace::gui::draw_rect(fb, bx_pos - 2, by - 4, 4, 10, 0x00_FF_FF_FF, None);
 
                 // Color Preview
-                let preview_y = content_y + 80;
+                let preview_y = content_y + (font_height as isize + 9) + 60;
                 font::draw_string(fb, content_x, preview_y + 4, locale.label_preview(), 0x00_CC_CC_CC, None);
                 crate::userspace::gui::draw_rect(fb, content_x + 70, preview_y, 40, 16, start_color, None);
                 crate::userspace::gui::draw_rect(fb, content_x + 70, preview_y, 40, 1, 0xFFFFFF, None); // Border
 
                 // Presets
-                let presets_y = content_y + 110;
+                let presets_y = content_y + (font_height as isize + 9) + 90;
                 font::draw_string(fb, content_x, presets_y, locale.label_presets(), 0x00_FF_FF_FF, None);
                 
                 let btn_w = 80;
-                let btn_h = 25;
-                let mut btn = Button::new(content_x, presets_y + 20, btn_w, btn_h, locale.preset_nebula());
+                let btn_h = font_height + 9;
+                let mut btn = Button::new(content_x, presets_y + (font_height as isize + 4), btn_w, btn_h, locale.preset_nebula());
                 btn.bg_color = 0x00_20_40_80; btn.text_color = 0xFFFFFF; btn.draw(fb, 0, 0, None);
 
-                let mut btn = Button::new(content_x + 90, presets_y + 20, btn_w, btn_h, locale.preset_sunset());
+                let mut btn = Button::new(content_x + 90, presets_y + (font_height as isize + 4), btn_w, btn_h, locale.preset_sunset());
                 btn.bg_color = 0x00_80_40_20; btn.text_color = 0xFFFFFF; btn.draw(fb, 0, 0, None);
             },
             Tab::Language => {
                 font::draw_string(fb, content_x, content_y, locale.settings_tab_language(), 0x00_FF_FF_FF, None);
 
-                let btn_en = Button { rect: Rect { x: content_x, y: content_y + 20, width: 120, height: 25 }, text: locale.lang_english().to_string(), bg_color: 0x00_30_30_30, text_color: 0xFFFFFF };
-                let btn_ja = Button { rect: Rect { x: content_x, y: content_y + 50, width: 120, height: 25 }, text: locale.lang_japanese().to_string(), bg_color: 0x00_30_30_30, text_color: 0xFFFFFF };
+                let btn_en = Button { rect: Rect { x: content_x, y: content_y + (font_height as isize + 4), width: 120, height: font_height + 9 }, text: locale.lang_english().to_string(), bg_color: 0x00_30_30_30, text_color: 0xFFFFFF };
+                let btn_ja = Button { rect: Rect { x: content_x, y: content_y + (font_height as isize + 4) * 2 + 5, width: 120, height: font_height + 9 }, text: locale.lang_japanese().to_string(), bg_color: 0x00_30_30_30, text_color: 0xFFFFFF };
                 btn_en.draw(fb, 0, 0, None);
                 btn_ja.draw(fb, 0, 0, None);
             },
@@ -183,11 +187,13 @@ impl App for Settings {
         }
         
         if self.current_tab == Tab::Accessibility {
+            let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
+            let content_y_rel = (font_height as isize + 6) + (font_height as isize + 9) + 5;
+
             // Toggles on Click only
             if let AppEvent::MouseClick { x, y, .. } = event {
-                let content_y_rel = 32;
-                let btn_hc_rect = Rect { x: 8, y: content_y_rel + 20, width: 140, height: 20 };
-                let btn_lt_rect = Rect { x: 8, y: content_y_rel + 45, width: 140, height: 20 };
+                let btn_hc_rect = Rect { x: 8, y: content_y_rel + (font_height as isize + 4), width: 280, height: (font_height + 4) };
+                let btn_lt_rect = Rect { x: 8, y: content_y_rel + (font_height as isize + 4) * 2 + 5, width: 280, height: (font_height + 4) };
 
                 if btn_hc_rect.contains(*x, *y) {
                     let val = HIGH_CONTRAST.load(Ordering::Relaxed);
@@ -202,10 +208,11 @@ impl App for Settings {
         }
 
         if self.current_tab == Tab::Language {
+            let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
+            let content_y_rel = (font_height as isize + 6) + (font_height as isize + 9) + 5;
             if let AppEvent::MouseClick { x, y, .. } = event {
-                let content_y_rel = 32;
-                let btn_en_rect = Rect { x: 8, y: content_y_rel + 20, width: 120, height: 25 };
-                let btn_ja_rect = Rect { x: 8, y: content_y_rel + 50, width: 120, height: 25 };
+                let btn_en_rect = Rect { x: 8, y: content_y_rel + (font_height as isize + 4), width: 120, height: font_height + 9 };
+                let btn_ja_rect = Rect { x: 8, y: content_y_rel + (font_height as isize + 4) * 2 + 5, width: 120, height: font_height + 9 };
 
                 if btn_en_rect.contains(*x, *y) {
                     localisation::set_language(Language::English);
@@ -222,14 +229,14 @@ impl App for Settings {
             // Calculate relative positions for sliders
             // draw_content uses: content_y = win.y + 52.
             // handle_event receives y relative to (win.y + 20).
-            // So content_y_rel = 32.
-            let content_y_rel = 32;
+            let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
+            let content_y_rel = (font_height as isize + 6) + (font_height as isize + 9) + 5;
             let slider_x_rel = 8 + 30; // content_x (8) + 30
             let slider_w = 150;
             
-            let r_rect = Rect { x: slider_x_rel, y: content_y_rel + 25 - 5, width: slider_w, height: 12 };
-            let g_rect = Rect { x: slider_x_rel, y: content_y_rel + 45 - 5, width: slider_w, height: 12 };
-            let b_rect = Rect { x: slider_x_rel, y: content_y_rel + 65 - 5, width: slider_w, height: 12 };
+            let r_rect = Rect { x: slider_x_rel, y: content_y_rel + (font_height as isize + 9) - 5, width: slider_w, height: 12 };
+            let g_rect = Rect { x: slider_x_rel, y: content_y_rel + (font_height as isize + 9) + 20 - 5, width: slider_w, height: 12 };
+            let b_rect = Rect { x: slider_x_rel, y: content_y_rel + (font_height as isize + 9) + 40 - 5, width: slider_w, height: 12 };
 
             let current_color = DESKTOP_GRADIENT_START.load(Ordering::Relaxed);
             let mut r = (current_color >> 16) & 0xFF;
@@ -259,13 +266,13 @@ impl App for Settings {
 
             // Preset Buttons (Click only)
             if let AppEvent::MouseClick { x, y, .. } = event {
-                let presets_y_rel = 32 + 110;
+                let presets_y_rel = content_y_rel + (font_height as isize + 9) + 90;
                 let start_x = 8;
                 let btn_w = 80;
-                let btn_h = 25;
+                let btn_h = font_height + 9;
 
-                let btn_neb = Rect { x: start_x, y: presets_y_rel + 20, width: btn_w, height: btn_h };
-                let btn_sun = Rect { x: start_x + 90, y: presets_y_rel + 20, width: btn_w, height: btn_h };
+                let btn_neb = Rect { x: start_x, y: presets_y_rel + (font_height as isize + 4), width: btn_w, height: btn_h };
+                let btn_sun = Rect { x: start_x + 90, y: presets_y_rel + (font_height as isize + 4), width: btn_w, height: btn_h };
 
                 if btn_neb.contains(*x, *y) {
                     DESKTOP_GRADIENT_START.store(0x00_10_20_40, Ordering::Relaxed);
