@@ -2,6 +2,7 @@ use alloc::vec::Vec;
 use spin::Mutex;
 use crate::kernel::io;
 use crate::drivers::rtc;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 pub struct Task {
     pub id: usize,
@@ -29,6 +30,7 @@ impl Scheduler {
 }
 
 pub static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
+pub static TICKS: AtomicUsize = AtomicUsize::new(0);
 
 /// Called by the assembly timer handler. 
 /// Updates the scheduler and returns the ESP of the next task.
@@ -36,6 +38,7 @@ pub static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
 pub extern "C" fn schedule(current_esp: usize) -> usize {
     // 1. Handle Timer Logic
     rtc::handle_timer_tick();
+    TICKS.fetch_add(1, Ordering::Relaxed);
     unsafe { io::outb(0x20, 0x20); } // Send EOI
 
     let mut scheduler = SCHEDULER.lock();

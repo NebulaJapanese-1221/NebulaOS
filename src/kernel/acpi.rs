@@ -77,7 +77,9 @@ fn find_rsdp() -> Option<*const Rsdp> {
 
 fn find_sdt_in_rsdt(rsdt: *const SdtHeader, signature: &[u8; 4]) -> Option<*const SdtHeader> {
     unsafe {
-        let rsdt_len = (*rsdt).length as usize;
+        // Use read_unaligned to safely read the length field
+        let rsdt_len = core::ptr::addr_of!((*rsdt).length).read_unaligned() as usize;
+
         if rsdt_len < size_of::<SdtHeader>() {
             return None;
         }
@@ -85,7 +87,8 @@ fn find_sdt_in_rsdt(rsdt: *const SdtHeader, signature: &[u8; 4]) -> Option<*cons
         let entries_ptr = (rsdt as *const u8).add(size_of::<SdtHeader>()) as *const u32;
 
         for i in 0..entry_count {
-            let sdt_ptr = *entries_ptr.add(i) as *const SdtHeader;
+            // Use read_unaligned to safely read the pointer from the list
+            let sdt_ptr = entries_ptr.add(i).read_unaligned() as *const SdtHeader;
             if (*sdt_ptr).signature == *signature && (*sdt_ptr).is_valid() {
                 return Some(sdt_ptr);
             }
@@ -115,7 +118,7 @@ fn find_signature_in_slice(data: &[u8], signature: &[u8; 4]) -> Option<*const u8
 
 
 unsafe fn get_s5_val(dsdt_ptr: *const SdtHeader) -> Option<u8> {
-    let dsdt_len = (*dsdt_ptr).length as usize;
+    let dsdt_len = core::ptr::addr_of!((*dsdt_ptr).length).read_unaligned() as usize;
     if dsdt_len < size_of::<SdtHeader>() {
         return None;
     }
@@ -132,11 +135,11 @@ unsafe fn get_s5_val(dsdt_ptr: *const SdtHeader) -> Option<u8> {
 
 pub fn init() {
     if let Some(rsdp) = find_rsdp() {
-        let rsdt_ptr = unsafe { (*rsdp).rsdt_address } as *const SdtHeader;
+        let rsdt_ptr = unsafe { core::ptr::addr_of!((*rsdp).rsdt_address).read_unaligned() } as *const SdtHeader;
         if let Some(fadt_ptr) = find_sdt_in_rsdt(rsdt_ptr, b"FACP") {
-            let fadt = unsafe { &*(fadt_ptr as *const Fadt) };
-            let pm1a_cnt_port = fadt.pm1a_cnt_blk as u16;
-            let dsdt_ptr = fadt.dsdt as *const SdtHeader;
+            let fadt = fadt_ptr as *const Fadt;
+            let pm1a_cnt_port = unsafe { core::ptr::addr_of!((*fadt).pm1a_cnt_blk).read_unaligned() } as u16;
+            let dsdt_ptr = unsafe { core::ptr::addr_of!((*fadt).dsdt).read_unaligned() } as *const SdtHeader;
 
             if pm1a_cnt_port == 0 || dsdt_ptr.is_null() {
                 return;

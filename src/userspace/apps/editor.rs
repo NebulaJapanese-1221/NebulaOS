@@ -54,7 +54,7 @@ impl App for TextEditor {
     fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window) {
         let content_x = win.x + 5;
         let mut current_x = content_x;
-        let mut current_y = win.y + 25;
+        let mut current_y = win.y + 25 - self.scroll_offset;
         let line_height = 16;
         
         // Draw text content

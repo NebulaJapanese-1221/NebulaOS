@@ -61,6 +61,7 @@ impl Terminal {
                 self.history.push("  help     - Show this message".to_string());
                 self.history.push("  uname    - Show system info (-a for all)".to_string());
                 self.history.push("  ver      - Show system version".to_string());
+                self.history.push("  uptime   - Show system uptime".to_string());
             }
             "clear" => {
                 self.history.clear();
@@ -91,6 +92,11 @@ impl Terminal {
             "shutdown" => {
                 self.history.push("Shutting down...".to_string());
                 crate::kernel::power::shutdown();
+            }
+            "uptime" => {
+                let ticks = crate::kernel::process::TICKS.load(core::sync::atomic::Ordering::Relaxed);
+                let seconds = ticks / 1000;
+                self.history.push(format!("Uptime: {} seconds", seconds));
             }
             _ => {
                 self.history.push(format!("Unknown command: {}", parts[0]));

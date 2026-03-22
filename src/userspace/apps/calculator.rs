@@ -9,6 +9,7 @@ pub struct Calculator {
     pub operand: i64,
     pub op: u8, // 0:None, 1:+, 2:-, 3:*, 4:/
     pub inputing: bool,
+    pub error: bool,
 }
 
 impl Calculator {
@@ -18,10 +19,15 @@ impl Calculator {
             operand: 0,
             op: 0,
             inputing: false,
+            error: false,
         }
     }
 
     pub fn process_input(&mut self, key: char) {
+        if self.error && key != 'C' {
+            return;
+        }
+
         match key {
             '0'..='9' => {
                 let digit = key as i64 - '0' as i64;
@@ -33,7 +39,9 @@ impl Calculator {
                 }
             }
             '+' | '-' | '*' | '/' => {
-                self.calculate();
+                if self.inputing {
+                    self.calculate();
+                }
                 self.op = match key {
                     '+' => 1,
                     '-' => 2,
@@ -45,15 +53,18 @@ impl Calculator {
                 self.inputing = false;
             }
             '=' => {
-                self.calculate();
-                self.op = 0;
-                self.inputing = false;
+                if self.op != 0 {
+                    self.calculate();
+                    self.op = 0;
+                    self.inputing = false;
+                }
             }
             'C' => {
                 self.value = 0;
                 self.operand = 0;
                 self.op = 0;
                 self.inputing = false;
+                self.error = false;
             }
             _ => {}
         }
@@ -64,7 +75,14 @@ impl Calculator {
             1 => self.value = self.operand.saturating_add(self.value),
             2 => self.value = self.operand.saturating_sub(self.value),
             3 => self.value = self.operand.saturating_mul(self.value),
-            4 => if self.value != 0 { self.value = self.operand / self.value },
+            4 => {
+                if self.value != 0 {
+                    self.value = self.operand / self.value;
+                } else {
+                    self.value = 0;
+                    self.error = true;
+                }
+            }
             _ => {}
         }
     }
@@ -81,26 +99,32 @@ impl App for Calculator {
         // Format number to string
         let mut buffer = [0u8; 20];
         let mut val = self.value;
-        let len: usize;
-        if val == 0 {
-            buffer[0] = b'0';
-            len = 1;
+        
+        let s = if self.error {
+            "Error"
         } else {
-            let neg = val < 0;
-            if neg { val = -val; }
-            let mut i = 19;
-            while val > 0 && i > 0 {
-                buffer[i] = b'0' + (val % 10) as u8;
-                val /= 10;
-                i -= 1;
+            let len;
+            if val == 0 {
+                buffer[0] = b'0';
+                len = 1;
+            } else {
+                let neg = val < 0;
+                if neg { val = -val; }
+                let mut i = 19;
+                while val > 0 && i > 0 {
+                    buffer[i] = b'0' + (val % 10) as u8;
+                    val /= 10;
+                    i -= 1;
+                }
+                if neg { buffer[i] = b'-'; i -= 1; }
+                // shift to front
+                for j in 0..(19 - i) { buffer[j] = buffer[i + 1 + j]; }
+                len = 19 - i;
             }
-            if neg { buffer[i] = b'-'; i -= 1; }
-            // shift to front
-            for j in 0..(19 - i) { buffer[j] = buffer[i + 1 + j]; }
-            len = 19 - i;
-        }
-        let s = core::str::from_utf8(&buffer[0..len]).unwrap_or("Err");
-        font::draw_string(fb, win.x + width - 10 - (len as isize * 8), start_y + 12, s, 0x00_00_FF_00, None);
+            core::str::from_utf8(&buffer[0..len]).unwrap_or("Err")
+        };
+        
+        font::draw_string(fb, win.x + width - 10 - (s.len() as isize * 8), start_y + 12, s, 0x00_00_FF_00, None);
 
         // 2. Draw Buttons
         let labels = ["7", "8", "9", "/", "4", "5", "6", "*", "1", "2", "3", "-", "C", "0", "=", "+"];

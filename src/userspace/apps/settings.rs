@@ -18,7 +18,6 @@ enum Tab {
 
 #[derive(Clone)]
 pub struct Settings {
-    redraw: bool,
     current_tab: Tab,
 }
 
@@ -26,7 +25,6 @@ impl Settings {
     pub fn new() -> Self {
         Self {
             current_tab: Tab::System,
-            redraw: true,
         }
     }
 
@@ -57,7 +55,7 @@ impl Settings {
                 bg_color,
                 text_color: 0x00_FF_FF_FF,
             };
-            btn.draw(fb, 0, 0, Some(Rect { x: win.x, y: win.y, width: win.width, height: win.height })); // Mouse hover not supported in this context yet
+            btn.draw(fb, 0, 0, Some(win.rect())); // Mouse hover not supported in this context yet
             
         if is_active {
                 crate::userspace::gui::draw_rect(fb, x, start_y + bar_height as isize - 2, tab_width, 2, 0x00_00_AA_FF, None);

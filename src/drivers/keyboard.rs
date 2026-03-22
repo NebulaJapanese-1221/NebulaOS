@@ -2,6 +2,7 @@ use spin::Mutex;
 use super::ps2;
 use crate::kernel::interrupts::InterruptStackFrame;
 use crate::kernel::io;
+use core::arch::asm;
 
 /// A simple ring buffer for buffering key presses.
 pub struct KeyBuffer {
@@ -90,13 +91,24 @@ pub static KEY_BUFFER: Mutex<KeyBuffer> = Mutex::new(KeyBuffer::new());
 
 /// Retreives the next char from the buffer, if any.
 pub fn get_char() -> Option<char> {
-    let mut kb = KEY_BUFFER.lock();
-    kb.pop()
+    // Disable interrupts to prevent deadlock with the interrupt handler
+    unsafe { asm!("cli", options(nomem, nostack)); }
+    let mut kb = KEY_BUFFER.lock(); 
+    let c = kb.pop();
+    drop(kb); // Release lock before re-enabling interrupts
+    unsafe { asm!("sti", options(nomem, nostack)); }
+    c
 }
 
 /// Updates modifier state based on scancode.
 pub fn update_modifiers(scancode: u8) {
     let mut kb = KEY_BUFFER.lock();
+    if scancode == kb.modifiers.last_scancode {
+        kb.modifiers.repeat_count += 1;
+    } else {
+        kb.modifiers.last_scancode = scancode;
+        kb.modifiers.repeat_count = 0;
+    }
     match scancode {
         0x2A => kb.modifiers.lshift = true,   // Left Shift Press
         0xAA => kb.modifiers.lshift = false,  // Left Shift Release

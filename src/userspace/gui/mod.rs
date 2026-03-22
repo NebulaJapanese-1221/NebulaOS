@@ -44,6 +44,12 @@ pub struct Window {
     pub restore_rect: Option<Rect>,
 }
 
+impl Window {
+    pub fn rect(&self) -> Rect {
+        Rect { x: self.x, y: self.y, width: self.width, height: self.height }
+    }
+}
+
 #[derive(Clone)]
 pub enum WindowContent {
     App(Box<dyn App>),

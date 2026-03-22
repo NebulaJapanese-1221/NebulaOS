@@ -5,6 +5,8 @@
 - Fixed mouse freezing at random times (QEMU and Real Hardware)
 - Fixed shutdown crashing NebulaOS (QEMU and Real Hardware)
 - Added mouse wheel support (Intellimouse extension)
+- Added `uptime` command to Terminal
+- Fixed input freezing/deadlocks in keyboard driver and scrolling in Text Editor
 
 
 ## v0.0.2-dev2 (03-21-2026)
