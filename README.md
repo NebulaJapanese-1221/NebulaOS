@@ -38,3 +38,5 @@ This project is licensed under the GNU General Public License v3.0.
 
 ---
 *Created by NebulaJapanese - 2026*
+
+Note: NebulaOS is programmed with the help of Gemini Code Assist (About 25-35% of NebulaOS code) which is why I can release versions so quickly.
