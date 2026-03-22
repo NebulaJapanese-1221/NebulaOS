@@ -3,7 +3,7 @@
 NebulaOS is a x86 based hobby operating system written in Rust.
 
 **⚠️ ALPHA STATUS**
-NebulaOS is currently in alpha. Problems can range from apps crashing to the OS not booting at all. New versions are now released daily (Mostly minor updates) or weekly (More major updates)
+NebulaOS is currently in alpha. Problems can range from apps crashing to the OS not booting at all. New versions are now released once or twice per week.
 
 ## 💻 Devices Tested
 *   QEMU
