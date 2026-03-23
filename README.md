@@ -39,4 +39,4 @@ This project is licensed under the GNU General Public License v3.0.
 ---
 *Created by NebulaJapanese - 2026*
 
-Note: NebulaOS is programmed with the help of Gemini Code Assist (About 25-50% of NebulaOS code) which is why I can release versions so quickly. Usually my code has many bugs so I use Gemini Code Assist to debug. Eventually I will use less and less of it which will make releases much slower (I am only a solo developer)
+Note: NebulaOS development has stopped and will start again on April 5, 2026.
