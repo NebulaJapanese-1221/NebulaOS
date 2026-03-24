@@ -17,7 +17,7 @@ pub mod process;
 pub mod cpu;
 pub mod elf;
 
-pub const VERSION: &str = "0.0.3-dev";
+pub const VERSION: &str = "0.0.3-dev2";
 
 pub static TOTAL_MEMORY: AtomicUsize = AtomicUsize::new(0);
 pub static CPU_CORES: AtomicUsize = AtomicUsize::new(1);
