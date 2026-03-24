@@ -1,0 +1,9 @@
+[package]
+name = "nebulafs"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+
+[lib]
+crate-type = ["rlib"]

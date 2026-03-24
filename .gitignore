@@ -1,9 +1,3 @@
 /target
 **/*.rs.bk
 nebula_os.iso
-src/kernel/mod.rs
-NebulaFS/src/lib.rs
-NebulaFS/src/spa.rs
-NebulaFS/src/dmu.rs
-NebulaFS/Cargo.toml
-VERSION_LOG.md

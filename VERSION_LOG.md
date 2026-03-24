@@ -2,8 +2,6 @@
 
 ## v0.0.3-dev2 (04-07-2026)
 - Started development of v0.0.3-dev2.
-- Created basic structure for NebulaFS, a new ZFS-inspired filesystem.
-- Integrated the `nebulafs` crate into the main project as a workspace member.
 
 ## v0.0.3-dev (03-22-2026)
 - Added proper System Information detection (CPUID for Brand String).
