@@ -1,5 +1,7 @@
 #![no_std]
 
+extern crate alloc;
+
 //! NebulaFS - A ZFS-inspired Copy-On-Write Filesystem
 //! 
 //! Core Concepts:
@@ -9,6 +11,8 @@
 
 pub mod spa;
 pub mod dmu;
+pub mod vdev;
+pub mod zap;
 
 /// The Magic Number for NebulaFS (ASCII 'NBFS' + high bit or similar)
 /// ZFS uses different endian magics, we'll stick to one for now.

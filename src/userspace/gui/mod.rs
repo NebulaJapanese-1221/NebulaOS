@@ -9,7 +9,7 @@ use crate::drivers::keyboard;
 use alloc::vec::Vec;
 use alloc::string::ToString;
 use alloc::format;
-use crate::userspace::apps::{app::{App, AppEvent}, calculator::Calculator, editor::TextEditor, paint::Paint, settings::Settings, terminal::Terminal, task_manager::TaskManager};
+use crate::userspace::apps::{app::{App, AppEvent}, calculator::Calculator, editor::TextEditor, paint::Paint, settings::Settings, terminal::Terminal, task_manager::TaskManager, partition_manager::PartitionManager};
 use spin::Mutex;
 use alloc::boxed::Box;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -595,7 +595,7 @@ impl WindowManager {
                 self.start_menu_open = !self.start_menu_open;
                 self.drag_win_id = None;
                 if was_open || self.start_menu_open {
-                     let menu_height: usize = 345; // Increased slightly to fit items better
+                     let menu_height: usize = 385; // Increased to fit new item
                      let menu_width: usize = 200;
                      self.mark_dirty(Rect { x: 0, y: taskbar_y - menu_height as isize, width: menu_width, height: menu_height });
                 }
@@ -651,7 +651,7 @@ impl WindowManager {
 
             } else if self.start_menu_open && self.input.mouse_x < 200 && self.input.mouse_y < taskbar_y{
                 // --- Start Menu Item Click Logic ---
-                let menu_y = screen_height - 40 - 345;
+                let menu_y = screen_height - 40 - 385;
                 let menu_x = 0;
                 let menu_width = 200;
                 let item_width = menu_width - 20;
@@ -662,10 +662,11 @@ impl WindowManager {
                 let settings_button = Button::new(menu_x + 10, menu_y + 135, item_width, 30, locale.app_settings());
                 let terminal_button = Button::new(menu_x + 10, menu_y + 175, item_width, 30, locale.app_terminal());
                 let taskmgr_button = Button::new(menu_x + 10, menu_y + 215, item_width, 30, "Task Manager");
-                let shutdown_button = Button::new(menu_x + 10, menu_y + 345 - 45, item_width, 30, locale.btn_shutdown());
-                let reboot_button = Button::new(menu_x + 10, menu_y + 345 - 85, item_width, 30, locale.btn_reboot());
+                let partmgr_button = Button::new(menu_x + 10, menu_y + 255, item_width, 30, "Partitions");
+                let shutdown_button = Button::new(menu_x + 10, menu_y + 385 - 45, item_width, 30, locale.btn_shutdown());
+                let reboot_button = Button::new(menu_x + 10, menu_y + 385 - 85, item_width, 30, locale.btn_reboot());
 
-                self.mark_dirty(Rect { x: 0, y: menu_y, width: 200, height: 345 }); // Mark menu dirty on click
+                self.mark_dirty(Rect { x: 0, y: menu_y, width: 200, height: 385 }); // Mark menu dirty on click
                 if settings_button.contains(self.input.mouse_x, self.input.mouse_y) {
                     // Clicked "Settings"
                     let settings_open = self.windows.iter().any(|w| w.title == locale.app_settings());
@@ -688,6 +689,17 @@ impl WindowManager {
                         color: 0x00_00_40_40,
                         title: "Task Manager",
                         content: WindowContent::App(Box::new(TaskManager::new())),
+                        minimized: false, maximized: false, restore_rect: None,
+                    });
+                }
+
+                if partmgr_button.contains(self.input.mouse_x, self.input.mouse_y) {
+                    // Clicked "Partitions"
+                    self.add_window(Window {
+                        id: 0, x: 200, y: 200, width: 400, height: 300,
+                        color: 0x00_00_20_40,
+                        title: "Partition Manager",
+                        content: WindowContent::App(Box::new(PartitionManager::new())),
                         minimized: false, maximized: false, restore_rect: None,
                     });
                 }
@@ -865,7 +877,7 @@ impl WindowManager {
                     // Clicked on desktop
                     self.click_target_id = None;
                     if self.start_menu_open {
-                        let menu_height: usize = 345;
+                        let menu_height: usize = 385;
                         let menu_width: usize = 200;
                         self.mark_dirty(Rect { x: 0, y: taskbar_y - menu_height as isize, width: menu_width, height: menu_height });
                         self.start_menu_open = false;
@@ -1220,7 +1232,7 @@ impl WindowManager {
                     win.title.to_string()
                 };
 
-                let mut button = Button::new(x_offset, taskbar_y + 2, button_width, taskbar_height - 4, &title);
+                let mut button = Button::new(x_offset, taskbar_y + 2, button_width, taskbar_height - 4, title.as_str());
                 button.bg_color = if win.minimized { 0x00_30_30_30 } else { 0x00_50_50_50 };
                 button.text_color = 0x00_FF_FF_FF;
                 button.draw(fb, mouse_x, mouse_y, Some(clip));
@@ -1269,7 +1281,7 @@ impl WindowManager {
         };
 
             let menu_width = 200;
-            let menu_height = 345;
+            let menu_height = 385;
             let taskbar_height = 40;
             let menu_x = 0;
             let menu_y = (height - taskbar_height - menu_height) as isize;
@@ -1295,6 +1307,7 @@ impl WindowManager {
             Button::new(menu_x + 10, menu_y + 135, item_width, 30, locale.app_settings()).draw(fb, mouse_x, mouse_y, Some(clip));
             Button::new(menu_x + 10, menu_y + 175, item_width, 30, locale.app_terminal()).draw(fb, mouse_x, mouse_y, Some(clip));
             Button::new(menu_x + 10, menu_y + 215, item_width, 30, "Task Manager").draw(fb, mouse_x, mouse_y, Some(clip));
+            Button::new(menu_x + 10, menu_y + 255, item_width, 30, "Partitions").draw(fb, mouse_x, mouse_y, Some(clip));
 
             let mut reboot_button = Button::new(menu_x + 10, menu_y + menu_height as isize - 85, item_width, 30, locale.btn_reboot());
             reboot_button.bg_color = 0x00_FF_A0_40; // Orange
