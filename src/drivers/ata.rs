@@ -147,6 +147,6 @@ impl BlockDevice for AtaDrive {
         while padded.len() % SECTOR_SIZE != 0 {
             padded.push(0);
         }
-        self.write_sectors(lba, &padded);
+        self.write_sectors(lba, padded.as_slice());
     }
 }

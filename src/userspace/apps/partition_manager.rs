@@ -9,12 +9,12 @@ use crate::drivers::ata::AtaDrive;
 use core::convert::TryInto;
 use nebulafs::vdev::Vdev;
 use alloc::sync::Arc;
-use nebulafs::dmu::ObjsetPhys;
 
 #[derive(Clone)]
 struct PartitionEntry {
     id: usize,
     status: u8,
+    fs_type: String, // Replaces type_code for display
     type_code: u8,
     lba_start: u32,
     sector_count: u32,
@@ -43,7 +43,7 @@ impl PartitionManager {
     fn refresh(&mut self) {
         self.partitions.clear();
         self.files.clear();
-        let drive = AtaDrive::new(true, true); // Primary Master
+        let drive = Arc::new(AtaDrive::new(true, true)); // Primary Master
         // Read MBR (LBA 0)
         let data = drive.read_sectors(0, 1);
 
@@ -84,9 +84,12 @@ impl PartitionManager {
 
             // Only list partitions with a non-zero size
             if sector_count > 0 {
+                let fs_type = self.detect_fs(drive.as_ref(), lba_start, type_code);
+                
                 self.partitions.push(PartitionEntry {
                     id: i + 1,
                     status,
+                    fs_type,
                     type_code,
                     lba_start,
                     sector_count,
@@ -100,46 +103,45 @@ impl PartitionManager {
 
         // Attempt to mount NebulaFS
         let mut root_vdev = Vdev::new_leaf(0, 0, "ata0", 0, 9);
-        root_vdev.backend = Some(Arc::new(drive)); // Inject ATA driver as backend
+        root_vdev.backend = Some(drive.clone()); // Inject ATA driver as backend
         
-        if let Some(spa) = nebulafs::spa::Spa::find(root_vdev) {
+        if let Some(fs) = nebulafs::fs::NebulaFileSystem::mount(root_vdev) {
             self.fs_type = String::from("NebulaFS (Detected)");
-            
-            // Try to read root directory
-            // 1. Get Root Block Pointer from Uberblock
-            let root_bp = spa.uberblock.rootbp;
-            
-            // 2. Read the Object Set (FileSystem) pointed to by RootBP
-            // In this simple version, we assume RootBP points to a single block containing the ObjsetPhys
-            let os_data = spa.root_vdev.read_block(root_bp.offset, root_bp.asize as usize); 
-            
-            if os_data.len() >= core::mem::size_of::<ObjsetPhys>() {
-                let os = unsafe { &*(os_data.as_ptr() as *const ObjsetPhys) };
-                
-                // 3. Get the Root Directory Dnode.
-                // In ZFS, the "Master Node" is usually object ID 1.
-                // The Master Node is a ZAP containing keys like "ROOT" -> Object ID of root directory.
-                // For NebulaFS v0.0.3, let's assume Object ID 2 IS the root directory for simplicity.
-                if let Some(root_dnode) = os.get_dnode(&spa.root_vdev, 2) {
-                    // 4. Read Directory Contents (ZAP)
-                    // Assuming the directory is small enough to fit in the first block
-                    // and is a "MicroZAP" (simple linear array of entries).
-                    if let Some(dir_data) = root_dnode.read_data(&spa.root_vdev, 0, root_dnode.datablksz as usize) {
-                        let entries = nebulafs::zap::parse_directory(&dir_data);
-                        for entry in entries {
-                            let mut name = entry.name;
-                            if entry.type_ == 4 { name.push('/'); } // Directory marker
-                            self.files.push(name);
-                        }
-                    }
-                }
-            }
-            
-            if self.files.is_empty() {
-                 self.files.push(String::from("<Empty Pool>"));
-            }
+            self.files = fs.list_root();
         } else {
             self.fs_type = String::from("None / Raw");
+        }
+    }
+
+    fn detect_fs(&self, drive: &AtaDrive, lba_start: u32, type_code: u8) -> String {
+        match type_code {
+            0x07 => {
+                let data = drive.read_sectors(lba_start, 1);
+                if data.len() >= 8 && &data[3..7] == b"NTFS" {
+                    return String::from("NTFS");
+                }
+                String::from("HPFS/NTFS")
+            },
+            0x0B | 0x0C => {
+                let data = drive.read_sectors(lba_start, 1);
+                if data.len() > 90 && &data[82..87] == b"FAT32" {
+                    return String::from("FAT32");
+                }
+                String::from("FAT32 (LBA)")
+            },
+            0x83 => {
+                // Check Ext4 Superblock (1024 bytes offset, so LBA+2)
+                let data = drive.read_sectors(lba_start + 2, 1);
+                if data.len() >= 60 {
+                    // Magic at offset 56 (0x38)
+                    let magic = u16::from_le_bytes([data[56], data[57]]);
+                    if magic == 0xEF53 {
+                        return String::from("Ext4 (Linux)");
+                    }
+                }
+                String::from("Linux (Ext)")
+            },
+            _ => format!("0x{:02X}", type_code),
         }
     }
 }
@@ -161,7 +163,7 @@ impl App for PartitionManager {
         let header_color = 0x00_FF_FF_FF;
         font::draw_string(fb, x, y, "#", header_color, None);
         font::draw_string(fb, x + 30, y, "Boot", header_color, None);
-        font::draw_string(fb, x + 80, y, "Type", header_color, None);
+        font::draw_string(fb, x + 80, y, "Filesystem", header_color, None);
         font::draw_string(fb, x + 130, y, "Start LBA", header_color, None);
         font::draw_string(fb, x + 230, y, "Size (MB)", header_color, None);
         
@@ -178,9 +180,9 @@ impl App for PartitionManager {
 
             font::draw_string(fb, x, y, format!("{}", part.id).as_str(), row_color, None);
             font::draw_string(fb, x + 30, y, boot_flag, 0x00_00_FF_00, None);
-            font::draw_string(fb, x + 80, y, format!("0x{:02X}", part.type_code).as_str(), row_color, None);
-            font::draw_string(fb, x + 130, y, format!("{}", part.lba_start).as_str(), row_color, None);
-            font::draw_string(fb, x + 230, y, format!("{} MB", size_mb).as_str(), row_color, None);
+            font::draw_string(fb, x + 80, y, part.fs_type.as_str(), row_color, None);
+            font::draw_string(fb, x + 130 + 50, y, format!("{}", part.lba_start).as_str(), row_color, None);
+            font::draw_string(fb, x + 230 + 50, y, format!("{} MB", size_mb).as_str(), row_color, None);
 
             y += font_height as isize + 5;
         }
