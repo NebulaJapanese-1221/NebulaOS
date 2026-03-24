@@ -44,7 +44,7 @@ impl App for TaskManager {
         let mut y = win.y + 20 + 5;
         let x = win.x + 5;
 
-        // Draw Header
+        // Draw Process List Header
         font::draw_string(fb, x, y, "ID   State", 0x00_FF_FF_FF, None);
         y += font_height as isize + 5;
         
@@ -54,6 +54,7 @@ impl App for TaskManager {
 
         let scheduler = SCHEDULER.lock();
         for (i, task) in scheduler.tasks.iter().enumerate() {
+            // Simple state visualization
             let state = if i == scheduler.current_index { "Running" } else { "Ready" };
             let line = format!("{:<4} {}", task.id, state);
             font::draw_string(fb, x, y, &line, 0x00_CC_CC_CC, None);
@@ -76,7 +77,8 @@ impl App for TaskManager {
         if current_tick > state.last_tick + 200 {
             state.last_tick = current_tick;
             let used_bytes = ALLOCATOR.lock().used();
-            state.mem_history.push(used_bytes / 1024 / 1024);
+            // Convert to MB
+            state.mem_history.push(used_bytes / 1024 / 1024); 
 
             // Read CPU usage from kernel stats
             let cpu_usage = crate::kernel::cpu::CPU_USAGE.load(Ordering::Relaxed);
@@ -104,7 +106,7 @@ impl App for TaskManager {
         state.graph_buffer.fill(0xFF_20_20_20); // Opaque dark gray background
 
         let mem_history = state.mem_history.clone();
-        for (i, &val) in mem_history.iter().enumerate() {
+        for (i, &val) in mem_history.iter().enumerate() { 
             let bar_h = (val * graph_height) / mem_scale_max;
             let bar_x = i * 4;
             

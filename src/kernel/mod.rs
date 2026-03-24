@@ -175,6 +175,8 @@ fn panic(info: &PanicInfo) -> ! {
     unsafe { exceptions::print_stack_trace(); }
 
     // Draw to screen
+    // Force unlock the framebuffer to prevent deadlock if the panic happened while drawing
+    unsafe { FRAMEBUFFER.force_unlock(); }
     let mut fb = FRAMEBUFFER.lock();
     fb.clear(0x00_CC0000); // Red (RSOD)
     

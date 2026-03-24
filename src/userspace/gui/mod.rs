@@ -1076,34 +1076,39 @@ impl WindowManager {
 
         // STEP 2: Blit the local backbuffer to the actual Video Memory.
         // We lock the global framebuffer only for this step.
-        let fb = FRAMEBUFFER.lock();
-        
-        // We can't use fb.present_rect() because that copies from fb.draw_buffer.
-        // We need to copy from local_fb.draw_buffer to VRAM.
-        if let (Some(ref info), Some(ref src_buffer)) = (&fb.info, &local_fb.draw_buffer) {
-             let vram_ptr = info.address as *mut u8;
-             let src_ptr = src_buffer.as_ptr() as *const u8;
+        // We disable interrupts to ensure no context switch occurs while holding this lock.
+        unsafe { core::arch::asm!("cli") };
+        {
+            let fb = FRAMEBUFFER.lock();
+            
+            // We can't use fb.present_rect() because that copies from fb.draw_buffer.
+            // We need to copy from local_fb.draw_buffer to VRAM.
+            if let (Some(ref info), Some(ref src_buffer)) = (&fb.info, &local_fb.draw_buffer) {
+                let vram_ptr = info.address as *mut u8;
+                let src_ptr = src_buffer.as_ptr() as *const u8;
 
-             for dirty_rect in final_rects {
-                // Clamp dimensions
-                let x = dirty_rect.x.max(0) as usize;
-                let y = dirty_rect.y.max(0) as usize;
-                let width = dirty_rect.width.min(info.width.saturating_sub(x));
-                let height = dirty_rect.height.min(info.height.saturating_sub(y));
-                
-                if width == 0 || height == 0 { continue; }
+                for dirty_rect in final_rects {
+                    // Clamp dimensions
+                    let x = dirty_rect.x.max(0) as usize;
+                    let y = dirty_rect.y.max(0) as usize;
+                    let width = dirty_rect.width.min(info.width.saturating_sub(x));
+                    let height = dirty_rect.height.min(info.height.saturating_sub(y));
+                    
+                    if width == 0 || height == 0 { continue; }
 
-                let row_len_bytes = width * 4;
-                for i in 0..height {
-                    let cy = y + i;
-                    let offset = (cy * info.width + x) * 4; // Source is linear
-                    let dst_offset = cy * info.pitch + x * 4; // Dest uses pitch
-                    unsafe {
-                        core::ptr::copy_nonoverlapping(src_ptr.add(offset), vram_ptr.add(dst_offset), row_len_bytes);
+                    let row_len_bytes = width * 4;
+                    for i in 0..height {
+                        let cy = y + i;
+                        let offset = (cy * info.width + x) * 4; // Source is linear
+                        let dst_offset = cy * info.pitch + x * 4; // Dest uses pitch
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(src_ptr.add(offset), vram_ptr.add(dst_offset), row_len_bytes);
+                        }
                     }
                 }
             }
         }
+        unsafe { core::arch::asm!("sti") };
 
         // Restore buffer ownership to self for next frame
         if let Some(buf) = local_fb.draw_buffer.take() {

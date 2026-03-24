@@ -45,6 +45,8 @@ pub fn init() {
     }
     
     *CPU_BRAND.lock() = Some(brand.trim().into());
+
+    init_fpu();
 }
 
 pub fn read_tsc() -> u64 {
@@ -73,5 +75,23 @@ pub fn accumulate_usage(cycles: u64, is_idle: bool) {
 
         let usage = if total > 0 { 100 - (idle * 100 / total) as usize } else { 0 };
         CPU_USAGE.store(usage, Ordering::Relaxed);
+    }
+}
+
+/// Initializes the FPU (Floating Point Unit) and enables SSE.
+pub fn init_fpu() {
+    unsafe {
+        let mut cr0: u32;
+        asm!("mov {}, cr0", out(reg) cr0, options(nomem, nostack));
+        // Clear EM (bit 2) to indicate FPU is present
+        // Set MP (bit 1) to control interaction of WAIT/FWAIT
+        cr0 = (cr0 & !(1 << 2)) | (1 << 1);
+        asm!("mov cr0, {}", in(reg) cr0, options(nomem, nostack));
+
+        let mut cr4: u32;
+        asm!("mov {}, cr4", out(reg) cr4, options(nomem, nostack));
+        // Set OSFXSR (bit 9) and OSXMMEXCPT (bit 10) to enable SSE
+        cr4 |= (1 << 9) | (1 << 10);
+        asm!("mov cr4, {}", in(reg) cr4, options(nomem, nostack));
     }
 }

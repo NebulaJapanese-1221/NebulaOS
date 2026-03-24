@@ -106,6 +106,8 @@ pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code
     crate::serial_println!("Stack Frame:\n{:#?}", frame);
     unsafe { print_stack_trace(); }
 
+    // Force unlock the framebuffer to prevent deadlock if the exception happened while drawing
+    unsafe { FRAMEBUFFER.force_unlock(); }
     let mut fb = FRAMEBUFFER.lock();
     fb.clear(0x00_CC0000); // Red background (RSOD)
 
