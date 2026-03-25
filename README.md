@@ -39,4 +39,4 @@ This project is licensed under the GNU General Public License v3.0.
 ---
 *Created by NebulaJapanese - 2026*
 
-Note: NebulaOS version 0.0.3-dev2 has started development and will be released on April 7 2026 (commits will still be made to the repository).
+Note: NebulaOS version 0.0.3-dev2 has started development and will be released on April 7 2026 z(The iso file). (commits will still be made to the repository).

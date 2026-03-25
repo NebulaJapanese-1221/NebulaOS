@@ -21,7 +21,7 @@ pub struct BlockPointer {
     pub checksum: [u64; 4], // 256-bit Checksum (SHA-256 or Fletcher4)
     pub birth_txg: u64,     // Transaction Group this block was born in
     pub fill_count: u64,    // Number of non-zero blocks under this pointer
-    pub padding_end: [u64; 5], // Fill to ~128 bytes
+    pub padding_end: [u64; 7], // Fill to ~128 bytes
 }
 
 impl BlockPointer {
@@ -34,7 +34,7 @@ impl BlockPointer {
             checksum: [0; 4],
             birth_txg: 0,
             fill_count: 0,
-            padding_end: [0; 5],
+            padding_end: [0; 7],
         }
     }
 
@@ -130,4 +130,4 @@ impl Spa {
 
 // Ensure struct sizes match expectations
 const _: () = assert!(size_of::<BlockPointer>() <= BLKPTR_SIZE);
-const _: () = assert!(size_of::<Uberblock>() == 128 + 8 + 8 + 8 + 8 + 8 + 4); // Roughly check size constraints
+const _: () = assert!(size_of::<Uberblock>() == 128 + 8 + 8 + 8 + 8 + 8); // Roughly check size constraints (128 BP + 40 Fields)

@@ -23,7 +23,7 @@ pub enum VdevState {
 }
 
 /// Trait representing a physical block device interface.
-pub trait BlockDevice: Send + Sync {
+pub trait BlockDevice: Send + Sync + core::fmt::Debug {
     /// Read `size` bytes from `offset`.
     fn read(&self, offset: u64, size: usize) -> Vec<u8>;
     fn write(&self, offset: u64, data: &[u8]);

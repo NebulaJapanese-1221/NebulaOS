@@ -9,6 +9,7 @@ use crate::drivers::ata::AtaDrive;
 use core::convert::TryInto;
 use nebulafs::vdev::Vdev;
 use alloc::sync::Arc;
+use crate::userspace::gui::button::Button;
 
 #[derive(Clone)]
 struct PartitionEntry {
@@ -26,6 +27,8 @@ pub struct PartitionManager {
     drive_status: String,
     fs_type: String,
     files: Vec<String>,
+    btn_init_mbr: Option<Button>,
+    btn_format: Option<Button>,
 }
 
 impl PartitionManager {
@@ -35,6 +38,8 @@ impl PartitionManager {
             drive_status: String::from("Reading Primary Master..."),
             fs_type: String::from("Unknown"),
             files: Vec::new(),
+            btn_init_mbr: None,
+            btn_format: None,
         };
         pm.refresh();
         pm
@@ -148,7 +153,7 @@ impl PartitionManager {
 
 impl App for PartitionManager {
     fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window) {
-        // Draw background
+        // Draw background    
         gui::draw_rect(fb, win.x, win.y + 20, win.width, win.height - 20, 0x00_20_20_20, None);
 
         let font_height = 16;
@@ -204,11 +209,101 @@ impl App for PartitionManager {
             font::draw_string(fb, file_x, y, file, color, None);
             y += font_height as isize + 2;
         }
+
+        // Toolbar at bottom
+        let toolbar_y = win.y + win.height as isize - 40;
+        
+        // Because draw() is immutable &self, we can't update the struct's button fields here directly 
+        // if we want to store them. However, we can construct them just for drawing, 
+        // and recreate identical ones in handle_event for hit testing.
+        // Alternatively, we use interior mutability or just simple recalculation.
+        
+        let btn_init = Button::new(x, toolbar_y, 140, 30, "Init MBR");
+        btn_init.draw(fb, 0, 0, None); // Mouse pos 0,0 for draw as we don't have it here easily
+        
+        let btn_fmt = Button::new(x + 150, toolbar_y, 160, 30, "Format NebulaFS");
+        btn_fmt.draw(fb, 0, 0, None);
     }
 
-    fn handle_event(&mut self, _event: &AppEvent) {}
+    fn handle_event(&mut self, event: &AppEvent) {
+        match event {
+            AppEvent::MouseClick { x, y, width: _, height } => {
+                let toolbar_y = (*height as isize) - 40 - 22; // Relative to content area start? 
+                // AppEvent coordinates are relative to the window content area (below titlebar).
+                // Window titlebar is ~22px.
+                // Our draw logic used absolute screen coordinates `win.y + ...`.
+                // But AppEvent gives us relative coordinates. 
+                // Let's rely on standard UI relative math.
+                
+                let btn_y = (*height as isize) - 35; // Bottom area
+                
+                // Recreate buttons to check hits
+                let btn_init = Button::new(10, btn_y, 140, 30, "Init MBR");
+                let btn_fmt = Button::new(160, btn_y, 160, 30, "Format NebulaFS");
+                
+                if btn_init.contains(10 + *x, btn_y + 15) { // Hacky offset check due to relative vs absolute mismatch risk
+                   // Actually, let's just check ranges simply
+                   if *y >= btn_y && *y <= btn_y + 30 {
+                       if *x >= 10 && *x <= 150 {
+                           self.initialize_mbr();
+                           self.refresh();
+                       } else if *x >= 160 && *x <= 320 {
+                           self.format_drive();
+                           self.refresh();
+                       }
+                   }
+                }
+                
+                // Better hit test using the helper logic:
+                // Since we don't have the absolute window position here easily to reconstruct absolute Rects,
+                // we assume the buttons are drawn relative to window origin.
+                // Button::new takes (x,y). If we treated x,y as relative during draw, we must match here.
+                // In draw(), x was `win.x + 10`. So relative x is 10.
+                // y was `win.y + height - 40`. So relative y is `height - 40`.
+                // Wait, titlebar offset is handled by WindowManager before sending event? 
+                // Yes, `handle_mouse_button_event` subtracts title height.
+            }
+            _ => {}
+        }
+    }
 
     fn box_clone(&self) -> Box<dyn App> {
         Box::new(self.clone())
+    }
+}
+
+impl PartitionManager {
+    fn initialize_mbr(&self) {
+        let drive = AtaDrive::new(true, true);
+        let mut mbr = [0u8; 512];
+        // 0x55AA Signature
+        mbr[510] = 0x55;
+        mbr[511] = 0xAA;
+        
+        // Create one partition spanning the "whole" disk (fake size for now)
+        // Entry 1 at offset 446
+        mbr[446] = 0x80; // Active
+        mbr[446 + 4] = 0x83; // Type Linux (generic)
+        // LBA Start = 2048 (1MB alignment)
+        mbr[446 + 8] = 0x00;
+        mbr[446 + 9] = 0x08;
+        mbr[446 + 10] = 0x00;
+        mbr[446 + 11] = 0x00;
+        // Size = 204800 sectors (100MB)
+        mbr[446 + 12] = 0x00;
+        mbr[446 + 13] = 0x20;
+        mbr[446 + 14] = 0x03;
+        mbr[446 + 15] = 0x00;
+
+        drive.write_sectors(0, &mbr);
+    }
+
+    fn format_drive(&self) {
+        let drive = Arc::new(AtaDrive::new(true, true));
+        let mut root_vdev = Vdev::new_leaf(0, 0, "ata0", 0, 9);
+        root_vdev.backend = Some(drive.clone());
+        
+        // Format the drive using the new NebulaFS format function
+        let _ = nebulafs::fs::NebulaFileSystem::format(root_vdev, "pool0");
     }
 }

@@ -1,13 +1,13 @@
 #![no_std]
 
-extern crate alloc;
-
 //! NebulaFS - A ZFS-inspired Copy-On-Write Filesystem
 //! 
 //! Core Concepts:
 //! - SPA (Storage Pool Allocator): Manages storage devices (VDEVs).
 //! - DMU (Data Management Unit): Presents a transactional object model.
 //! - ZAP (ZFS Attribute Processor): Stores properties/directories as keys/values.
+
+extern crate alloc;
 
 pub mod spa;
 pub mod dmu;

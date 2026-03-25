@@ -12,6 +12,7 @@ enum Command {
     CacheFlush = 0xE7,
 }
 
+#[derive(Debug)]
 pub struct AtaDrive {
     port_base: u16,
     is_master: bool,
