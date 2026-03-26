@@ -57,7 +57,6 @@ impl NebulaFileSystem {
         // LBA 520 (260KB): Dnode Array (Contains Root Dnode)
         // LBA 528 (264KB): Root Directory Data (ZAP)
 
-        let offset_uberblock = 128 * 1024;
         let offset_objset = 256 * 1024;
         let offset_dnodes = 260 * 1024;
         let offset_root_dir_data = 264 * 1024;

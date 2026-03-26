@@ -10,6 +10,11 @@ pub enum VdevType {
     Mirror = 2,    // n-way mirror
     RaidZ1 = 3,    // Single parity
     RaidZ2 = 4,    // Double parity
+    RaidZ3 = 5,    // Triple parity
+    Spare = 6,     // Hot spare
+    Log = 7,       // Intent log (SLOG)
+    Cache = 8,     // L2ARC
+    Root = 9,      // Top-level vdev
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,18 +94,55 @@ impl Vdev {
         }
     }
 
+    /// Creates a new RAID-Z VDEV.
+    pub fn new_raidz(id: u64, guid: u64, type_: VdevType, children: Vec<Vdev>) -> Self {
+        let parity = match type_ {
+            VdevType::RaidZ1 => 1,
+            VdevType::RaidZ2 => 2,
+            VdevType::RaidZ3 => 3,
+            _ => 0,
+        };
+        
+        let data_disks = children.len().saturating_sub(parity).max(1);
+        let size = children.iter().map(|c| c.asize).min().unwrap_or(0) * data_disks as u64;
+        let ashift = children.iter().map(|c| c.ashift).max().unwrap_or(9);
+
+        Self {
+            id,
+            guid,
+            type_,
+            state: VdevState::Online,
+            path: String::from("raidz"),
+            dev_id: None,
+            asize: size,
+            ashift,
+            children,
+            parent_id: None,
+            backend: None,
+        }
+    }
+
     /// Simulates reading a block from the device.
     pub fn read_block(&self, offset: u64, size: usize) -> Vec<u8> {
-        if self.type_ == VdevType::Mirror {
-            // Forward read to the first child (primary)
-            if let Some(child) = self.children.first() {
-                return child.read_block(offset, size);
+        match self.type_ {
+            VdevType::Disk | VdevType::File => {
+                if let Some(backend) = &self.backend {
+                    return backend.read(offset, size);
+                }
             }
-        }
-
-        // Use backend if available (e.g. ATA drive)
-        if let Some(backend) = &self.backend {
-            return backend.read(offset, size);
+            VdevType::Mirror => {
+                if let Some(child) = self.children.first() {
+                    return child.read_block(offset, size);
+                }
+            }
+            VdevType::RaidZ1 | VdevType::RaidZ2 | VdevType::RaidZ3 => {
+                // Simplified striping: Read pieces from data disks
+                // In a real RAID-Z, the block is striped across all disks minus parity
+                if let Some(child) = self.children.first() {
+                     return child.read_block(offset, size); // Placeholder: Read from first for now
+                }
+            }
+            _ => {}
         }
 
         // Fallback for missing backend
@@ -109,15 +151,22 @@ impl Vdev {
 
     /// Simulates writing a block to the device.
     pub fn write_block(&self, offset: u64, data: &[u8]) {
-        if self.type_ == VdevType::Mirror {
-            // Write to all children for redundancy
-            for child in &self.children {
-                child.write_block(offset, data);
+        match self.type_ {
+            VdevType::Disk | VdevType::File => {
+                if let Some(backend) = &self.backend {
+                    backend.write(offset, data);
+                }
             }
-        }
-        
-        if let Some(backend) = &self.backend {
-            backend.write(offset, data);
+            VdevType::Mirror => {
+                for child in &self.children {
+                    child.write_block(offset, data);
+                }
+            }
+            VdevType::RaidZ1 | VdevType::RaidZ2 | VdevType::RaidZ3 => {
+                // Placeholder: Write to all children (treat as mirror for safety in dev)
+                for child in &self.children { child.write_block(offset, data); }
+            }
+            _ => {}
         }
     }
 }

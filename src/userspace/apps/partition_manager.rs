@@ -3,10 +3,9 @@ use crate::userspace::gui::{self, font, Window};
 use super::app::{App, AppEvent};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::format;
 use crate::drivers::ata::AtaDrive;
-use core::convert::TryInto;
 use nebulafs::vdev::Vdev;
 use alloc::sync::Arc;
 use crate::userspace::gui::button::Button;
@@ -29,6 +28,7 @@ pub struct PartitionManager {
     files: Vec<String>,
     btn_init_mbr: Option<Button>,
     btn_format: Option<Button>,
+    show_confirm: bool,
 }
 
 impl PartitionManager {
@@ -40,6 +40,7 @@ impl PartitionManager {
             files: Vec::new(),
             btn_init_mbr: None,
             btn_format: None,
+            show_confirm: false,
         };
         pm.refresh();
         pm
@@ -223,45 +224,67 @@ impl App for PartitionManager {
         
         let btn_fmt = Button::new(x + 150, toolbar_y, 160, 30, "Format NebulaFS");
         btn_fmt.draw(fb, 0, 0, None);
+
+        if self.show_confirm {
+            let dialog_w = 260;
+            let dialog_h = 120;
+            let dx = win.x + (win.width as isize - dialog_w) / 2;
+            let dy = win.y + (win.height as isize - dialog_h) / 2;
+
+            // Draw dialog box with border
+            gui::draw_rect(fb, dx, dy, dialog_w as usize, dialog_h as usize, 0x00_28_28_28, None);
+            gui::draw_rect(fb, dx, dy, dialog_w as usize, 1, 0x00_FF_FF_FF, None); // Top
+            gui::draw_rect(fb, dx, dy, 1, dialog_h as usize, 0x00_FF_FF_FF, None); // Left
+            gui::draw_rect(fb, dx + dialog_w - 1, dy, 1, dialog_h as usize, 0x00_FF_FF_FF, None); // Right
+            gui::draw_rect(fb, dx, dy + dialog_h - 1, dialog_w as usize, 1, 0x00_FF_FF_FF, None); // Bottom
+
+            font::draw_string(fb, dx + 20, dy + 20, "Format Drive?", 0x00_FF_FF_00, None);
+            font::draw_string(fb, dx + 20, dy + 45, "All data will be lost!", 0x00_FF_55_55, None);
+
+            // Dialog Buttons
+            Button::new(dx + 20, dy + 75, 105, 30, "Yes, Format").draw(fb, 0, 0, None);
+            Button::new(dx + 135, dy + 75, 105, 30, "Cancel").draw(fb, 0, 0, None);
+        }
     }
 
     fn handle_event(&mut self, event: &AppEvent) {
         match event {
-            AppEvent::MouseClick { x, y, width: _, height } => {
-                let toolbar_y = (*height as isize) - 40 - 22; // Relative to content area start? 
-                // AppEvent coordinates are relative to the window content area (below titlebar).
-                // Window titlebar is ~22px.
-                // Our draw logic used absolute screen coordinates `win.y + ...`.
-                // But AppEvent gives us relative coordinates. 
-                // Let's rely on standard UI relative math.
+            AppEvent::MouseClick { x, y, width, height } => {
+                if self.show_confirm {
+                    let dialog_w = 260;
+                    let dialog_h = 120;
+                    // Centering logic matching the draw method, relative to content area
+                    let rel_dx = (*width as isize - dialog_w) / 2;
+                    let rel_dy = (*height as isize - dialog_h) / 2 - 22; // Offset for titlebar
+
+                    let btn_yes = Button::new(rel_dx + 20, rel_dy + 75, 105, 30, "Yes, Format");
+                    let btn_no = Button::new(rel_dx + 135, rel_dy + 75, 105, 30, "Cancel");
+
+                    if btn_yes.contains(*x, *y) {
+                        self.format_drive();
+                        self.show_confirm = false;
+                        self.refresh();
+                    } else if btn_no.contains(*x, *y) {
+                        self.show_confirm = false;
+                    }
+                    return;
+                }
+
+                // AppEvent coordinates are relative to the window content area.
+                // Window titlebar is ~22px. In draw(), we draw at win.y + win.height - 40.
+                // So relative y is height - 40.
+                let btn_y = (*height as isize) - 40; 
                 
-                let btn_y = (*height as isize) - 35; // Bottom area
-                
-                // Recreate buttons to check hits
+                // Recreate buttons at relative coordinates to check hits
                 let btn_init = Button::new(10, btn_y, 140, 30, "Init MBR");
                 let btn_fmt = Button::new(160, btn_y, 160, 30, "Format NebulaFS");
                 
-                if btn_init.contains(10 + *x, btn_y + 15) { // Hacky offset check due to relative vs absolute mismatch risk
-                   // Actually, let's just check ranges simply
-                   if *y >= btn_y && *y <= btn_y + 30 {
-                       if *x >= 10 && *x <= 150 {
-                           self.initialize_mbr();
-                           self.refresh();
-                       } else if *x >= 160 && *x <= 320 {
-                           self.format_drive();
-                           self.refresh();
-                       }
-                   }
+                if btn_init.contains(*x, *y) {
+                    self.initialize_mbr();
+                    self.refresh();
+                } else if btn_fmt.contains(*x, *y) {
+                    self.show_confirm = true;
                 }
-                
-                // Better hit test using the helper logic:
-                // Since we don't have the absolute window position here easily to reconstruct absolute Rects,
-                // we assume the buttons are drawn relative to window origin.
-                // Button::new takes (x,y). If we treated x,y as relative during draw, we must match here.
-                // In draw(), x was `win.x + 10`. So relative x is 10.
-                // y was `win.y + height - 40`. So relative y is `height - 40`.
-                // Wait, titlebar offset is handled by WindowManager before sending event? 
-                // Yes, `handle_mouse_button_event` subtracts title height.
             }
             _ => {}
         }
