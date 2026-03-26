@@ -29,9 +29,6 @@ cargo run
 
 *Requires QEMU and a nightly Rust toolchain.*
 
-## Current Bugs
-[None]
-
 ## 📜 License
 
 This project is licensed under the GNU General Public License v3.0.
