@@ -29,6 +29,7 @@ pub struct PartitionManager {
     btn_init_mbr: Option<Button>,
     btn_format: Option<Button>,
     show_confirm: bool,
+    show_install_confirm: bool,
 }
 
 impl PartitionManager {
@@ -41,6 +42,7 @@ impl PartitionManager {
             btn_init_mbr: None,
             btn_format: None,
             show_confirm: false,
+            show_install_confirm: false,
         };
         pm.refresh();
         pm
@@ -112,7 +114,15 @@ impl PartitionManager {
         root_vdev.backend = Some(drive.clone()); // Inject ATA driver as backend
         
         if let Some(fs) = nebulafs::fs::NebulaFileSystem::mount(root_vdev) {
-            self.fs_type = String::from("NebulaFS (Detected)");
+            // Verify if OS is installed by checking the kernel signature at the fixed offset
+            let kernel_offset = 268 * 1024; // 268KB matches the offset in fs.rs install_os
+            let kernel_sample = fs.spa.root_vdev.read_block(kernel_offset, 32);
+
+            if kernel_sample.starts_with(b"NEBULA_OS_KERNEL") {
+                self.fs_type = String::from("NebulaFS (Ready to Boot)");
+            } else {
+                self.fs_type = String::from("NebulaFS (Detected)");
+            }
             self.files = fs.list_root();
         } else {
             self.fs_type = String::from("None / Raw");
@@ -162,7 +172,7 @@ impl App for PartitionManager {
         let mut y = win.y + 30;
 
         // Status
-        font::draw_string(fb, x, y, &format!("{} | FS: {}", self.drive_status, self.fs_type), 0x00_FF_FF_00, None);
+        font::draw_string(fb, x, y, format!("{} | FS: {}", self.drive_status, self.fs_type).as_str(), 0x00_FF_FF_00, None);
         y += font_height as isize + 10;
 
         // Table Header
@@ -225,6 +235,9 @@ impl App for PartitionManager {
         let btn_fmt = Button::new(x + 150, toolbar_y, 160, 30, "Format NebulaFS");
         btn_fmt.draw(fb, 0, 0, None);
 
+        let btn_inst = Button::new(x + 320, toolbar_y, 140, 30, "Install OS");
+        btn_inst.draw(fb, 0, 0, None);
+
         if self.show_confirm {
             let dialog_w = 260;
             let dialog_h = 120;
@@ -245,14 +258,36 @@ impl App for PartitionManager {
             Button::new(dx + 20, dy + 75, 105, 30, "Yes, Format").draw(fb, 0, 0, None);
             Button::new(dx + 135, dy + 75, 105, 30, "Cancel").draw(fb, 0, 0, None);
         }
+
+        if self.show_install_confirm {
+            let dialog_w = 280;
+            let dialog_h = 130;
+            let dx = win.x + (win.width as isize - dialog_w) / 2;
+            let dy = win.y + (win.height as isize - dialog_h) / 2;
+
+            // Draw install confirmation dialog
+            gui::draw_rect(fb, dx, dy, dialog_w as usize, dialog_h as usize, 0x00_28_28_28, None);
+            gui::draw_rect(fb, dx, dy, dialog_w as usize, 1, 0x00_FF_FF_FF, None);
+            gui::draw_rect(fb, dx, dy, 1, dialog_h as usize, 0x00_FF_FF_FF, None);
+            gui::draw_rect(fb, dx + dialog_w - 1, dy, 1, dialog_h as usize, 0x00_FF_FF_FF, None);
+            gui::draw_rect(fb, dx, dy + dialog_h - 1, dialog_w as usize, 1, 0x00_FF_FF_FF, None);
+
+            font::draw_string(fb, dx + 20, dy + 20, "Install NebulaOS?", 0x00_FF_FF_00, None);
+            font::draw_string(fb, dx + 20, dy + 45, "This will format and copy", 0x00_CCCCCC, None);
+            font::draw_string(fb, dx + 20, dy + 60, "system files to the disk.", 0x00_CCCCCC, None);
+
+            Button::new(dx + 20, dy + 90, 115, 30, "Start Install").draw(fb, 0, 0, None);
+            Button::new(dx + 145, dy + 90, 115, 30, "Cancel").draw(fb, 0, 0, None);
+        }
     }
 
     fn handle_event(&mut self, event: &AppEvent) {
         match event {
             AppEvent::MouseClick { x, y, width, height } => {
+                let dialog_w = 260;
+                let dialog_h = 120;
+
                 if self.show_confirm {
-                    let dialog_w = 260;
-                    let dialog_h = 120;
                     // Centering logic matching the draw method, relative to content area
                     let rel_dx = (*width as isize - dialog_w) / 2;
                     let rel_dy = (*height as isize - dialog_h) / 2 - 22; // Offset for titlebar
@@ -270,6 +305,23 @@ impl App for PartitionManager {
                     return;
                 }
 
+                if self.show_install_confirm {
+                    let rel_dx = (*width as isize - 280) / 2;
+                    let rel_dy = (*height as isize - 130) / 2 - 22; // Titlebar offset
+
+                    let btn_yes = Button::new(rel_dx + 20, rel_dy + 90, 115, 30, "Start Install");
+                    let btn_no = Button::new(rel_dx + 145, rel_dy + 90, 115, 30, "Cancel");
+
+                    if btn_yes.contains(*x, *y) {
+                        self.install_os();
+                        self.show_install_confirm = false;
+                        self.refresh();
+                    } else if btn_no.contains(*x, *y) {
+                        self.show_install_confirm = false;
+                    }
+                    return;
+                }
+
                 // AppEvent coordinates are relative to the window content area.
                 // Window titlebar is ~22px. In draw(), we draw at win.y + win.height - 40.
                 // So relative y is height - 40.
@@ -278,12 +330,15 @@ impl App for PartitionManager {
                 // Recreate buttons at relative coordinates to check hits
                 let btn_init = Button::new(10, btn_y, 140, 30, "Init MBR");
                 let btn_fmt = Button::new(160, btn_y, 160, 30, "Format NebulaFS");
+                let btn_inst = Button::new(320, btn_y, 140, 30, "Install OS");
                 
                 if btn_init.contains(*x, *y) {
                     self.initialize_mbr();
                     self.refresh();
                 } else if btn_fmt.contains(*x, *y) {
                     self.show_confirm = true;
+                } else if btn_inst.contains(*x, *y) {
+                    self.show_install_confirm = true;
                 }
             }
             _ => {}
@@ -299,24 +354,21 @@ impl PartitionManager {
     fn initialize_mbr(&self) {
         let drive = AtaDrive::new(true, true);
         let mut mbr = [0u8; 512];
-        // 0x55AA Signature
-        mbr[510] = 0x55;
-        mbr[511] = 0xAA;
-        
-        // Create one partition spanning the "whole" disk (fake size for now)
-        // Entry 1 at offset 446
-        mbr[446] = 0x80; // Active
-        mbr[446 + 4] = 0x83; // Type Linux (generic)
-        // LBA Start = 2048 (1MB alignment)
-        mbr[446 + 8] = 0x00;
-        mbr[446 + 9] = 0x08;
-        mbr[446 + 10] = 0x00;
-        mbr[446 + 11] = 0x00;
-        // Size = 204800 sectors (100MB)
-        mbr[446 + 12] = 0x00;
-        mbr[446 + 13] = 0x20;
-        mbr[446 + 14] = 0x03;
-        mbr[446 + 15] = 0x00;
+
+        // MBR Signature at the end of the sector
+        mbr[510] = 0x55; mbr[511] = 0xAA;
+
+        // Create a single primary partition starting at offset 446
+        mbr[446] = 0x80;     // Active flag (bootable)
+        mbr[446 + 4] = 0xBF; // System ID: Solaris/NebulaFS
+
+        // Start LBA: 2048 (Standard 1MB alignment for modern SSDs/disks)
+        let lba_start: u32 = 2048;
+        mbr[446 + 8..446 + 12].copy_from_slice(&lba_start.to_le_bytes());
+
+        // Total Sectors: 204800 (Approximately 100MB)
+        let lba_size: u32 = 204800;
+        mbr[446 + 12..446 + 16].copy_from_slice(&lba_size.to_le_bytes());
 
         drive.write_sectors(0, &mbr);
     }
@@ -328,5 +380,19 @@ impl PartitionManager {
         
         // Format the drive using the new NebulaFS format function
         let _ = nebulafs::fs::NebulaFileSystem::format(root_vdev, "pool0");
+    }
+
+    fn install_os(&self) {
+        // 1. Format the drive first to ensure a clean NebulaFS pool
+        self.format_drive();
+
+        // 2. Mount the newly formatted drive and copy system files
+        let drive = Arc::new(AtaDrive::new(true, true));
+        let mut root_vdev = Vdev::new_leaf(0, 0, "ata0", 0, 9);
+        root_vdev.backend = Some(drive.clone());
+        
+        if let Some(fs) = nebulafs::fs::NebulaFileSystem::mount(root_vdev) {
+            fs.install_os();
+        }
     }
 }

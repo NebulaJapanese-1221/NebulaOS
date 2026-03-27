@@ -126,4 +126,23 @@ impl NebulaFileSystem {
 
         Some(Self { spa })
     }
+
+    /// Installs system files to the filesystem.
+    /// This simulates copying the kernel binary and basic system utilities into the pool.
+    pub fn install_os(&self) -> bool {
+        // In a real implementation, this would iterate over embedded assets and 
+        // create dnodes for /system/kernel.elf, /system/init.app, etc.
+        
+        // For now, we simulate this by writing a "Kernel Image" block
+        // LBA 536 (268KB offset): OS Kernel Data
+        let offset_os_data = 268 * 1024;
+        let kernel_binary = b"NEBULA_OS_KERNEL_ELF_IMAGE_V0.0.3";
+        self.spa.root_vdev.write_block(offset_os_data, kernel_binary);
+
+        // Update pool state to mark the system as installed
+        let mut updated_spa = Spa::find(self.spa.root_vdev.clone()).unwrap();
+        updated_spa.sync(); 
+
+        true
+    }
 }

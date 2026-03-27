@@ -78,7 +78,7 @@ impl Settings {
             Tab::System => {
                 font::draw_string(fb, content_x, content_y, locale.app_system_info(), 0x00_FF_FF_FF, None);
                 let v_str = format!("{} {}", locale.info_version(), crate::kernel::VERSION);
-                font::draw_string(fb, content_x, content_y + (font_height as isize + 4), &v_str, 0x00_CC_CC_CC, None);
+                font::draw_string(fb, content_x, content_y + (font_height as isize + 4), v_str.as_str(), 0x00_CC_CC_CC, None);
                 
                 // CPU Info
                 let brand_guard = CPU_BRAND.lock();
@@ -89,8 +89,8 @@ impl Settings {
                 // Truncate CPU string if too long for display
                 let cpu_display = if cpu_name.len() > 30 { &cpu_name[..30] } else { cpu_name };
                 
-                font::draw_string(fb, content_x, content_y + (font_height as isize + 4) * 2, &format!("Processor: {}", cpu_display), 0x00_CC_CC_CC, None);
-                font::draw_string(fb, content_x, content_y + (font_height as isize + 4) * 3, &format!("Cores: {} {}", cores, core_str), 0x00_CC_CC_CC, None);
+                font::draw_string(fb, content_x, content_y + (font_height as isize + 4) * 2, format!("Processor: {}", cpu_display).as_str(), 0x00_CC_CC_CC, None);
+                font::draw_string(fb, content_x, content_y + (font_height as isize + 4) * 3, format!("Cores: {} {}", cores, core_str).as_str(), 0x00_CC_CC_CC, None);
 
                 // Resolution
                 let res_str = if let Some(info) = fb.info.as_ref() {
@@ -98,13 +98,13 @@ impl Settings {
                 } else {
                     format!("{} Unknown", locale.info_resolution())
                 };
-                font::draw_string(fb, content_x, content_y + (font_height as isize + 4) * 4, &res_str, 0x00_CC_CC_CC, None);
+                font::draw_string(fb, content_x, content_y + (font_height as isize + 4) * 4, res_str.as_str(), 0x00_CC_CC_CC, None);
 
                 // Memory
                 let mem_bytes = crate::kernel::TOTAL_MEMORY.load(Ordering::Relaxed);
                 let mem_mb = mem_bytes / 1024 / 1024;
                 let mem_str = format!("{} {} MB", locale.info_memory(), mem_mb);
-                font::draw_string(fb, content_x, content_y + (font_height as isize + 4) * 5, &mem_str, 0x00_CC_CC_CC, None);
+                font::draw_string(fb, content_x, content_y + (font_height as isize + 4) * 5, mem_str.as_str(), 0x00_CC_CC_CC, None);
 
                 // Uptime
                 let total_seconds = crate::kernel::process::TICKS.load(Ordering::Relaxed) / 1000;
@@ -112,7 +112,7 @@ impl Settings {
                 let minutes = (total_seconds % 3600) / 60;
                 let seconds = total_seconds % 60;
                 let time_str = format!("{} {:02}:{:02}:{:02}", locale.info_uptime(), hours, minutes, seconds);
-                font::draw_string(fb, content_x, content_y + (font_height as isize + 4) * 6, &time_str, 0x00_CC_CC_CC, None);
+                font::draw_string(fb, content_x, content_y + (font_height as isize + 4) * 6, time_str.as_str(), 0x00_CC_CC_CC, None);
 
             },
             Tab::Accessibility => {

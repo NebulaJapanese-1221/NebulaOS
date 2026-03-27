@@ -97,7 +97,7 @@ impl App for Terminal {
         let x = win.x + 5;
 
         for i in start_line..self.history.len() {
-             font::draw_string(fb, x, y, &self.history[i], 0x00_CC_CC_CC, None);
+             font::draw_string(fb, x, y, self.history[i].as_str(), 0x00_CC_CC_CC, None);
              y += (font_height + line_spacing) as isize;
         }
 

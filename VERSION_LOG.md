@@ -1,7 +1,15 @@
 # NebulaOS Version History
 
 ## v0.0.3-dev2 (04-07-2026)
-- Started development of v0.0.3-dev2.
+- Implemented NebulaFS: A ZFS-inspired Copy-On-Write (COW) filesystem.
+- Added SPA (Storage Pool Allocator) with VDEV hierarchy support (Leaf, Mirror, RAID-Z).
+- Implemented VDEV tree serialization and persistence via Uberblocks and VDEV Labels.
+- Added Partition Manager
+- Added MBR initialization and OS installation features to Partition Manager.
+- Added keyboard navigation (Arrow keys + Enter) to the Start Menu.
+- Added search bar to the Start Menu with real-time application filtering.
+- Added a clear button to the Start Menu search bar for quick reset.
+- Fixed alignment issues for filesystem structures on 32-bit targets.
 
 ## v0.0.3-dev (03-22-2026)
 - Added proper System Information detection (CPUID for Brand String).

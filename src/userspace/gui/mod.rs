@@ -7,7 +7,7 @@ use crate::drivers::framebuffer::{self, FRAMEBUFFER};
 use crate::drivers::rtc::{self, CURRENT_DATETIME, TIME_NEEDS_UPDATE};
 use crate::drivers::keyboard;
 use alloc::vec::Vec;
-use alloc::string::ToString;
+use alloc::string::{String, ToString};
 use alloc::format;
 use crate::userspace::apps::{app::{App, AppEvent}, calculator::Calculator, editor::TextEditor, paint::Paint, settings::Settings, terminal::Terminal, task_manager::TaskManager, partition_manager::PartitionManager};
 use spin::Mutex;
@@ -102,6 +102,7 @@ pub struct InputManager {
     pub alt_pressed: bool,
     pub ctrl_pressed: bool,
     pub shift_pressed: bool,
+    pub win_pressed: bool,
     pub event_queue: Vec<InputEvent>,
 }
 
@@ -115,6 +116,7 @@ impl InputManager {
             alt_pressed: false,
             ctrl_pressed: false,
             shift_pressed: false,
+            win_pressed: false,
             event_queue: Vec::new(),
         }
     }
@@ -153,6 +155,7 @@ impl InputManager {
         self.alt_pressed = keyboard::is_alt_pressed(); 
         self.ctrl_pressed = keyboard::is_ctrl_pressed();
         self.shift_pressed = keyboard::is_shift_pressed();
+        self.win_pressed = keyboard::is_win_pressed();
 
         while let Some(key) = keyboard::get_char() {
             // Interrupts are handled inside get_char, so this is safe to loop
@@ -171,6 +174,9 @@ pub struct WindowManager {
     drag_offset_y: isize,
     click_target_id: Option<usize>,
     start_menu_open: bool,
+    start_menu_index: usize,
+    start_menu_search: String,
+    start_menu_filtered: Vec<usize>,
     dirty_rects: Vec<Rect>,
     context_menu_open: bool,
     context_menu_x: isize,
@@ -196,6 +202,9 @@ impl WindowManager {
             drag_offset_y: 0,
             click_target_id: None,
             start_menu_open: false,
+            start_menu_index: 0,
+            start_menu_search: String::new(),
+            start_menu_filtered: Vec::new(),
             dirty_rects: Vec::new(),
             context_menu_open: false,
             context_menu_x: 0,
@@ -932,6 +941,33 @@ impl WindowManager {
         }
     }
 
+    fn update_start_menu_filter(&mut self) {
+        let locale_guard = localisation::CURRENT_LOCALE.lock();
+        let locale = locale_guard.as_ref().unwrap();
+        let all_names = [
+            locale.app_text_editor(), locale.app_calculator(), locale.app_paint(),
+            locale.app_settings(), locale.app_terminal(), "Task Manager",
+            "Partitions", locale.btn_reboot(), locale.btn_shutdown()
+        ];
+
+        self.start_menu_filtered.clear();
+        for (i, &name) in all_names.iter().enumerate() {
+            if self.start_menu_search.is_empty() || self.contains_insensitive(name, self.start_menu_search.as_str()) {
+                self.start_menu_filtered.push(i);
+            }
+        }
+        if self.start_menu_index >= self.start_menu_filtered.len() {
+            self.start_menu_index = 0;
+        }
+    }
+
+    fn contains_insensitive(&self, haystack: &str, needle: &str) -> bool {
+        if needle.is_empty() { return true; }
+        haystack.as_bytes().windows(needle.len()).any(|window| {
+            window.eq_ignore_ascii_case(needle.as_bytes())
+        })
+    }
+
     fn draw_dirty(&mut self) {
         if self.dirty_rects.is_empty() { return; }
 
@@ -1026,7 +1062,7 @@ impl WindowManager {
                     let v_y = screen_height as isize - 40 - 20; // 40 taskbar, 20 padding
                     
                     if dirty_rect.intersects(&Rect { x: v_x, y: v_y, width: v_w, height: 16 }) {
-                        font::draw_string(&mut local_fb, v_x, v_y, &version, 0x00_FFFFFF, Some(*dirty_rect));
+                        font::draw_string(&mut local_fb, v_x, v_y, version.as_str(), 0x00_FFFFFF, Some(*dirty_rect));
                     }
                 }
             } else {
@@ -1306,21 +1342,41 @@ impl WindowManager {
             let locale_guard = localisation::CURRENT_LOCALE.lock();
             let locale = locale_guard.as_ref().unwrap();
             let item_width = menu_width - 20;
-            Button::new(menu_x + 10, menu_y + 15, item_width, 30, locale.app_text_editor()).draw(fb, mouse_x, mouse_y, Some(clip));
-            Button::new(menu_x + 10, menu_y + 55, item_width, 30, locale.app_calculator()).draw(fb, mouse_x, mouse_y, Some(clip));
-            Button::new(menu_x + 10, menu_y + 95, item_width, 30, locale.app_paint()).draw(fb, mouse_x, mouse_y, Some(clip));
-            Button::new(menu_x + 10, menu_y + 135, item_width, 30, locale.app_settings()).draw(fb, mouse_x, mouse_y, Some(clip));
-            Button::new(menu_x + 10, menu_y + 175, item_width, 30, locale.app_terminal()).draw(fb, mouse_x, mouse_y, Some(clip));
-            Button::new(menu_x + 10, menu_y + 215, item_width, 30, "Task Manager").draw(fb, mouse_x, mouse_y, Some(clip));
-            Button::new(menu_x + 10, menu_y + 255, item_width, 30, "Partitions").draw(fb, mouse_x, mouse_y, Some(clip));
 
-            let mut reboot_button = Button::new(menu_x + 10, menu_y + menu_height as isize - 85, item_width, 30, locale.btn_reboot());
-            reboot_button.bg_color = 0x00_FF_A0_40; // Orange
-            reboot_button.draw(fb, mouse_x, mouse_y, Some(clip));
+            // Draw Search Bar
+            let search_y = menu_y + 10;
+            draw_rect(fb, menu_x + 10, search_y, item_width, 25, 0x00_FFFFFF, Some(clip));
+            font::draw_string(fb, menu_x + 15, search_y + 5, self.start_menu_search.as_str(), 0x00_10_10_10, Some(clip));
+            if self.start_menu_search.len() < 20 {
+                let cursor_x = menu_x + 15 + (self.start_menu_search.len() * 8) as isize;
+                draw_rect(fb, cursor_x, search_y + 5, 2, 16, 0x00_10_10_10, Some(clip));
+            }
 
-            let mut shutdown_button = Button::new(menu_x + 10, menu_y + menu_height as isize - 45, item_width, 30, locale.btn_shutdown());
-            shutdown_button.bg_color = 0x00_FF_60_60; // Light red
-            shutdown_button.draw(fb, mouse_x, mouse_y, Some(clip));
+            // Clear button (X) inside search bar
+            let mut clear_btn = Button::new(menu_x + 10 + item_width - 20, search_y + 2, 16, 21, "x");
+            clear_btn.bg_color = 0x00_D0_D0_D0;
+            clear_btn.draw(fb, mouse_x, mouse_y, Some(clip));
+
+            let all_btns = [
+                (locale.app_text_editor(), 0x00_C0_C0_C0),
+                (locale.app_calculator(), 0x00_C0_C0_C0),
+                (locale.app_paint(), 0x00_C0_C0_C0),
+                (locale.app_settings(), 0x00_C0_C0_C0),
+                (locale.app_terminal(), 0x00_C0_C0_C0),
+                ("Task Manager", 0x00_C0_C0_C0),
+                ("Partitions", 0x00_C0_C0_C0),
+                (locale.btn_reboot(), 0x00_FF_A0_40),
+                (locale.btn_shutdown(), 0x00_FF_60_60),
+            ];
+
+            let mut draw_y = menu_y + 45;
+            for (i, &real_idx) in self.start_menu_filtered.iter().enumerate() {
+                let (text, color) = all_btns[real_idx];
+                let mut btn = Button::new(menu_x + 10, draw_y, item_width, 30, text);
+                btn.bg_color = if i == self.start_menu_index { 0x00_40_60_90 } else { color };
+                btn.draw(fb, mouse_x, mouse_y, Some(clip));
+                draw_y += 35;
+            }
     }
 
     fn draw_context_menu(&self, fb: &mut framebuffer::Framebuffer, mouse_x: isize, mouse_y: isize, clip: Rect) {
