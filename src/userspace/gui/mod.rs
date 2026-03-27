@@ -941,17 +941,28 @@ impl WindowManager {
         }
     }
 
-    fn update_start_menu_filter(&mut self) {
+    /// Returns a centralized list of Start Menu items: (Name, Default Background Color)
+    fn get_start_menu_data(&self) -> Vec<(&'static str, u32)> {
         let locale_guard = localisation::CURRENT_LOCALE.lock();
         let locale = locale_guard.as_ref().unwrap();
-        let all_names = [
-            locale.app_text_editor(), locale.app_calculator(), locale.app_paint(),
-            locale.app_settings(), locale.app_terminal(), "Task Manager",
-            "Partitions", locale.btn_reboot(), locale.btn_shutdown()
-        ];
+        alloc::vec![
+            (locale.app_text_editor(), 0x00_C0_C0_C0),
+            (locale.app_calculator(), 0x00_C0_C0_C0),
+            (locale.app_paint(), 0x00_C0_C0_C0),
+            (locale.app_settings(), 0x00_C0_C0_C0),
+            (locale.app_terminal(), 0x00_C0_C0_C0),
+            ("Task Manager", 0x00_C0_C0_C0),
+            ("Partitions", 0x00_C0_C0_C0),
+            (locale.btn_reboot(), 0x00_FF_A0_40),
+            (locale.btn_shutdown(), 0x00_FF_60_60),
+        ]
+    }
+
+    fn update_start_menu_filter(&mut self) {
+        let app_list = self.get_start_menu_data();
 
         self.start_menu_filtered.clear();
-        for (i, &name) in all_names.iter().enumerate() {
+        for (i, &(name, _)) in app_list.iter().enumerate() {
             if self.start_menu_search.is_empty() || self.contains_insensitive(name, self.start_menu_search.as_str()) {
                 self.start_menu_filtered.push(i);
             }
@@ -1346,32 +1357,17 @@ impl WindowManager {
             // Draw Search Bar
             let search_y = menu_y + 10;
             draw_rect(fb, menu_x + 10, search_y, item_width, 25, 0x00_FFFFFF, Some(clip));
-            font::draw_string(fb, menu_x + 15, search_y + 5, self.start_menu_search.as_str(), 0x00_10_10_10, Some(clip));
+            font::draw_string(fb, menu_x + 15, search_y + 5, self.start_menu_search.as_str(), 0x00_00_00_00, Some(clip));
             if self.start_menu_search.len() < 20 {
                 let cursor_x = menu_x + 15 + (self.start_menu_search.len() * 8) as isize;
-                draw_rect(fb, cursor_x, search_y + 5, 2, 16, 0x00_10_10_10, Some(clip));
+                draw_rect(fb, cursor_x, search_y + 5, 2, 16, 0x00_00_00_00, Some(clip));
             }
 
-            // Clear button (X) inside search bar
-            let mut clear_btn = Button::new(menu_x + 10 + item_width - 20, search_y + 2, 16, 21, "x");
-            clear_btn.bg_color = 0x00_D0_D0_D0;
-            clear_btn.draw(fb, mouse_x, mouse_y, Some(clip));
-
-            let all_btns = [
-                (locale.app_text_editor(), 0x00_C0_C0_C0),
-                (locale.app_calculator(), 0x00_C0_C0_C0),
-                (locale.app_paint(), 0x00_C0_C0_C0),
-                (locale.app_settings(), 0x00_C0_C0_C0),
-                (locale.app_terminal(), 0x00_C0_C0_C0),
-                ("Task Manager", 0x00_C0_C0_C0),
-                ("Partitions", 0x00_C0_C0_C0),
-                (locale.btn_reboot(), 0x00_FF_A0_40),
-                (locale.btn_shutdown(), 0x00_FF_60_60),
-            ];
+            let app_list = self.get_start_menu_data();
 
             let mut draw_y = menu_y + 45;
             for (i, &real_idx) in self.start_menu_filtered.iter().enumerate() {
-                let (text, color) = all_btns[real_idx];
+                let (text, color) = app_list[real_idx];
                 let mut btn = Button::new(menu_x + 10, draw_y, item_width, 30, text);
                 btn.bg_color = if i == self.start_menu_index { 0x00_40_60_90 } else { color };
                 btn.draw(fb, mouse_x, mouse_y, Some(clip));
