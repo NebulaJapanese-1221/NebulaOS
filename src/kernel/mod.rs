@@ -6,6 +6,7 @@ use crate::userspace::fonts::font;
 use crate::userspace::gui::{self, Rect};
 use core::sync::atomic::{AtomicUsize, Ordering};
 use crate::kernel::process::TICKS;
+use spin::Mutex;
 pub mod io;
 pub mod interrupts;
 pub mod multiboot;
@@ -25,6 +26,37 @@ pub static TOTAL_MEMORY: AtomicUsize = AtomicUsize::new(0);
 pub static CPU_CORES: AtomicUsize = AtomicUsize::new(1);
 static BOOT_ANIMATION_RUNNING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static BOOT_STATUS_LINE: AtomicUsize = AtomicUsize::new(2);
+static WATCHDOG_STATE: Mutex<(usize, u64, u32)> = Mutex::new((0, 0, 0));
+
+/// Monitors the health of the kernel heartbeat.
+/// If TICKS stays the same while TSC continues to increase significantly, triggers a diagnostic halt.
+fn check_watchdog() {
+    let current_tick = TICKS.load(Ordering::Relaxed);
+    let current_tsc = crate::kernel::cpu::read_tsc();
+    
+    let mut state = WATCHDOG_STATE.lock();
+    if current_tick != state.0 {
+        // Heartbeat is healthy
+        state.0 = current_tick;
+        state.1 = current_tsc;
+        state.2 = 0; // Reset retry count
+    } else {
+        // TICKS is frozen. Check TSC delta (assuming ~2GHz, 5 billion cycles is ~2.5 seconds)
+        if current_tsc > state.1.wrapping_add(2_000_000_000) {
+            state.2 += 1;
+            if state.2 <= 3 {
+                crate::serial_println!("[WATCHDOG] Heartbeat frozen. Attempting soft recovery {}/3...", state.2);
+                // Attempt to re-initialize PIT frequency
+                crate::drivers::pit::set_frequency(1000);
+                // Reset TSC anchor to give the new configuration a window to work
+                state.1 = current_tsc;
+            } else {
+                drop(state);
+                show_boot_error("Watchdog Timeout: System heartbeat (TICKS) stopped responding after 3 recovery attempts.");
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum BootMilestone {
@@ -83,7 +115,13 @@ fn draw_boot_screen() {
         }
 
         // Wait for next frame (1000ms / 60fps = ~16ms)
-        while TICKS.load(Ordering::Relaxed) < start_tick + 16 { unsafe { asm!("pause"); } }
+        let frame_timeout_tsc = crate::kernel::cpu::read_tsc().wrapping_add(10_000_000);
+        while TICKS.load(Ordering::Relaxed).wrapping_sub(start_tick) < 16 { 
+            unsafe { asm!("pause"); }
+            check_watchdog();
+            // Soft timeout: If 16ms of ticks don't pass but 10M cycles do, the PIT is likely stuck
+            if crate::kernel::cpu::read_tsc() > frame_timeout_tsc { break; }
+        }
     }
 }
 
@@ -97,9 +135,14 @@ fn add_boot_status(milestone: BootMilestone) {
     fb.present_rect(x, y as usize, 400, 20);
     drop(fb);
 
-    // Intentional delay to make the log readable (50ms per entry)
-    let wait_until = TICKS.load(Ordering::Relaxed) + 50;
-    while TICKS.load(Ordering::Relaxed) < wait_until { unsafe { asm!("pause"); } }
+    // Intentional delay to make the log readable (50ms per entry) 
+    let start_wait = TICKS.load(Ordering::Relaxed);
+    let wait_timeout_tsc = crate::kernel::cpu::read_tsc().wrapping_add(20_000_000);
+    while TICKS.load(Ordering::Relaxed).wrapping_sub(start_wait) < 50 { 
+        unsafe { asm!("pause"); }
+        check_watchdog();
+        if crate::kernel::cpu::read_tsc() > wait_timeout_tsc { break; }
+    }
 }
 
 /// Displays a critical error screen during the boot process and halts.
@@ -107,6 +150,7 @@ fn show_boot_error(message: &str) -> ! {
     crate::serial_println!("\nBOOT ERROR: {}", message);
     
     // Check if the framebuffer is initialized and has a draw buffer to draw the error screen
+    unsafe { FRAMEBUFFER.force_unlock(); }
     let mut fb_lock = FRAMEBUFFER.lock();
     if fb_lock.info.is_some() && fb_lock.draw_buffer.is_some() {
         fb_lock.clear(0x00_880000); // Dark red background
@@ -199,14 +243,21 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     gdt::init();
 
     // Initialize IDT (but do not enable interrupts yet)
-    interrupts::init();
-
-    // Set PIT frequency to 1000Hz so TICKS works correctly for animations
-    crate::drivers::pit::set_frequency(1000);
+    if let Err(e) = interrupts::init() {
+        show_boot_error(e);
+    }
 
     // Enable interrupts now so we can use timer-based FPS for the splash screen
     interrupts::enable_interrupts();
     crate::serial_println!("[KERNEL] Interrupts and Ticks active.");
+
+    // Initialize Watchdog with current state
+    {
+        let mut state = WATCHDOG_STATE.lock();
+        state.0 = TICKS.load(Ordering::Relaxed);
+        state.1 = cpu::read_tsc();
+        state.2 = 0;
+    }
 
     // Show splash screen with fade-in
     draw_boot_screen();
@@ -263,6 +314,7 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     // Halt loop (The scheduler will hijack execution on the next timer tick)
     loop {
         crate::userspace::gui::update();
+        check_watchdog();
         
         // Mark as idle right before halting
         crate::kernel::cpu::IS_IDLE.store(true, Ordering::Relaxed);

@@ -82,7 +82,7 @@ static mut IDT: [IdtEntry; 256] = [IdtEntry {
 //Most of the code here is setting up functions to be called.
 //These handlers will be dispatched to when the interrupts are fired.
 //init_pics is called to set up the interrupt controller
-pub fn init() {
+pub fn init() -> Result<(), &'static str> {
     unsafe {
         // 1. Remap the PIC
         init_pics();
@@ -138,7 +138,13 @@ pub fn init() {
             base: core::ptr::addr_of!(IDT) as u32,
         };
         asm!("lidt [{}]", in(reg) &idt_ptr, options(readonly, nostack, preserves_flags));
+
+        // 7. Configure PIT (Programmable Interval Timer)
+        // The set_frequency function now handles internal hardware verification 
+        // using the Read-back command to ensure the Null Count bit is cleared.
+        crate::drivers::pit::set_frequency(1000)?;
     }
+    Ok(())
 }
 
 pub fn enable_interrupts() {

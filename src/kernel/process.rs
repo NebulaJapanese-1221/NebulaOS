@@ -272,13 +272,22 @@ pub fn yield_now(current_esp: usize) -> usize {
 #[no_mangle]
 pub extern "C" fn schedule(current_esp: usize) -> usize {
     // 1. Handle Timer Logic
-    rtc::handle_timer_tick();
     TICKS.fetch_add(1, Ordering::Relaxed);
     unsafe { io::outb(0x20, 0x20); } // Send EOI
+
+    // Update RTC/System time after EOI to prevent hardware bus stalls
+    rtc::handle_timer_tick();
 
     let current_ticks = TICKS.load(Ordering::Relaxed);
 
     let mut scheduler = SCHEDULER.lock();
+    let total_user_tasks = scheduler.tasks.len();
+
+    if !scheduler.initialized {
+        scheduler.current_index = total_user_tasks;
+        scheduler.initialized = true;
+        scheduler.last_tsc = crate::kernel::cpu::read_tsc();
+    }
 
     // 1.5 Wake up tasks that have finished sleeping
     for task in &mut scheduler.tasks {
@@ -292,19 +301,9 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
         }
     }
 
-    let total_user_tasks = scheduler.tasks.len();
-    
     // If no tasks, just return current stack (continue running kernel loop)
     if total_user_tasks == 0 {
         return current_esp;
-    }
-
-    if !scheduler.initialized {
-        // The first time schedule() is called, it's from the main kernel loop.
-        // We set the current index to represent this kernel "task".
-        scheduler.current_index = total_user_tasks;
-        scheduler.initialized = true;
-        scheduler.last_tsc = crate::kernel::cpu::read_tsc();
     }
 
     // --- CPU Usage Calculation ---
