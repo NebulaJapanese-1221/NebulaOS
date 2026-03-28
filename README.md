@@ -3,7 +3,16 @@
 NebulaOS is a x86 based hobby operating system written in Rust.
 
 **⚠️ ALPHA STATUS**
-NebulaOS is currently in alpha. Problems can range from apps crashing to the OS not booting at all.
+NebulaOS is currently in alpha. **If you are looking for a stable operating system for daily use, this is not it.** 
+
+### Why is it unstable?
+*   **Experimental Kernel**: The core logic is built on a nightly Rust toolchain with many `unsafe` blocks directly manipulating hardware.
+*   **Fragile Drivers**: Components like ACPI shutdown and DSDT parsing are implemented with "fragile" logic that assumes specific hardware behaviors common in emulators but rare on diverse physical hardware.
+*   **CoW Filesystem Risks**: NebulaFS is a complex ZFS-inspired filesystem still in active development; bugs in the Storage Pool Allocator (SPA) can lead to immediate and total data loss.
+*   **Limited Scheduling**: The system lacks a mature preemptive multi-tasking scheduler, which can result in deadlocks or system hangs during heavy I/O.
+*   **Hardware Specificity**: Testing is limited primarily to QEMU and a single Dell model, meaning "Red Screens of Death" (RSOD) are likely on other machines.
+
+Problems can range from applications crashing to catastrophic kernel panics that require a hard reboot.
 
 ## 💻 Devices Tested
 *   QEMU
@@ -28,9 +37,6 @@ cargo run
 ```
 
 *Requires QEMU and a nightly Rust toolchain.*
-
-## Current Bugs
-*Many*
 
 ## 📜 License
 
