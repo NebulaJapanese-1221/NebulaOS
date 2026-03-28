@@ -13,7 +13,8 @@ extern "C" {
 /// # Safety
 /// The caller must ensure that the multiboot info pointer is valid.
 pub fn find_heap_region(multiboot_info_ptr: usize) -> Option<(usize, usize)> {
-    let multiboot_info = unsafe { &*(multiboot_info_ptr as *const u32 as *const multiboot::MultibootInfo) };
+    if multiboot_info_ptr == 0 { return None; }
+    let multiboot_info = unsafe { &*(multiboot_info_ptr as *const multiboot::MultibootInfo) };
 
     // Check if the memory map is present (bit 6)
     // NOTE(clarification): This check ensures that a memory map was actually provided by the bootloader

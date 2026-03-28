@@ -103,75 +103,57 @@ fn find_rsdp() -> Option<*const Rsdp> {
     None
 }
 
-fn find_sdt_in_rsdt(rsdt: *const SdtHeader, signature: &[u8; 4]) -> Option<*const SdtHeader> {
-    unsafe {
-        // Use read_unaligned to safely read the length field
-        let rsdt_len = core::ptr::addr_of!((*rsdt).length).read_unaligned() as usize;
-
-        if rsdt_len < size_of::<SdtHeader>() {
-            return None;
-        }
-        let entry_count = (rsdt_len - size_of::<SdtHeader>()) / 4;
-        let entries_ptr = (rsdt as *const u8).add(size_of::<SdtHeader>()) as *const u32;
-
-        for i in 0..entry_count {
-            // Use read_unaligned to safely read the pointer from the list
-            let sdt_ptr = entries_ptr.add(i).read_unaligned() as *const SdtHeader;
-            if (*sdt_ptr).signature == *signature && (*sdt_ptr).is_valid() {
-                return Some(sdt_ptr);
-            }
-        }
-    }
-    None
-}
-
-fn find_sdt_in_xsdt(xsdt: *const SdtHeader, signature: &[u8; 4]) -> Option<*const SdtHeader> {
-    unsafe {
-        let xsdt_len = core::ptr::addr_of!((*xsdt).length).read_unaligned() as usize;
-        if xsdt_len < size_of::<SdtHeader>() {
-            return None;
-        }
+/// Generically finds an SDT in either an RSDT or XSDT.
+fn find_sdt(root: *const SdtHeader, signature: &[u8; 4]) -> Option<*const SdtHeader> {
+    if root.is_null() { return None; }
+    
+    let (entry_size, table_len) = unsafe {
+        let header = &*root;
+        if !header.is_valid() { return None; }
         
-        let entry_count = (xsdt_len - size_of::<SdtHeader>()) / 8;
-        let entries_ptr = (xsdt as *const u8).add(size_of::<SdtHeader>()) as *const u64;
+        // RSDT uses 32-bit pointers (4 bytes), XSDT uses 64-bit pointers (8 bytes)
+        let is_xsdt = &header.signature == b"XSDT";
+        (if is_xsdt { 8 } else { 4 }, header.length as usize)
+    };
 
-        for i in 0..entry_count {
-            let sdt_ptr = entries_ptr.add(i).read_unaligned() as *const SdtHeader;
-            if !sdt_ptr.is_null() && (*sdt_ptr).signature == *signature && (*sdt_ptr).is_valid() {
+    let entry_count = (table_len.saturating_sub(size_of::<SdtHeader>())) / entry_size;
+    let entries_ptr = unsafe { (root as *const u8).add(size_of::<SdtHeader>()) };
+
+    for i in 0..entry_count {
+        let sdt_ptr = unsafe {
+            if entry_size == 4 {
+                (entries_ptr as *const u32).add(i).read_unaligned() as *const SdtHeader
+            } else {
+                (entries_ptr as *const u64).add(i).read_unaligned() as *const SdtHeader
+            }
+        };
+
+        if !sdt_ptr.is_null() {
+            let sdt = unsafe { &*sdt_ptr };
+            if &sdt.signature == signature && sdt.is_valid() {
                 return Some(sdt_ptr);
             }
         }
     }
     None
 }
-
 fn find_signature_in_slice(data: &[u8], signature: &[u8; 4]) -> Option<*const u8> {
-    //let sig = data.windows(4).position(|window| window == signature);
-    if data.len() < 4 {
-        return None;
-    }
-    for i in 0..(data.len() - 4) {
-        if &data[i..i + 4] == signature {
-            unsafe {
-                return Some(data.as_ptr().add(i));
-            }
-        }
-    }
-    None
+    data.windows(4)
+        .position(|window| window == signature)
+        .map(|pos| unsafe { data.as_ptr().add(pos) })
 }
 
 
-
-
-
-
-unsafe fn get_s5_val(dsdt_ptr: *const SdtHeader) -> Option<u8> {
-    let dsdt_len = core::ptr::addr_of!((*dsdt_ptr).length).read_unaligned() as usize;
+fn get_s5_val(dsdt_ptr: *const SdtHeader) -> Option<u8> {
+    if dsdt_ptr.is_null() { return None; }
+    let dsdt_len = unsafe { core::ptr::addr_of!((*dsdt_ptr).length).read_unaligned() as usize };
     if dsdt_len < size_of::<SdtHeader>() {
         return None;
     }
-    let data_ptr = (dsdt_ptr as *const u8).add(size_of::<SdtHeader>());
-    let data = slice::from_raw_parts(data_ptr, dsdt_len - size_of::<SdtHeader>());
+    let data = unsafe { 
+        let ptr = (dsdt_ptr as *const u8).add(size_of::<SdtHeader>());
+        slice::from_raw_parts(ptr, dsdt_len - size_of::<SdtHeader>())
+    };
 
     // AML encoding for Name(_S5, Package...) usually looks like:
     // 08 (NameOp) 5F 53 35 5F (_S5_) 12 (PackageOp) ...
@@ -206,9 +188,10 @@ unsafe fn get_s5_val(dsdt_ptr: *const SdtHeader) -> Option<u8> {
     None
 }
 
-unsafe fn parse_madt(madt_ptr: *const SdtHeader) {
+fn parse_madt(madt_ptr: *const SdtHeader) {
+    if madt_ptr.is_null() { return; }
     // MADT Structure: Header (44 bytes) + Interrupt Controller Structures
-    let len = core::ptr::addr_of!((*madt_ptr).length).read_unaligned() as usize;
+    let len = unsafe { core::ptr::addr_of!((*madt_ptr).length).read_unaligned() as usize };
     if len < 44 { return; }
     
     let data = unsafe { slice::from_raw_parts(madt_ptr as *const u8, len) };
@@ -244,20 +227,15 @@ unsafe fn parse_madt(madt_ptr: *const SdtHeader) {
 
 pub fn init() {
     if let Some(rsdp) = find_rsdp() {
-        // Prefer XSDT on ACPI 2.0+ systems, fallback to RSDT
-        let (root_table, is_xsdt) = unsafe {
+        let root_table = unsafe {
             if (*rsdp).revision >= 2 && (*rsdp).xsdt_address != 0 {
-                ((*rsdp).xsdt_address as *const SdtHeader, true)
+                (*rsdp).xsdt_address as *const SdtHeader
             } else {
-                (core::ptr::addr_of!((*rsdp).rsdt_address).read_unaligned() as *const SdtHeader, false)
+                core::ptr::addr_of!((*rsdp).rsdt_address).read_unaligned() as *const SdtHeader
             }
         };
 
-        let fadt_ptr = if is_xsdt {
-            find_sdt_in_xsdt(root_table, b"FACP")
-        } else {
-            find_sdt_in_rsdt(root_table, b"FACP")
-        };
+        let fadt_ptr = find_sdt(root_table, b"FACP");
 
         if let Some(fadt_ptr) = fadt_ptr {
             let fadt = fadt_ptr as *const Fadt;
@@ -269,7 +247,7 @@ pub fn init() {
             }
 
             // Fragile DSDT parsing to find the _S5_ value
-            let s5_val = unsafe { get_s5_val(dsdt_ptr).unwrap_or(0) };
+            let s5_val = get_s5_val(dsdt_ptr).unwrap_or(0);
 
             // Write SLP_TYPa << 10 | SLP_EN to the PM1a control port
             let shutdown_val = (s5_val as u16) << 10 | 0x2000;
@@ -278,14 +256,10 @@ pub fn init() {
             SHUTDOWN_CMD.store(shutdown_val, Ordering::Relaxed);
         }
 
-        let madt_ptr = if is_xsdt {
-            find_sdt_in_xsdt(root_table, b"APIC")
-        } else {
-            find_sdt_in_rsdt(root_table, b"APIC")
-        };
+        let madt_ptr = find_sdt(root_table, b"APIC");
 
         if let Some(madt_ptr) = madt_ptr {
-            unsafe { parse_madt(madt_ptr); }
+            parse_madt(madt_ptr);
         }
     }
 }

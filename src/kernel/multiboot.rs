@@ -44,6 +44,7 @@ pub struct MultibootInfo {
 /// Checks the multiboot info structure for valid framebuffer information.
 /// Returns a tuple of (address, width, height, pitch, bpp) if available.
 pub fn framebuffer_info(multiboot_info_ptr: usize) -> Option<(usize, usize, usize, usize, u8)> {
+    if multiboot_info_ptr == 0 { return None; }
     let multiboot_info = unsafe { &*(multiboot_info_ptr as *const MultibootInfo) };
 
     // Check if framebuffer info is present (bit 12) and type is RGB (1)

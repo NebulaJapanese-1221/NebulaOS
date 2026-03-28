@@ -90,12 +90,17 @@ pub fn load_and_run(data: &[u8]) -> bool {
         let offset = ph_offset + i * ph_size;
         let ph = unsafe { &*(data.as_ptr().add(offset) as *const ProgramHeader) };
         if ph.type_ == PT_LOAD {
-            let dest_ptr = unsafe { memory.as_mut_ptr().add(ph.vaddr as usize) };
-            let src_ptr = unsafe { data.as_ptr().add(ph.offset as usize) };
-            unsafe {
-                core::ptr::copy_nonoverlapping(src_ptr, dest_ptr, ph.filesz as usize);
-                if ph.memsz > ph.filesz {
-                    core::ptr::write_bytes(dest_ptr.add(ph.filesz as usize), 0, (ph.memsz - ph.filesz) as usize);
+            let segment_end = ph.vaddr as usize + ph.memsz as usize;
+            if segment_end <= memory.len() && (ph.offset as usize + ph.filesz as usize) <= data.len() {
+                unsafe {
+                    let dest_ptr = memory.as_mut_ptr().add(ph.vaddr as usize);
+                    let src_ptr = data.as_ptr().add(ph.offset as usize);
+                    
+                    core::ptr::copy_nonoverlapping(src_ptr, dest_ptr, ph.filesz as usize);
+                    
+                    if ph.memsz > ph.filesz {
+                        core::ptr::write_bytes(dest_ptr.add(ph.filesz as usize), 0, (ph.memsz - ph.filesz) as usize);
+                    }
                 }
             }
         }
@@ -110,6 +115,6 @@ pub fn load_and_run(data: &[u8]) -> bool {
     // Prevent the memory from being freed when `memory` goes out of scope
     core::mem::forget(memory);
 
-    crate::kernel::process::SCHEDULER.lock().add_task(entry);
+    crate::kernel::process::SCHEDULER.lock().add_task(entry, 10);
     true
 }

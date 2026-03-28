@@ -8,6 +8,7 @@ pub struct Task {
     pub id: usize,
     pub kernel_stack: Vec<u8>,
     pub kernel_esp: usize,
+    pub priority: usize,
 }
 
 pub struct Scheduler {
@@ -30,7 +31,7 @@ impl Scheduler {
     }
 
     /// Creates a new task jumping to the given entry point.
-    pub fn add_task(&mut self, entry_point: usize) {
+    pub fn add_task(&mut self, entry_point: usize, priority: usize) {
         let id = self.tasks.len();
         
         // Allocate a kernel stack for this task
@@ -73,6 +74,7 @@ impl Scheduler {
             id,
             kernel_stack: stack,
             kernel_esp: sp,
+            priority,
         });
     }
 }
@@ -85,6 +87,8 @@ pub static TICKS: AtomicUsize = AtomicUsize::new(0);
 #[no_mangle]
 pub extern "C" fn schedule(current_esp: usize) -> usize {
     // 1. Handle Timer Logic
+    const KERNEL_PRIORITY: usize = 10;
+
     rtc::handle_timer_tick();
     TICKS.fetch_add(1, Ordering::Relaxed);
     unsafe { io::outb(0x20, 0x20); } // Send EOI
@@ -127,8 +131,24 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
         scheduler.kernel_esp = current_esp;
     }
 
-    // 3. Round Robin to pick the next task
-    scheduler.current_index = (scheduler.current_index + 1) % (total_user_tasks + 1);
+    // 3. Priority-based Selection
+    // Find the maximum priority level among all tasks (including the kernel loop)
+    let mut max_priority = KERNEL_PRIORITY;
+    for task in &scheduler.tasks {
+        if task.priority > max_priority { max_priority = task.priority; }
+    }
+
+    // Find the next task in round-robin order that matches the highest priority
+    let start_search = (scheduler.current_index + 1) % (total_user_tasks + 1);
+    for i in 0..=(total_user_tasks) {
+        let idx = (start_search + i) % (total_user_tasks + 1);
+        let task_prio = if idx < total_user_tasks { scheduler.tasks[idx].priority } else { KERNEL_PRIORITY };
+
+        if task_prio == max_priority {
+            scheduler.current_index = idx;
+            break;
+        }
+    }
 
     // 4. Get ESP of the task we are switching TO
     if scheduler.current_index < total_user_tasks {
