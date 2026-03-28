@@ -202,6 +202,10 @@ impl WindowManager {
             if let Some(id) = start_interaction_id { if let Some(rect) = self.get_window_rect(id) { self.mark_dirty(rect); } }
             if let Some(rect) = self.drag_rect { self.mark_dirty(rect); }
             
+            if self.shell.start_menu.is_open {
+                self.update_start_menu_hover(screen_height, is_vertical);
+            }
+
             // Use hardware-mimicking overlay for zero-lag response
             self.refresh_hardware_cursor();
         }
@@ -213,11 +217,41 @@ impl WindowManager {
     fn handle_start_menu_keys(&mut self, key: char, screen_height: isize, is_vertical: bool) {
         let menu_rect = self.shell.start_menu.rect(screen_height, self.shell.taskbar_height, is_vertical);
         if key == '\x08' { self.shell.start_menu.search_query.pop(); self.update_start_menu_filter(); }
+        else if key == '\x1B' {
+            if !self.shell.start_menu.search_query.is_empty() {
+                self.shell.start_menu.search_query.clear();
+                self.update_start_menu_filter();
+            } else {
+                self.shell.start_menu.is_open = false;
+            }
+        }
         else if key == '\x11' { let c = self.shell.start_menu.filtered_indices.len(); if c > 0 { self.shell.start_menu.selected_index = (self.shell.start_menu.selected_index + c - 1) % c; } }
         else if key == '\x12' { let c = self.shell.start_menu.filtered_indices.len(); if c > 0 { self.shell.start_menu.selected_index = (self.shell.start_menu.selected_index + 1) % c; } }
         else if key == '\n' { if let Some(&real_idx) = self.shell.start_menu.filtered_indices.get(self.shell.start_menu.selected_index) { self.launch_start_menu_item(real_idx, screen_height); } self.shell.start_menu.is_open = false; }
         else if key >= ' ' && key <= '~' { self.shell.start_menu.search_query.push(key); self.update_start_menu_filter(); }
         self.mark_dirty(menu_rect);
+    }
+
+    fn update_start_menu_hover(&mut self, screen_height: isize, is_vertical: bool) {
+        let menu_rect = self.shell.start_menu.rect(screen_height, self.shell.taskbar_height, is_vertical);
+        if !menu_rect.contains(self.input.mouse_x, self.input.mouse_y) { return; }
+
+        let menu_x = menu_rect.x;
+        let menu_y = menu_rect.y;
+        let item_width = self.shell.start_menu.width - 20;
+        let mut draw_y = menu_y + 45;
+
+        for (i, _) in self.shell.start_menu.filtered_indices.iter().enumerate() {
+            let btn_rect = Rect { x: menu_x + 10, y: draw_y, width: item_width, height: 30 };
+            if btn_rect.contains(self.input.mouse_x, self.input.mouse_y) {
+                if self.shell.start_menu.selected_index != i {
+                    self.shell.start_menu.selected_index = i;
+                    self.mark_dirty(menu_rect);
+                }
+                break;
+            }
+            draw_y += 35;
+        }
     }
 
     fn update_cursor_style(&mut self) {
@@ -414,7 +448,17 @@ impl WindowManager {
         self.click_target_id = None;
     }
 
-    fn update_start_menu_filter(&mut self) { self.shell.start_menu.filtered_indices.clear(); let app_list = self.shell.get_start_menu_data(); for (i, &(name, _)) in app_list.iter().enumerate() { if self.shell.start_menu.search_query.is_empty() || self.contains_insensitive(name, self.shell.start_menu.search_query.as_str()) { self.shell.start_menu.filtered_indices.push(i); } } if self.shell.start_menu.selected_index >= self.shell.start_menu.filtered_indices.len() { self.shell.start_menu.selected_index = 0; } }
+    fn update_start_menu_filter(&mut self) {
+        self.shell.start_menu.filtered_indices.clear();
+        let app_list = self.shell.get_start_menu_data();
+        for (i, &(name, _)) in app_list.iter().enumerate() {
+            if self.shell.start_menu.search_query.is_empty() || self.contains_insensitive(name, self.shell.start_menu.search_query.as_str()) {
+                self.shell.start_menu.filtered_indices.push(i);
+            }
+        }
+        // Selection always resets to the top match when filtering for a better UX
+        self.shell.start_menu.selected_index = 0;
+    }
     fn contains_insensitive(&self, haystack: &str, needle: &str) -> bool { if needle.is_empty() { return true; } haystack.as_bytes().windows(needle.len()).any(|window| window.eq_ignore_ascii_case(needle.as_bytes())) }
 
     fn draw_dirty(&mut self) {
