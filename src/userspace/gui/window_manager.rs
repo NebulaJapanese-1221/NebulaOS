@@ -2,7 +2,7 @@ use crate::drivers::mouse;
 use crate::drivers::framebuffer::{self, FRAMEBUFFER};
 use crate::drivers::rtc::{self, CURRENT_DATETIME, TIME_NEEDS_UPDATE};
 use crate::drivers::keyboard;
-use crate::userspace::gui::{Rect, Button, Shell, font, draw_rect, LARGE_TEXT, DESKTOP_GRADIENT_START, DESKTOP_GRADIENT_END, FULL_REDRAW_REQUESTED, MOUSE_SENSITIVITY};
+use crate::userspace::gui::{Rect, Button, Shell, font, draw_rect, LARGE_TEXT, FULL_REDRAW_REQUESTED, MOUSE_SENSITIVITY};
 use crate::userspace::apps::{app::{App, AppEvent}, calculator::Calculator, editor::TextEditor, paint::Paint, settings::Settings, terminal::Terminal, task_manager::TaskManager, partition_manager::PartitionManager};
 use crate::userspace::localisation;
 use alloc::boxed::Box;
@@ -68,6 +68,7 @@ pub struct WindowManager {
     pub click_target_id: Option<usize>,
     pub shell: Shell,
     pub dirty_rects: Vec<Rect>,
+    pub ready_dirty_rects: Vec<Rect>,
     pub context_menu_open: bool,
     pub context_menu_x: isize,
     pub context_menu_y: isize,
@@ -92,7 +93,8 @@ impl WindowManager {
             windows: Vec::new(), z_order: Vec::new(), next_win_id: 0,
             input: InputManager::new(), drag_win_id: None, drag_offset_x: 0, drag_offset_y: 0, click_target_id: None,
             shell: Shell { start_menu: crate::userspace::gui::shell::StartMenu::new(), taskbar_height: 40 },
-            dirty_rects: Vec::new(), context_menu_open: false, context_menu_x: 0, context_menu_y: 0,
+            dirty_rects: Vec::new(), ready_dirty_rects: Vec::new(),
+            context_menu_open: false, context_menu_x: 0, context_menu_y: 0,
             resize_win_id: None, resize_direction: ResizeDirection::None, cursor_style: CursorStyle::Arrow,
             backbuffer: Vec::new(), drag_rect: None, task_switcher_open: false, task_switcher_index: 0,
             last_cursor_x: 400, last_cursor_y: 300,
@@ -134,7 +136,7 @@ impl WindowManager {
         let (screen_width, screen_height) = if let Some(info) = FRAMEBUFFER.lock().info.as_ref() { (info.width as isize, info.height as isize) } else { (800, 600) };
         let is_vertical = self.shell.is_vertical(screen_width as usize);
         let start_interaction_id = self.resize_win_id;
-        let start_interaction_rect = start_interaction_id.and_then(|id| self.get_window_rect(id));
+        let _start_interaction_rect = start_interaction_id.and_then(|id| self.get_window_rect(id));
 
         self.input.update(screen_width, screen_height);
         let mut mouse_moved = false;
@@ -153,9 +155,9 @@ impl WindowManager {
                             if matches!(self.resize_direction, ResizeDirection::Top | ResizeDirection::TopLeft | ResizeDirection::TopRight) { let nh = win.height as isize - dy; if nh >= min_h { win.y += dy; win.height = nh as usize; } }
                         }
                     } else if let Some(id) = self.drag_win_id {
-                        if let Some(win) = self.windows.iter().find(|w| w.id == id) {
+                        if let Some(win_dims) = self.windows.iter().find(|w| w.id == id).map(|w| (w.width, w.height)) {
                             if let Some(old_rect) = self.drag_rect { self.mark_dirty(old_rect); }
-                            self.drag_rect = Some(Rect { x: self.input.mouse_x - self.drag_offset_x, y: self.input.mouse_y - self.drag_offset_y, width: win.width, height: win.height });
+                            self.drag_rect = Some(Rect { x: self.input.mouse_x - self.drag_offset_x, y: self.input.mouse_y - self.drag_offset_y, width: win_dims.0, height: win_dims.1 });
                             if let Some(new_rect) = self.drag_rect { self.mark_dirty(new_rect); }
                         }
                     }
@@ -483,7 +485,6 @@ impl WindowManager {
     /// The entry point for the dedicated GUI rendering task.
     pub fn render_loop() -> ! {
         loop {
-            let mut vram_blit_rects = Vec::new();
             let mut fb_info_copy = None;
 
             {
@@ -496,48 +497,51 @@ impl WindowManager {
                 let mouse_moved = wm.input.mouse_x != wm.last_cursor_x || wm.input.mouse_y != wm.last_cursor_y;
                 
                 if !wm.dirty_rects.is_empty() || mouse_moved {
-                    // 1. Composition: Update backbuffer with window changes
-                    let dirty_regions = wm.draw_dirty_to_backbuffer(fb_info);
+                    // 1. Composition: Update backbuffer with window changes and collect dirty regions
+                    let composition_regions = wm.draw_dirty_to_backbuffer(fb_info);
+                    wm.ready_dirty_rects.extend(composition_regions);
+
+                    // 2. Cursor Region Management: Mark old and new positions as dirty for synchronization
+                    wm.ready_dirty_rects.push(wm.last_cursor_rect);
                     
-                    // 2. Sync window changes to ready_buffer
-                    for r in &dirty_regions {
+                    wm.last_cursor_x = wm.input.mouse_x; 
+                    wm.last_cursor_y = wm.input.mouse_y;
+                    wm.last_cursor_rect = Rect { x: wm.last_cursor_x, y: wm.last_cursor_y, width: CURSOR_WIDTH, height: CURSOR_HEIGHT };
+                    
+                    wm.ready_dirty_rects.push(wm.last_cursor_rect);
+
+                    // 3. Merging: Collapse overlapping dirty regions to minimize synchronization overhead
+                    let mut final_sync_rects: Vec<Rect> = Vec::with_capacity(wm.ready_dirty_rects.len());
+                    let raw_ready = core::mem::take(&mut wm.ready_dirty_rects);
+                    for r in raw_ready {
+                        let mut current = r; let mut j = 0;
+                        while j < final_sync_rects.len() { if current.intersects(&final_sync_rects[j]) { let other = final_sync_rects.swap_remove(j); current = current.union(&other); j = 0; } else { j += 1; } }
+                        final_sync_rects.push(current);
+                    }
+                    wm.ready_dirty_rects = final_sync_rects;
+
+                    // 4. Synchronization: Sync only the merged regions from backbuffer -> ready_buffer
+                    // This effectively "erases" the old cursor and updates window content in one pass.
+                    for r in &wm.ready_dirty_rects {
                         wm.sync_ready_rect(*r, fb_info.width, fb_info.height);
-                        vram_blit_rects.push(*r);
                     }
 
-                    // 3. Flicker-Free Cursor Sync
-                    // Erase old cursor in ready_buffer by restoring from backbuffer
-                    wm.sync_ready_rect(wm.last_cursor_rect, fb_info.width, fb_info.height);
-                    vram_blit_rects.push(wm.last_cursor_rect);
-
-                    // Update position
-                    wm.last_cursor_x = wm.input.mouse_x; wm.last_cursor_y = wm.input.mouse_y;
-                    wm.last_cursor_rect = Rect { x: wm.last_cursor_x, y: wm.last_cursor_y, width: CURSOR_WIDTH, height: CURSOR_HEIGHT };
-
-                    // Draw cursor into ready_buffer
+                    // 5. Cursor Overlay: Draw the cursor onto the assembled ready_buffer
                     wm.draw_cursor_to_ready(fb_info);
-                    vram_blit_rects.push(wm.last_cursor_rect);
                 }
             }
 
-            // 4. Presentation: Blit from ready_buffer to VRAM without holding the WM lock longer than necessary
-            if let (Some(info), true) = (fb_info_copy, !vram_blit_rects.is_empty()) {
+            // 6. Presentation: Blit the consolidated dirty regions from ready_buffer to VRAM
+            if let (Some(info), true) = (fb_info_copy, !wm_is_empty_ready_dirty()) {
                 let mut wm = crate::userspace::gui::WINDOW_MANAGER.lock();
-                
-                // Final merge to minimize VRAM transactions
-                let mut final_rects: Vec<Rect> = Vec::new();
-                for r in vram_blit_rects {
-                    let mut current = r; let mut j = 0;
-                    while j < final_rects.len() { if current.intersects(&final_rects[j]) { let other = final_rects.swap_remove(j); current = current.union(&other); j = 0; } else { j += 1; } }
-                    final_rects.push(current);
-                }
+                let raw_blit = core::mem::take(&mut wm.ready_dirty_rects);
 
-                let vram_ptr = info.address as *mut u32;
-                let src = wm.ready_buffer.as_ptr();
-
-                for dr in final_rects {
+                for dr in raw_blit {
                     let rx = dr.x.max(0) as usize; let ry = dr.y.max(0) as usize;
                     let rw = dr.width.min(info.width.saturating_sub(rx)); let rh = dr.height.min(info.height.saturating_sub(ry));
+                    let vram_ptr = info.address as *mut u32;
+                    let src = wm.ready_buffer.as_ptr();
+
                     for i in 0..rh {
                         let cy = ry + i;
                         unsafe {
@@ -553,6 +557,11 @@ impl WindowManager {
             unsafe { core::arch::asm!("int 0x80", in("eax") 0usize); }
         }
     }
+
+/// Helper to check if there are pending ready dirty rects without holding the lock for the whole operation.
+fn wm_is_empty_ready_dirty() -> bool {
+    crate::userspace::gui::WINDOW_MANAGER.lock().ready_dirty_rects.is_empty()
+}
 
     /// Composes the desktop and windows into the backbuffer. Returns dirty regions.
     fn draw_dirty_to_backbuffer(&mut self, fb_info: framebuffer::FramebufferInfo) -> Vec<Rect> {
@@ -599,8 +608,6 @@ impl WindowManager {
 
         if self.backbuffer.len() != sw * sh { self.backbuffer.resize(sw * sh, 0); }
         let mut local_fb = framebuffer::Framebuffer::new(); local_fb.info = Some(fb_info); local_fb.draw_buffer = Some(core::mem::take(&mut self.backbuffer));
-
-        let menu_data = if self.shell.start_menu.is_open { Some(self.shell.get_start_menu_data()) } else { None };
 
         for dirty_rect in &final_rects {
             self.draw_desktop_bg(&mut local_fb, *dirty_rect);
@@ -795,7 +802,6 @@ impl WindowManager {
         self.app_loading = true;
         let (sw, sh) = if let Some(info) = FRAMEBUFFER.lock().info.as_ref() { (info.width as isize, info.height as isize) } else { (800, 600) };
         self.mark_dirty(Rect { x: sw/2 - 40, y: sh/2 - 40, width: 80, height: 100 });
-        self.draw_dirty(); // Show spinner immediately
 
         // Pre-fetch locale strings to avoid holding the lock during slow construction
         let (title, color) = {
