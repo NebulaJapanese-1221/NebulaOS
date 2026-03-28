@@ -2,12 +2,16 @@ use crate::kernel::io;
 use alloc::vec::Vec;
 use nebulafs::vdev::BlockDevice;
 use core::sync::atomic::{AtomicUsize, Ordering};
+use spin::Mutex;
 
 pub const SECTOR_SIZE: usize = 512;
 pub const ATA_TIMEOUT_MS: usize = 3000;
 
 pub static PRIMARY_WAITING_TASK: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static SECONDARY_WAITING_TASK: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+static PRIMARY_BUS_LOCK: Mutex<()> = Mutex::new(());
+static SECONDARY_BUS_LOCK: Mutex<()> = Mutex::new(());
 
 #[repr(u16)]
 enum Command {
@@ -34,8 +38,19 @@ impl AtaDrive {
         }
     }
 
+    /// Acquires the lock for the underlying ATA bus (Primary or Secondary).
+    fn lock_bus(&self) -> spin::MutexGuard<'_, ()> {
+        if self.port_base == 0x1F0 {
+            PRIMARY_BUS_LOCK.lock()
+        } else {
+            SECONDARY_BUS_LOCK.lock()
+        }
+    }
+
     /// Reads `sectors` count of sectors starting at `lba`.
     pub fn read_sectors(&self, lba: u32, sectors: u8) -> Vec<u8> {
+        let _bus_lock = self.lock_bus();
+
         for attempt in 1..=3 {
             let mut data = Vec::with_capacity(sectors as usize * SECTOR_SIZE);
             let mut success = true;
@@ -80,6 +95,8 @@ impl AtaDrive {
         if data.len() % SECTOR_SIZE != 0 {
             return; 
         }
+        let _bus_lock = self.lock_bus();
+
         let sectors = (data.len() / SECTOR_SIZE) as u8;
         
         for attempt in 1..=3 {
@@ -139,17 +156,7 @@ impl AtaDrive {
 
         // Perform an eager yield. This task will stop executing immediately and give up the CPU.
         // It will resume here once the interrupt handler calls unblock_task or the timeout expires.
-        core::arch::asm!(
-            "pushfd", "push cs", "lea eax, [1f]", "push eax",
-            "push 0", "push ds", "push es", "push fs", "push gs", "pusha",
-            "mov eax, esp", "push eax",
-            "call {yield_now}",
-            "add esp, 4", "mov esp, eax",
-            "popa", "pop gs", "pop fs", "pop es", "pop ds", "add esp, 4", "iretd",
-            "1:",
-            yield_now = sym crate::kernel::process::yield_now,
-            out("eax") _,
-        );
+        self.yield_task();
 
         // Check if we were resumed because the IRQ occurred (success) or because of a timeout.
         if self.port_base == 0x1F0 {
@@ -171,17 +178,7 @@ impl AtaDrive {
             if (status & 0x01) != 0 { break; } // Error
 
             // Yield to other tasks while waiting for the drive to become ready
-            core::arch::asm!(
-                "pushfd", "push cs", "lea eax, [1f]", "push eax",
-                "push 0", "push ds", "push es", "push fs", "push gs", "pusha",
-                "mov eax, esp", "push eax",
-                "call {yield_now}",
-                "add esp, 4", "mov esp, eax",
-                "popa", "pop gs", "pop fs", "pop es", "pop ds", "add esp, 4", "iretd",
-                "1:",
-                yield_now = sym crate::kernel::process::yield_now,
-                out("eax") _,
-            );
+            self.yield_task();
         }
     }
     
@@ -194,18 +191,25 @@ impl AtaDrive {
             if (status & 0x01) != 0 { break; }
 
             // Yield to other tasks while the drive is busy
-            core::arch::asm!(
-                "pushfd", "push cs", "lea eax, [1f]", "push eax",
-                "push 0", "push ds", "push es", "push fs", "push gs", "pusha",
-                "mov eax, esp", "push eax",
-                "call {yield_now}",
-                "add esp, 4", "mov esp, eax",
-                "popa", "pop gs", "pop fs", "pop es", "pop ds", "add esp, 4", "iretd",
-                "1:",
-                yield_now = sym crate::kernel::process::yield_now,
-                out("eax") _,
-            );
+            self.yield_task();
         }
+    }
+
+    /// Helper to voluntarily yield the current task's time slice.
+    /// It manually constructs an interrupt frame to safely call the scheduler.
+    #[inline(always)]
+    unsafe fn yield_task(&self) {
+        core::arch::asm!(
+            "pushfd", "push cs", "lea eax, [1f]", "push eax",
+            "push 0", "push ds", "push es", "push fs", "push gs", "pusha",
+            "mov eax, esp", "push eax",
+            "call {yield_now}",
+            "add esp, 4", "mov esp, eax",
+            "popa", "pop gs", "pop fs", "pop es", "pop ds", "add esp, 4", "iretd",
+            "1:",
+            yield_now = sym crate::kernel::process::yield_now,
+            out("eax") _,
+        );
     }
 }
 
