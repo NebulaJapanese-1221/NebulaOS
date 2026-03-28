@@ -3,7 +3,7 @@
 NebulaOS is a x86 based hobby operating system written in Rust.
 
 **⚠️ ALPHA STATUS**
-NebulaOS is still in alpha. **If you are looking for a stable operating system for daily use, this is not it (at least until beta).** 
+NebulaOS is in alpha. **If you are looking for a stable operating system for daily use, this is not it (at least until beta, which will start at version 0.5.0).** 
 
 ### Why is it unstable?
 *   **Experimental Kernel**: The core logic is built on a nightly Rust toolchain with many `unsafe` blocks directly manipulating hardware.
