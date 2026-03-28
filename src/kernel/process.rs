@@ -1,14 +1,67 @@
 use alloc::vec::Vec;
-use spin::Mutex;
+use spin::{Mutex, MutexGuard};
 use crate::kernel::io;
 use crate::drivers::rtc;
 use core::sync::atomic::{AtomicUsize, Ordering};
+use core::arch::asm;
+
+/// A Mutex wrapper that disables interrupts while the lock is held.
+/// This prevents deadlocks when a lock is shared between a kernel task and an interrupt handler.
+pub struct IrqSafeMutex<T> {
+    inner: Mutex<T>,
+}
+
+impl<T> IrqSafeMutex<T> {
+    pub const fn new(data: T) -> Self {
+        Self {
+            inner: Mutex::new(data),
+        }
+    }
+
+    pub fn lock(&self) -> IrqSafeGuard<'_, T> {
+        let flags: u32;
+        unsafe {
+            asm!("pushfd; pop {0}", out(reg) flags, options(nomem, nostack));
+        }
+        let interrupts_enabled = (flags & 0x200) != 0;
+
+        unsafe { asm!("cli", options(nomem, nostack)); }
+
+        IrqSafeGuard {
+            guard: self.inner.lock(),
+            interrupts_enabled,
+        }
+    }
+}
+
+pub struct IrqSafeGuard<'a, T> {
+    guard: MutexGuard<'a, T>,
+    interrupts_enabled: bool,
+}
+
+impl<'a, T> core::ops::Deref for IrqSafeGuard<'a, T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target { &*self.guard }
+}
+
+impl<'a, T> core::ops::DerefMut for IrqSafeGuard<'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut *self.guard }
+}
+
+impl<'a, T> Drop for IrqSafeGuard<'a, T> {
+    fn drop(&mut self) {
+        if self.interrupts_enabled {
+            unsafe { asm!("sti", options(nomem, nostack)); }
+        }
+    }
+}
 
 pub struct Task {
     pub id: usize,
     pub kernel_stack: Vec<u8>,
     pub kernel_esp: usize,
     pub priority: usize,
+    pub sleep_until: Option<usize>,
 }
 
 pub struct Scheduler {
@@ -75,11 +128,40 @@ impl Scheduler {
             kernel_stack: stack,
             kernel_esp: sp,
             priority,
+            sleep_until: None,
         });
+    }
+
+    /// Sets the priority of a given task.
+    /// Returns true if the task was found and priority updated, false otherwise.
+    pub fn set_task_priority(&mut self, task_id: usize, new_priority: usize) -> bool {
+        if let Some(task) = self.tasks.iter_mut().find(|t| t.id == task_id) {
+            task.priority = new_priority;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Returns the ID of the currently running task.
+    pub fn get_current_task_id(&self) -> usize {
+        if self.current_index < self.tasks.len() {
+            self.tasks[self.current_index].id
+        } else {
+            usize::MAX // Represents the main kernel loop
+        }
+    }
+
+    /// Puts the current task to sleep for the specified milliseconds.
+    pub fn sleep_current_task(&mut self, ms: usize) {
+        if self.current_index < self.tasks.len() {
+            let until = TICKS.load(Ordering::Relaxed) + ms;
+            self.tasks[self.current_index].sleep_until = Some(until);
+        }
     }
 }
 
-pub static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
+pub static SCHEDULER: IrqSafeMutex<Scheduler> = IrqSafeMutex::new(Scheduler::new());
 pub static TICKS: AtomicUsize = AtomicUsize::new(0);
 
 /// Called by the assembly timer handler. 
@@ -93,7 +175,19 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
     TICKS.fetch_add(1, Ordering::Relaxed);
     unsafe { io::outb(0x20, 0x20); } // Send EOI
 
+    let current_ticks = TICKS.load(Ordering::Relaxed);
+
     let mut scheduler = SCHEDULER.lock();
+
+    // 1.5 Wake up tasks that have finished sleeping
+    for task in &mut scheduler.tasks {
+        if let Some(until) = task.sleep_until {
+            if current_ticks >= until {
+                task.sleep_until = None;
+            }
+        }
+    }
+
     let total_user_tasks = scheduler.tasks.len();
     
     // If no tasks, just return current stack (continue running kernel loop)
@@ -135,16 +229,22 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
     // Find the maximum priority level among all tasks (including the kernel loop)
     let mut max_priority = KERNEL_PRIORITY;
     for task in &scheduler.tasks {
-        if task.priority > max_priority { max_priority = task.priority; }
+        if task.sleep_until.is_none() && task.priority > max_priority {
+            max_priority = task.priority;
+        }
     }
 
     // Find the next task in round-robin order that matches the highest priority
     let start_search = (scheduler.current_index + 1) % (total_user_tasks + 1);
     for i in 0..=(total_user_tasks) {
         let idx = (start_search + i) % (total_user_tasks + 1);
-        let task_prio = if idx < total_user_tasks { scheduler.tasks[idx].priority } else { KERNEL_PRIORITY };
+        let (task_prio, is_ready) = if idx < total_user_tasks {
+            (scheduler.tasks[idx].priority, scheduler.tasks[idx].sleep_until.is_none())
+        } else {
+            (KERNEL_PRIORITY, true)
+        };
 
-        if task_prio == max_priority {
+        if is_ready && task_prio == max_priority {
             scheduler.current_index = idx;
             break;
         }
@@ -162,50 +262,4 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
         // No need to update TSS for Ring 0.
         scheduler.kernel_esp
     }
-}
-
-// Naked assembly handler for the Timer Interrupt (IRQ 0)
-// We use this instead of x86-interrupt ABI to manually control the stack switching.
-core::arch::global_asm!(
-    ".global timer_handler",
-    "timer_handler:",
-    // 1. Save Context
-    "push 0",           // Dummy error code for stack alignment consistency
-    
-    // Save Segment Registers
-    "push ds",
-    "push es",
-    "push fs",
-    "push gs",
-    
-    "pusha",            // Save General Registers (EDI, ESI, EBP, ESP, EBX, EDX, ECX, EAX)
-
-    // 2. Load Kernel Data Segment
-    "mov ax, 0x10",
-    "mov ds, ax",
-    "mov es, ax",
-    "mov fs, ax",
-    "mov gs, ax",
-
-    // 3. Call Schedule(current_esp)
-    "mov eax, esp",     // Pass current ESP as argument
-    "push eax",
-    "call schedule",    // Returns new ESP in EAX
-    "add esp, 4",       // Pop argument
-
-    // 4. Switch Stack
-    "mov esp, eax",     // Switch to new task's stack
-
-    // 5. Restore Context
-    "popa",             // Restore General Registers
-    "pop gs",
-    "pop fs",
-    "pop es",
-    "pop ds",
-    "add esp, 4",       // Pop error code
-    "iretd"             // Return from interrupt (pops CS, EIP, EFLAGS, [ESP, SS])
-);
-
-extern "C" {
-    pub fn timer_handler();
 }

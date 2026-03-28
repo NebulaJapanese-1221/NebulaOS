@@ -479,24 +479,22 @@ impl WindowManager {
         } else { return };
 
         if !self.cursor_save_buffer.is_empty() {
-            let cursor_w = 12;
-            let cursor_h = 17;
             let src_ptr = self.cursor_save_buffer.as_ptr() as *const u8;
             let dst_base = addr as *mut u8;
 
-            for i in 0..cursor_h {
+            for i in 0..CURSOR_HEIGHT {
                 let cy = self.last_cursor_y + i as isize;
                 if cy < 0 || cy >= height { continue; }
                 let cx = self.last_cursor_x;
-                let mut draw_w = cursor_w as isize;
+                let mut draw_w = CURSOR_WIDTH as isize;
                 let mut start_x = 0;
                 if cx < 0 { start_x = -cx; draw_w += cx; }
-                if cx + 12 > width { draw_w = (width - cx).min(12); }
+                if cx + (CURSOR_WIDTH as isize) > width { draw_w = (width - cx).max(0); }
                 if draw_w <= 0 { continue; }
 
                 unsafe {
                     core::ptr::copy_nonoverlapping(
-                        src_ptr.add((i * 12 + start_x as usize) * 4),
+                        src_ptr.add((i * CURSOR_WIDTH + start_x as usize) * 4),
                         dst_base.add(cy as usize * pitch + (cx + start_x) as usize * 4),
                         draw_w as usize * 4
                     );
@@ -511,34 +509,31 @@ impl WindowManager {
             (info.width as isize, info.height as isize, info.address, info.pitch)
         } else { return };
 
-        let cursor_w = 12;
-        let cursor_h = 17;
-
         // 1. Restore old background to VRAM
         self.restore_hardware_cursor();
 
         // 2. Save new background from VRAM
         self.last_cursor_x = self.input.mouse_x;
         self.last_cursor_y = self.input.mouse_y;
-        self.cursor_save_buffer.resize(cursor_w * cursor_h, 0);
+        self.cursor_save_buffer.resize(CURSOR_WIDTH * CURSOR_HEIGHT, 0);
         
         let dst_ptr = self.cursor_save_buffer.as_mut_ptr() as *mut u8;
         let src_base = addr as *const u8;
 
-        for i in 0..cursor_h {
+        for i in 0..CURSOR_HEIGHT {
             let cy = self.last_cursor_y + i as isize;
             if cy < 0 || cy >= height { continue; }
             let cx = self.last_cursor_x;
-            let mut read_w = cursor_w as isize;
+            let mut read_w = CURSOR_WIDTH as isize;
             let mut start_x = 0;
             if cx < 0 { start_x = -cx; read_w += cx; }
-            if cx + cursor_w as isize > width { read_w = (width - cx).min(cursor_w as isize); }
+            if cx + (CURSOR_WIDTH as isize) > width { read_w = (width - cx).max(0); }
             
             if read_w > 0 {
                 unsafe {
                     core::ptr::copy_nonoverlapping(
                         src_base.add(cy as usize * pitch + (cx + start_x) as usize * 4),
-                        dst_ptr.add((i * cursor_w + start_x as usize) * 4),
+                        dst_ptr.add((i * CURSOR_WIDTH + start_x as usize) * 4),
                         read_w as usize * 4
                     );
                 }
@@ -566,7 +561,7 @@ impl WindowManager {
                 [0, 0, 0, 0, 0, 1, 2, 2, 1, 0, 0, 0],
                 [0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
             ],
-            _ => [[0; 12]; 17],
+            _ => [[0; CURSOR_WIDTH]; CURSOR_HEIGHT],
         };
 
         let vram = addr as *mut u32;

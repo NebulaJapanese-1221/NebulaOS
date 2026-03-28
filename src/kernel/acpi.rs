@@ -28,7 +28,10 @@ impl Rsdp {
 
         // Extended checksum for Version 2.0+ (entire structure)
         if self.revision >= 2 {
-            let bytes = unsafe { slice::from_raw_parts(self as *const _ as *const u8, self.length as usize) };
+            let length = unsafe { core::ptr::addr_of!(self.length).read_unaligned() as usize };
+            // Sanity check: RSDP shouldn't be suspiciously large
+            if length > 1024 || length < 36 { return false; }
+            let bytes = unsafe { slice::from_raw_parts(self as *const _ as *const u8, length) };
             let sum = bytes.iter().fold(0u8, |acc, &x| acc.wrapping_add(x));
             if sum != 0 { return false; }
         }
@@ -51,7 +54,10 @@ pub struct SdtHeader {
 
 impl SdtHeader {
     fn is_valid(&self) -> bool {
-        let bytes = unsafe { slice::from_raw_parts(self as *const _ as *const u8, self.length as usize) };
+        let length = unsafe { core::ptr::addr_of!(self.length).read_unaligned() as usize };
+        // ACPI tables are rarely larger than 1MB; avoid massive OOB reads if corrupted
+        if length < size_of::<SdtHeader>() || length > 1024 * 1024 { return false; }
+        let bytes = unsafe { slice::from_raw_parts(self as *const _ as *const u8, length) };
         let sum = bytes.iter().fold(0u8, |acc, &x| acc.wrapping_add(x));
         sum == 0
     }

@@ -11,7 +11,7 @@ pub struct ElfHeader {
     pub machine: u16,
     pub version: u32,
     pub entry: u32,
-    pub phoff: u32,
+    pub phoff: u32, 
     pub shoff: u32,
     pub flags: u32,
     pub ehsize: u16,
@@ -97,15 +97,22 @@ pub fn load_and_run(data: &[u8]) -> bool {
         }
     }
 
+    // Validate entry point is within allocated memory
+    if header.entry as usize >= memory.len() {
+        return false;
+    }
+
     // 4. Calculate Entry Point and Spawn
     // Assuming the ELF is linked to 0 or is Position Independent, we add base_addr.
     // If it's statically linked to a specific high address, this loader would fail without paging,
     // but for "apps created externally" in this context, we assume they are compatible.
-    let entry = base_addr + header.entry as usize;
+    let entry = base_addr.checked_add(header.entry as usize);
+    if entry.is_none() { return false; }
+    let entry_addr = entry.unwrap();
 
     // Prevent the memory from being freed when `memory` goes out of scope
     core::mem::forget(memory);
 
-    crate::kernel::process::SCHEDULER.lock().add_task(entry, 10);
+    crate::kernel::process::SCHEDULER.lock().add_task(entry_addr, 10);
     true
 }

@@ -49,6 +49,25 @@ pub extern "C" fn syscall_dispatcher(
                 0 // Fail
             }
         }
+        3 => {
+            // Syscall 3: Set Task Priority (ebx = task_id, ecx = new_priority)
+            let task_id = ebx;
+            let new_priority = ecx;
+            if crate::kernel::process::SCHEDULER.lock().set_task_priority(task_id, new_priority) {
+                1 // Success
+            } else {
+                0 // Fail
+            }
+        }
+        4 => {
+            // Syscall 4: Get Current Task ID
+            crate::kernel::process::SCHEDULER.lock().get_current_task_id()
+        }
+        5 => {
+            // Syscall 5: Sleep (ebx = ms)
+            crate::kernel::process::SCHEDULER.lock().sleep_current_task(ebx);
+            0
+        }
         _ => {
             crate::serial_println!("Unknown Syscall: {}", eax);
             usize::MAX

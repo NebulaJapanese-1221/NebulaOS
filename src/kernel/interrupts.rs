@@ -1,4 +1,4 @@
-use core::arch::asm;
+use core::arch::{asm, global_asm};
 use core::mem::size_of;
 use super::io;
 
@@ -104,7 +104,7 @@ pub fn init() {
         set_idt_entry(30, crate::kernel::exceptions::security_exception_handler as *const () as u32, 0x08, 0x8E);
 
         // 2. Add Timer Handler (IRQ 0 is mapped to index 32)
-        let func_addr = crate::kernel::process::timer_handler as *const () as u32;
+        let func_addr = timer_handler as *const () as u32;
         // Selector 0x08 is usually the Code Segment in Multiboot
         // Type 0x8E = Present, Ring0, 32-bit Interrupt Gate
         set_idt_entry(32, func_addr, 0x08, 0x8E);
@@ -166,3 +166,45 @@ unsafe fn init_pics() {
     io::outb(0x21, 0b11111000); // Master: Unmask IRQ0 (timer), IRQ1 (keyboard), and IRQ2 (cascade)
     io::outb(0xA1, 0b11101111); // Slave: Unmask IRQ12 (mouse)
 }
+
+// Naked assembly handler for the Timer Interrupt (IRQ 0)
+// We use this instead of x86-interrupt ABI to manually control the stack switching.
+global_asm!(
+    ".global timer_handler",
+    "timer_handler:",
+    // 1. Save Context
+    "push 0",           // Dummy error code for stack alignment consistency
+    
+    // Save Segment Registers
+    "push ds",
+    "push es",
+    "push fs",
+    "push gs",
+    
+    "pusha",            // Save General Registers (EDI, ESI, EBP, ESP, EBX, EDX, ECX, EAX)
+
+    // 2. Load Kernel Data Segment (0x10)
+    "mov ax, 0x10",
+    "mov ds, ax",
+    "mov es, ax",
+    "mov fs, ax",
+    "mov gs, ax",
+
+    // 3. Call Schedule(current_esp)
+    "mov eax, esp",     // Pass current ESP as argument
+    "push eax",
+    "call schedule",    // Returns new ESP in EAX
+    "add esp, 4",       // Pop argument
+
+    // 4. Switch Stack
+    "mov esp, eax",     // Switch to new task's stack
+
+    // 5. Restore Context
+    "popa",             // Restore General Registers
+    "pop gs",
+    "pop fs",
+    "pop es",
+    "pop ds",
+    "add esp, 4",       // Pop error code
+    "iretd"             // Return from interrupt
+);
