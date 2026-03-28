@@ -10,6 +10,8 @@ use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 
 const MAX_WINDOWS: usize = 10;
+const CURSOR_WIDTH: usize = 12;
+const CURSOR_HEIGHT: usize = 17;
 
 #[derive(Clone)]
 pub struct Window {

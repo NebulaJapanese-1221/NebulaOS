@@ -1,5 +1,3 @@
-use core::arch::asm;
-
 // --- Dispatcher ---
 
 /// The main syscall dispatcher.
@@ -15,7 +13,7 @@ pub extern "C" fn syscall_dispatcher(
     eax: usize,
     ebx: usize,
     ecx: usize,
-    edx: usize
+    _edx: usize
 ) -> usize {
     let result = match eax {
         0 => {

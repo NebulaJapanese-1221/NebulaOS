@@ -1,8 +1,13 @@
 use crate::kernel::io;
 use alloc::vec::Vec;
 use nebulafs::vdev::BlockDevice;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 pub const SECTOR_SIZE: usize = 512;
+pub const ATA_TIMEOUT_MS: usize = 3000;
+
+pub static PRIMARY_WAITING_TASK: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub static SECONDARY_WAITING_TASK: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 #[repr(u16)]
 enum Command {
@@ -31,39 +36,42 @@ impl AtaDrive {
 
     /// Reads `sectors` count of sectors starting at `lba`.
     pub fn read_sectors(&self, lba: u32, sectors: u8) -> Vec<u8> {
-        let mut data = Vec::with_capacity(sectors as usize * SECTOR_SIZE);
-        
-        unsafe {
-            // Select Drive: 0xE0 (LBA Mode) | (Master/Slave << 4) | (LBA >> 24 & 0x0F)
-            io::outb(self.port_base + 6, 0xE0 | ((self.is_master as u8) << 4) | ((lba >> 24) as u8 & 0x0F));
-            
-            // Send NULL byte to Port 0x1F1 (Error/Feature) just in case
-            io::outb(self.port_base + 1, 0x00);
+        for attempt in 1..=3 {
+            let mut data = Vec::with_capacity(sectors as usize * SECTOR_SIZE);
+            let mut success = true;
 
-            // Sector Count
-            io::outb(self.port_base + 2, sectors);
-            
-            // LBA Low, Mid, High
-            io::outb(self.port_base + 3, lba as u8);
-            io::outb(self.port_base + 4, (lba >> 8) as u8);
-            io::outb(self.port_base + 5, (lba >> 16) as u8);
-            
-            // Command: Read
-            io::outb(self.port_base + 7, Command::Read as u8);
-            
-            for _ in 0..sectors {
-                self.poll();
+            unsafe {
+                io::outb(self.port_base + 6, 0xE0 | ((self.is_master as u8) << 4) | ((lba >> 24) as u8 & 0x0F));
+                io::outb(self.port_base + 1, 0x00);
+                io::outb(self.port_base + 2, sectors);
+                io::outb(self.port_base + 3, lba as u8);
+                io::outb(self.port_base + 4, (lba >> 8) as u8);
+                io::outb(self.port_base + 5, (lba >> 16) as u8);
+                io::outb(self.port_base + 7, Command::Read as u8);
                 
-                // Read 256 words (512 bytes)
-                for _ in 0..256 {
-                    let word = io::inw(self.port_base);
-                    data.push((word & 0xFF) as u8);
-                    data.push((word >> 8) as u8);
+                for _ in 0..sectors {
+                    if !self.wait_for_interrupt() {
+                        success = false;
+                        break;
+                    }
+                    
+                    // Read 256 words (512 bytes)
+                    for _ in 0..256 {
+                        let word = io::inw(self.port_base);
+                        data.push((word & 0xFF) as u8);
+                        data.push((word >> 8) as u8);
+                    }
                 }
             }
+
+            if success {
+                return data;
+            }
+
+            crate::serial_println!("[ATA] Read failed at LBA {} (Attempt {}/3), retrying...", lba, attempt);
         }
         
-        data
+        Vec::new() // Failed after 3 retries
     }
     
     /// Writes `data` to sectors starting at `lba`.
@@ -72,35 +80,82 @@ impl AtaDrive {
         if data.len() % SECTOR_SIZE != 0 {
             return; 
         }
-
         let sectors = (data.len() / SECTOR_SIZE) as u8;
         
-         unsafe {
-            io::outb(self.port_base + 6, 0xE0 | ((self.is_master as u8) << 4) | ((lba >> 24) as u8 & 0x0F));
-            io::outb(self.port_base + 1, 0x00);
-            io::outb(self.port_base + 2, sectors);
-            io::outb(self.port_base + 3, lba as u8);
-            io::outb(self.port_base + 4, (lba >> 8) as u8);
-            io::outb(self.port_base + 5, (lba >> 16) as u8);
-            io::outb(self.port_base + 7, Command::Write as u8);
-            
-            for i in 0..sectors {
-                self.poll();
+        for attempt in 1..=3 {
+            let mut success = true;
+            unsafe {
+                io::outb(self.port_base + 6, 0xE0 | ((self.is_master as u8) << 4) | ((lba >> 24) as u8 & 0x0F));
+                io::outb(self.port_base + 1, 0x00);
+                io::outb(self.port_base + 2, sectors);
+                io::outb(self.port_base + 3, lba as u8);
+                io::outb(self.port_base + 4, (lba >> 8) as u8);
+                io::outb(self.port_base + 5, (lba >> 16) as u8);
+                io::outb(self.port_base + 7, Command::Write as u8);
                 
-                for j in 0..256 {
-                    let offset = (i as usize * SECTOR_SIZE) + (j * 2);
-                    // Little endian word
-                    let word = (data[offset] as u16) | ((data[offset + 1] as u16) << 8);
-                    io::outw(self.port_base, word);
+                for i in 0..sectors {
+                    if !self.wait_for_interrupt() {
+                        success = false;
+                        break;
+                    }
+                    
+                    for j in 0..256 {
+                        let offset = (i as usize * SECTOR_SIZE) + (j * 2);
+                        // Little endian word
+                        let word = (data[offset] as u16) | ((data[offset + 1] as u16) << 8);
+                        io::outw(self.port_base, word);
+                    }
+                }
+                
+                if success {
+                    // Wait for last write to complete before flushing
+                    self.wait_busy();
+                    
+                    // Flush Cache
+                    io::outb(self.port_base + 7, Command::CacheFlush as u8);
+                    self.wait_busy();
+                    return;
                 }
             }
-            
-            // Wait for last write to complete before flushing
-            self.wait_busy();
-            
-            // Flush Cache
-            io::outb(self.port_base + 7, Command::CacheFlush as u8);
-            self.wait_busy();
+
+            crate::serial_println!("[ATA] Write failed at LBA {} (Attempt {}/3), retrying...", lba, attempt);
+        }
+    }
+
+    /// Blocks the current task and waits for the ATA interrupt to fire.
+    /// Returns true if the interrupt occurred, false if it timed out.
+    unsafe fn wait_for_interrupt(&self) -> bool {
+        let tid = crate::kernel::process::SCHEDULER.lock().get_current_task_id();
+        
+        if self.port_base == 0x1F0 {
+            PRIMARY_WAITING_TASK.store(tid, Ordering::SeqCst);
+        } else {
+            SECONDARY_WAITING_TASK.store(tid, Ordering::SeqCst);
+        }
+
+        // Use Sleeping state to handle timeout efficiently. 
+        // The scheduler will automatically wake us up after ATA_TIMEOUT_MS if no IRQ occurs.
+        crate::kernel::process::SCHEDULER.lock().sleep_current_task(ATA_TIMEOUT_MS);
+
+        // Perform an eager yield. This task will stop executing immediately and give up the CPU.
+        // It will resume here once the interrupt handler calls unblock_task or the timeout expires.
+        core::arch::asm!(
+            "pushfd", "push cs", "lea eax, [1f]", "push eax",
+            "push 0", "push ds", "push es", "push fs", "push gs", "pusha",
+            "mov eax, esp", "push eax",
+            "call {yield_now}",
+            "add esp, 4", "mov esp, eax",
+            "popa", "pop gs", "pop fs", "pop es", "pop ds", "add esp, 4", "iretd",
+            "1:",
+            yield_now = sym crate::kernel::process::yield_now,
+            out("eax") _,
+        );
+
+        // Check if we were resumed because the IRQ occurred (success) or because of a timeout.
+        if self.port_base == 0x1F0 {
+            PRIMARY_WAITING_TASK.swap(usize::MAX, Ordering::SeqCst) == usize::MAX
+        } else {
+            SECONDARY_WAITING_TASK.swap(usize::MAX, Ordering::SeqCst) == usize::MAX
         }
     }
 
@@ -114,6 +169,19 @@ impl AtaDrive {
             // BSY=0 and DRQ=1
             if (status & 0x80) == 0 && (status & 0x08) != 0 { break; }
             if (status & 0x01) != 0 { break; } // Error
+
+            // Yield to other tasks while waiting for the drive to become ready
+            core::arch::asm!(
+                "pushfd", "push cs", "lea eax, [1f]", "push eax",
+                "push 0", "push ds", "push es", "push fs", "push gs", "pusha",
+                "mov eax, esp", "push eax",
+                "call {yield_now}",
+                "add esp, 4", "mov esp, eax",
+                "popa", "pop gs", "pop fs", "pop es", "pop ds", "add esp, 4", "iretd",
+                "1:",
+                yield_now = sym crate::kernel::process::yield_now,
+                out("eax") _,
+            );
         }
     }
     
@@ -123,8 +191,44 @@ impl AtaDrive {
         loop {
             let status = io::inb(self.port_base + 7);
             if (status & 0x80) == 0 { break; }
-             if (status & 0x01) != 0 { break; }
+            if (status & 0x01) != 0 { break; }
+
+            // Yield to other tasks while the drive is busy
+            core::arch::asm!(
+                "pushfd", "push cs", "lea eax, [1f]", "push eax",
+                "push 0", "push ds", "push es", "push fs", "push gs", "pusha",
+                "mov eax, esp", "push eax",
+                "call {yield_now}",
+                "add esp, 4", "mov esp, eax",
+                "popa", "pop gs", "pop fs", "pop es", "pop ds", "add esp, 4", "iretd",
+                "1:",
+                yield_now = sym crate::kernel::process::yield_now,
+                out("eax") _,
+            );
         }
+    }
+}
+
+/// The ATA Interrupt Handler for IRQ 14 and 15.
+pub extern "x86-interrupt" fn interrupt_handler(_frame: &mut crate::kernel::interrupts::InterruptStackFrame) {
+    unsafe {
+        // Acknowledge the interrupt by reading the Status Register
+        io::inb(0x1F7); // Primary
+        io::inb(0x177); // Secondary
+
+        let p_task = PRIMARY_WAITING_TASK.swap(usize::MAX, Ordering::SeqCst);
+        if p_task != usize::MAX {
+            crate::kernel::process::SCHEDULER.lock().unblock_task(p_task);
+        }
+
+        let s_task = SECONDARY_WAITING_TASK.swap(usize::MAX, Ordering::SeqCst);
+        if s_task != usize::MAX {
+            crate::kernel::process::SCHEDULER.lock().unblock_task(s_task);
+        }
+
+        // Send EOI to PICs
+        io::outb(0x20, 0x20); // Master
+        io::outb(0xA0, 0x20); // Slave
     }
 }
 

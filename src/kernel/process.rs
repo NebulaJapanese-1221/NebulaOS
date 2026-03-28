@@ -321,7 +321,8 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
     let current_task_index = scheduler.current_index;
     if current_task_index < total_user_tasks {
         // The current task is a user task
-        scheduler.tasks[current_task_index].kernel_esp = current_esp;
+        let idx = scheduler.current_index;
+        scheduler.tasks[idx].kernel_esp = current_esp;
     } else {
         // The current task is the main kernel loop
         scheduler.kernel_esp = current_esp;

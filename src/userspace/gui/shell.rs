@@ -69,7 +69,7 @@ impl Shell {
             }
         } else {
             let mut x_offset = 120 + 10;
-            let button_width = 100;
+            let button_width: usize = 100;
             let taskbar_y = height.saturating_sub(self.taskbar_height) as isize;
             for win in windows {
                 let title = if font::string_width(win.title) > button_width.saturating_sub(8) {

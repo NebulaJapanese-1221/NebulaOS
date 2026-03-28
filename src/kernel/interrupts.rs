@@ -4,6 +4,11 @@ use super::io;
 
 // --- IDT Structures and functions ---
 
+extern "C" {
+    fn timer_handler();
+    fn schedule(esp: usize) -> usize;
+}
+
 #[derive(Debug, Clone, Copy)]
 #[repr(C, packed)]
 pub struct IdtEntry {
