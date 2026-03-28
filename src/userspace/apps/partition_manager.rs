@@ -178,7 +178,7 @@ impl App for PartitionManager {
         font::draw_string(fb, x + 230, y, "Size (MB)", header_color, None);
         
         y += font_height as isize + 5;
-        gui::draw_rect(fb, x, y, win.width - 20, 1, 0x00_80_80_80, None);
+        gui::draw_rect(fb, x, y, win.width.saturating_sub(20), 1, 0x00_80_80_80, None);
         y += 5;
 
         // Entries
@@ -199,13 +199,13 @@ impl App for PartitionManager {
 
         // File Browser Section
         y += 10;
-        gui::draw_rect(fb, x, y, win.width - 20, 1, 0x00_80_80_80, None); // Separator
+        gui::draw_rect(fb, x, y, win.width.saturating_sub(20), 1, 0x00_80_80_80, None); // Separator
         y += 5;
         font::draw_string(fb, x, y, "File Browser (Root)", 0x00_FF_FF_FF, None);
         y += font_height as isize + 5;
 
         // File List Background
-        gui::draw_rect(fb, x, y, win.width - 20, win.height.saturating_sub((y - win.y) as usize) - 10, 0x00_10_10_10, None);
+        gui::draw_rect(fb, x, y, win.width.saturating_sub(20), win.height.saturating_sub((y - win.y) as usize).saturating_sub(10), 0x00_10_10_10, None);
         y += 5;
         let file_x = x + 5;
 
@@ -216,7 +216,7 @@ impl App for PartitionManager {
         }
 
         // Toolbar at bottom
-        let toolbar_y = win.y + win.height as isize - 40;
+        let toolbar_y = win.y + (win.height as isize).saturating_sub(40);
         
         // Because draw() is immutable &self, we can't update the struct's button fields here directly 
         // if we want to store them. However, we can construct them just for drawing, 

@@ -13,67 +13,103 @@ pub struct Shell {
 }
 
 impl Shell {
+    pub fn is_vertical(&self, width: usize) -> bool {
+        width < 600
+    }
+
     pub fn draw(&self, fb: &mut framebuffer::Framebuffer, windows: &[Window], mouse_x: isize, mouse_y: isize, clip: Rect, start_menu_open: bool, context_menu: Option<(isize, isize)>) {
-        self.draw_taskbar(fb, windows, mouse_x, mouse_y, clip, start_menu_open);
+        let (width, height) = fb.info.as_ref().map(|i| (i.width, i.height)).unwrap_or((800, 600));
+        self.draw_taskbar(fb, windows, mouse_x, mouse_y, clip, start_menu_open, width, height);
         if start_menu_open {
-            self.draw_start_menu(fb, mouse_x, mouse_y, clip);
+            self.draw_start_menu(fb, mouse_x, mouse_y, clip, width, height);
         }
         if let Some((x, y)) = context_menu {
             self.draw_context_menu(fb, x, y, mouse_x, mouse_y, clip);
         }
     }
 
-    fn draw_taskbar(&self, fb: &mut framebuffer::Framebuffer, windows: &[Window], mouse_x: isize, mouse_y: isize, clip: Rect, start_menu_open: bool) {
-        let (width, height) = if let Some(ref info) = fb.info { (info.width, info.height) } else { return };
-        let taskbar_y = (height - self.taskbar_height) as isize;
+    fn draw_taskbar(&self, fb: &mut framebuffer::Framebuffer, windows: &[Window], mouse_x: isize, mouse_y: isize, clip: Rect, start_menu_open: bool, width: usize, height: usize) {
+        let is_vertical = self.is_vertical(width);
         let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
         
         let (bg_color, border_color) = if high_contrast { (0x00_00_00_00, 0x00_FF_FF_FF) } else { (0x00_28_28_28, 0x00_50_50_50) };
         
-        draw_rect(fb, 0, taskbar_y, width, self.taskbar_height, bg_color, Some(clip));
-        draw_rect(fb, 0, taskbar_y, width, 1, border_color, Some(clip));
+        if is_vertical {
+            draw_rect(fb, 0, 0, self.taskbar_height, height, bg_color, Some(clip));
+            draw_rect(fb, self.taskbar_height as isize - 1, 0, 1, height, border_color, Some(clip));
+        } else {
+            let taskbar_y = height.saturating_sub(self.taskbar_height) as isize;
+            draw_rect(fb, 0, taskbar_y, width, self.taskbar_height, bg_color, Some(clip));
+            draw_rect(fb, 0, taskbar_y, width, 1, border_color, Some(clip));
+        }
 
-        let start_button_width = 120;
         let locale_guard = localisation::CURRENT_LOCALE.lock();
         let locale = locale_guard.as_ref().unwrap();
-        let mut start_button = Button::new(0, taskbar_y, start_button_width, self.taskbar_height, locale.start());
+
+        let (start_x, start_y, start_w) = if is_vertical {
+            (0, 0, self.taskbar_height)
+        } else {
+            (0, height.saturating_sub(self.taskbar_height) as isize, 120usize)
+        };
+
+        let mut start_button = Button::new(start_x, start_y, start_w, self.taskbar_height, locale.start());
         start_button.bg_color = if start_menu_open { 0x00_40_40_40 } else { 0x00_30_30_30 };
         start_button.text_color = 0x00_FF_FF_FF;
         start_button.draw(fb, mouse_x, mouse_y, Some(clip));
 
-        let mut x_offset = start_button_width as isize + 10;
-        let button_width = 100;
-        for win in windows {
-            let title = if font::string_width(win.title) > button_width - 8 {
-                let mut current_width = 0;
-                let mut end_char_idx = 0;
-                for (i, c) in win.title.char_indices() {
-                    let char_width = if c.is_ascii() { 8 } else { 16 };
-                    if current_width + char_width > button_width - 16 { break; }
-                    current_width += char_width;
-                    end_char_idx = i + c.len_utf8();
-                }
-                alloc::format!("{}...", &win.title[..end_char_idx])
-            } else { win.title.to_string() };
+        if is_vertical {
+            let mut y_offset = 45;
+            for win in windows {
+                let title = win.title.chars().next().map(|c| &win.title[0..c.len_utf8()]).unwrap_or("?");
+                let mut button = Button::new(2, y_offset, self.taskbar_height.saturating_sub(4), 30, title);
+                button.bg_color = if win.minimized { 0x00_30_30_30 } else { 0x00_50_50_50 };
+                button.text_color = 0x00_FF_FF_FF;
+                button.draw(fb, mouse_x, mouse_y, Some(clip));
+                y_offset += 35;
+            }
+        } else {
+            let mut x_offset = 120 + 10;
+            let button_width = 100;
+            let taskbar_y = height.saturating_sub(self.taskbar_height) as isize;
+            for win in windows {
+                let title = if font::string_width(win.title) > button_width.saturating_sub(8) {
+                    let mut current_width = 0;
+                    let mut end_char_idx = 0;
+                    for (i, c) in win.title.char_indices() {
+                        let char_width = if c.is_ascii() { 8 } else { 16 };
+                        if current_width + char_width > button_width.saturating_sub(16) { break; }
+                        current_width += char_width;
+                        end_char_idx = i + c.len_utf8();
+                    }
+                    alloc::format!("{}...", &win.title[..end_char_idx])
+                } else { win.title.to_string() };
 
-            let mut button = Button::new(x_offset, taskbar_y + 2, button_width, self.taskbar_height - 4, title.as_str());
-            button.bg_color = if win.minimized { 0x00_30_30_30 } else { 0x00_50_50_50 };
-            button.text_color = 0x00_FF_FF_FF;
-            button.draw(fb, mouse_x, mouse_y, Some(clip));
-            x_offset += button_width as isize + 5;
+                let mut button = Button::new(x_offset, taskbar_y + 2, button_width, self.taskbar_height.saturating_sub(4), title.as_str());
+                button.bg_color = if win.minimized { 0x00_30_30_30 } else { 0x00_50_50_50 };
+                button.text_color = 0x00_FF_FF_FF;
+                button.draw(fb, mouse_x, mouse_y, Some(clip));
+                x_offset += button_width as isize + 5;
+            }
         }
-        self.draw_clock_on_taskbar(fb, clip);
+        self.draw_clock_on_taskbar(fb, clip, width, height);
     }
 
-    fn draw_clock_on_taskbar(&self, fb: &mut framebuffer::Framebuffer, clip: Rect) {
-        if let Some((width, height)) = fb.info.as_ref().map(|i| (i.width, i.height)) {
-            let taskbar_y = (height - self.taskbar_height) as isize;
-            let bg_color = if HIGH_CONTRAST.load(Ordering::Relaxed) { 0x00_00_00_00 } else { 0x00_28_28_28 };
-            let time_area_width = (8 * 8) + 20;
-            let time_x_start = width as isize - time_area_width;
-            draw_rect(fb, time_x_start, taskbar_y + 1, time_area_width as usize, self.taskbar_height - 1, bg_color, Some(clip));
+    fn draw_clock_on_taskbar(&self, fb: &mut framebuffer::Framebuffer, clip: Rect, width: usize, height: usize) {
+        let is_vertical = self.is_vertical(width);
+        let bg_color = if HIGH_CONTRAST.load(Ordering::Relaxed) { 0x00_00_00_00 } else { 0x00_28_28_28 };
+        let time = CURRENT_DATETIME.lock();
 
-            let time = CURRENT_DATETIME.lock();
+        if is_vertical {
+            let time_y = height.saturating_sub(30) as isize;
+            draw_rect(fb, 0, time_y, self.taskbar_height, 30, bg_color, Some(clip));
+            let time_s = alloc::format!("{:02}:{:02}", time.hour, time.minute);
+            font::draw_string(fb, 2, time_y + 8, &time_s, 0x00_FF_FF_FF, Some(clip));
+        } else {
+            let taskbar_y = height.saturating_sub(self.taskbar_height) as isize;
+            let time_area_width = (8 * 8) + 20;
+            let time_x_start = (width as isize).saturating_sub(time_area_width);
+            draw_rect(fb, time_x_start, taskbar_y + 1, time_area_width as usize, self.taskbar_height.saturating_sub(1), bg_color, Some(clip));
+
             let mut time_str_bytes = [b' '; 8];
             time_str_bytes[0] = b'0' + (time.hour / 10); time_str_bytes[1] = b'0' + (time.hour % 10);
             time_str_bytes[2] = b':';
@@ -81,35 +117,38 @@ impl Shell {
             time_str_bytes[5] = b':';
             time_str_bytes[6] = b'0' + (time.second / 10); time_str_bytes[7] = b'0' + (time.second % 10);
             let time_s = core::str::from_utf8(&time_str_bytes).unwrap_or("??:??:??");
-            font::draw_string(fb, width as isize - (8 * 8) - 10, taskbar_y + 12, time_s, 0x00_FF_FF_FF, Some(clip));
+            font::draw_string(fb, (width as isize).saturating_sub(64 + 10), taskbar_y + 12, time_s, 0x00_FF_FF_FF, Some(clip));
         }
     }
 
-    pub fn draw_start_menu(&self, fb: &mut framebuffer::Framebuffer, mouse_x: isize, mouse_y: isize, clip: Rect) {
-        let height = if let Some(ref info) = fb.info { info.height } else { return };
-        let menu_y = (height - self.taskbar_height - self.start_menu.height) as isize;
+    pub fn draw_start_menu(&self, fb: &mut framebuffer::Framebuffer, mouse_x: isize, mouse_y: isize, clip: Rect, width: usize, height: usize) {
+        let is_vertical = self.is_vertical(width);
+        let menu_rect = self.start_menu.rect(height as isize, self.taskbar_height, is_vertical);
+        let menu_x = menu_rect.x;
+        let menu_y = menu_rect.y;
+
         let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
         let bg_color = if high_contrast { 0x00_00_00_00 } else { 0x00_C0_C0_C0 };
         let border_color = if high_contrast { 0x00_FF_FF_FF } else { 0x00_C0_C0_C0 };
 
-        draw_rect(fb, 0, menu_y, self.start_menu.width, self.start_menu.height, bg_color, Some(clip));
+        draw_rect(fb, menu_x, menu_y, self.start_menu.width, self.start_menu.height, bg_color, Some(clip));
         if high_contrast {
-            draw_rect(fb, 0, menu_y, self.start_menu.width, 1, border_color, Some(clip));
-            draw_rect(fb, 0, menu_y, 1, self.start_menu.height, border_color, Some(clip));
-            draw_rect(fb, self.start_menu.width as isize - 1, menu_y, 1, self.start_menu.height, border_color, Some(clip));
-            draw_rect(fb, 0, menu_y + self.start_menu.height as isize - 1, self.start_menu.width, 1, border_color, Some(clip));
+            draw_rect(fb, menu_x, menu_y, self.start_menu.width, 1, border_color, Some(clip));
+            draw_rect(fb, menu_x, menu_y, 1, self.start_menu.height, border_color, Some(clip));
+            draw_rect(fb, menu_x + self.start_menu.width as isize - 1, menu_y, 1, self.start_menu.height, border_color, Some(clip));
+            draw_rect(fb, menu_x, menu_y + self.start_menu.height as isize - 1, self.start_menu.width, 1, border_color, Some(clip));
         }
 
         let item_width = self.start_menu.width - 20;
         let search_y = menu_y + 10;
-        draw_rect(fb, 10, search_y, item_width, 25, 0x00_FFFFFF, Some(clip));
-        font::draw_string(fb, 15, search_y + 5, self.start_menu.search_query.as_str(), 0x00_00_00_00, Some(clip));
+        draw_rect(fb, menu_x + 10, search_y, item_width, 25, 0x00_FFFFFF, Some(clip));
+        font::draw_string(fb, menu_x + 15, search_y + 5, self.start_menu.search_query.as_str(), 0x00_00_00_00, Some(clip));
 
         let app_list = self.get_start_menu_data();
         let mut draw_y = menu_y + 45;
         for (i, &real_idx) in self.start_menu.filtered_indices.iter().enumerate() {
             let (text, color) = app_list[real_idx];
-            let mut btn = Button::new(10, draw_y, item_width, 30, text);
+            let mut btn = Button::new(menu_x + 10, draw_y, item_width, 30, text);
             btn.bg_color = if i == self.start_menu.selected_index { 0x00_40_60_90 } else { color };
             btn.draw(fb, mouse_x, mouse_y, Some(clip));
             draw_y += 35;
@@ -193,12 +232,21 @@ impl StartMenu {
         }
     }
 
-    pub fn rect(&self, screen_height: isize, taskbar_height: usize) -> Rect {
-        Rect {
-            x: 0,
-            y: screen_height - taskbar_height as isize - self.height as isize,
-            width: self.width,
-            height: self.height,
+    pub fn rect(&self, screen_height: isize, taskbar_height: usize, is_vertical: bool) -> Rect {
+        if is_vertical {
+            Rect {
+                x: taskbar_height as isize,
+                y: 0,
+                width: self.width,
+                height: self.height,
+            }
+        } else {
+            Rect {
+                x: 0,
+                y: screen_height - taskbar_height as isize - self.height as isize,
+                width: self.width,
+                height: self.height,
+            }
         }
     }
 }

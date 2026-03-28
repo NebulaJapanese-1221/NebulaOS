@@ -56,12 +56,20 @@ impl<'a, T> Drop for IrqSafeGuard<'a, T> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskState {
+    Ready,
+    Sleeping,
+    Blocked,
+}
+
 pub struct Task {
     pub id: usize,
     pub kernel_stack: Vec<u8>,
     pub kernel_esp: usize,
     pub priority: usize,
     pub sleep_until: Option<usize>,
+    pub state: TaskState,
 }
 
 pub struct Scheduler {
@@ -128,6 +136,7 @@ impl Scheduler {
             kernel_stack: stack,
             kernel_esp: sp,
             priority,
+            state: TaskState::Ready,
             sleep_until: None,
         });
     }
@@ -143,6 +152,11 @@ impl Scheduler {
         }
     }
 
+    /// Returns the priority of a given task.
+    pub fn get_task_priority(&self, task_id: usize) -> Option<usize> {
+        self.tasks.iter().find(|t| t.id == task_id).map(|t| t.priority)
+    }
+
     /// Returns the ID of the currently running task.
     pub fn get_current_task_id(&self) -> usize {
         if self.current_index < self.tasks.len() {
@@ -156,13 +170,98 @@ impl Scheduler {
     pub fn sleep_current_task(&mut self, ms: usize) {
         if self.current_index < self.tasks.len() {
             let until = TICKS.load(Ordering::Relaxed) + ms;
-            self.tasks[self.current_index].sleep_until = Some(until);
+            let task = &mut self.tasks[self.current_index];
+            task.sleep_until = Some(until);
+            task.state = TaskState::Sleeping;
+        }
+    }
+
+    /// Marks the current task as blocked (waiting for I/O).
+    pub fn block_current_task(&mut self) {
+        if self.current_index < self.tasks.len() {
+            self.tasks[self.current_index].state = TaskState::Blocked;
+        }
+    }
+
+    /// Unblocks a specific task, making it eligible for scheduling again.
+    pub fn unblock_task(&mut self, task_id: usize) {
+        if let Some(task) = self.tasks.iter_mut().find(|t| t.id == task_id) {
+            task.state = TaskState::Ready;
+        }
+    }
+
+    /// Picks the next task to run based on priority and state.
+    fn pick_next(&mut self) {
+        let total_user_tasks = self.tasks.len();
+        const KERNEL_PRIORITY: usize = 10;
+
+        // Find the maximum priority level among all ready tasks
+        let mut max_priority = KERNEL_PRIORITY;
+        for task in &self.tasks {
+            if task.state == TaskState::Ready && task.priority > max_priority {
+                max_priority = task.priority;
+            }
+        }
+
+        // Round-robin selection among tasks with max_priority
+        let start_search = (self.current_index + 1) % (total_user_tasks + 1);
+        for i in 0..=(total_user_tasks) {
+            let idx = (start_search + i) % (total_user_tasks + 1);
+            let (task_prio, is_ready) = if idx < total_user_tasks {
+                (self.tasks[idx].priority, self.tasks[idx].state == TaskState::Ready)
+            } else {
+                (KERNEL_PRIORITY, true)
+            };
+
+            if is_ready && task_prio == max_priority {
+                self.current_index = idx;
+                break;
+            }
         }
     }
 }
 
 pub static SCHEDULER: IrqSafeMutex<Scheduler> = IrqSafeMutex::new(Scheduler::new());
 pub static TICKS: AtomicUsize = AtomicUsize::new(0);
+
+/// Voluntary task yield. Saves current state and switches to the next task.
+pub fn yield_now(current_esp: usize) -> usize {
+    let mut scheduler = SCHEDULER.lock();
+    let total_user_tasks = scheduler.tasks.len();
+    if total_user_tasks == 0 { return current_esp; }
+
+    // Save result 0 for the yielding task so the syscall returns 0 from its perspective upon resume
+    unsafe { *((current_esp + 28) as *mut usize) = 0; }
+
+    // Update CPU usage tracking
+    let now = crate::kernel::cpu::read_tsc();
+    if scheduler.last_tsc > 0 && now > scheduler.last_tsc {
+        let delta = now - scheduler.last_tsc;
+        let is_kernel = scheduler.current_index >= total_user_tasks;
+        let was_idle = is_kernel && crate::kernel::cpu::IS_IDLE.load(Ordering::Relaxed);
+        crate::kernel::cpu::accumulate_usage(delta, was_idle);
+    }
+    scheduler.last_tsc = now;
+
+    // Save current ESP
+    if scheduler.current_index < total_user_tasks {
+        scheduler.tasks[scheduler.current_index].kernel_esp = current_esp;
+    } else {
+        scheduler.kernel_esp = current_esp;
+    }
+
+    scheduler.pick_next();
+
+    // Switch to new stack
+    if scheduler.current_index < total_user_tasks {
+        let next_task = &scheduler.tasks[scheduler.current_index];
+        let kstack_top = next_task.kernel_stack.as_ptr() as usize + next_task.kernel_stack.len();
+        crate::kernel::gdt::set_interrupt_stack(kstack_top as u32);
+        next_task.kernel_esp
+    } else {
+        scheduler.kernel_esp
+    }
+}
 
 /// Called by the assembly timer handler. 
 /// Updates the scheduler and returns the ESP of the next task.
@@ -181,9 +280,12 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
 
     // 1.5 Wake up tasks that have finished sleeping
     for task in &mut scheduler.tasks {
-        if let Some(until) = task.sleep_until {
-            if current_ticks >= until {
-                task.sleep_until = None;
+        if task.state == TaskState::Sleeping {
+            if let Some(until) = task.sleep_until {
+                if current_ticks >= until {
+                    task.state = TaskState::Ready;
+                    task.sleep_until = None;
+                }
             }
         }
     }
@@ -226,29 +328,7 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
     }
 
     // 3. Priority-based Selection
-    // Find the maximum priority level among all tasks (including the kernel loop)
-    let mut max_priority = KERNEL_PRIORITY;
-    for task in &scheduler.tasks {
-        if task.sleep_until.is_none() && task.priority > max_priority {
-            max_priority = task.priority;
-        }
-    }
-
-    // Find the next task in round-robin order that matches the highest priority
-    let start_search = (scheduler.current_index + 1) % (total_user_tasks + 1);
-    for i in 0..=(total_user_tasks) {
-        let idx = (start_search + i) % (total_user_tasks + 1);
-        let (task_prio, is_ready) = if idx < total_user_tasks {
-            (scheduler.tasks[idx].priority, scheduler.tasks[idx].sleep_until.is_none())
-        } else {
-            (KERNEL_PRIORITY, true)
-        };
-
-        if is_ready && task_prio == max_priority {
-            scheduler.current_index = idx;
-            break;
-        }
-    }
+    scheduler.pick_next();
 
     // 4. Get ESP of the task we are switching TO
     if scheduler.current_index < total_user_tasks {

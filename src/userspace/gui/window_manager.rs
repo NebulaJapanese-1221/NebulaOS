@@ -124,6 +124,7 @@ impl WindowManager {
         }
 
         let (screen_width, screen_height) = if let Some(info) = FRAMEBUFFER.lock().info.as_ref() { (info.width as isize, info.height as isize) } else { (800, 600) };
+        let is_vertical = self.shell.is_vertical(screen_width as usize);
         let start_interaction_id = self.resize_win_id;
         let start_interaction_rect = start_interaction_id.and_then(|id| self.get_window_rect(id));
 
@@ -168,14 +169,14 @@ impl WindowManager {
                         if let Some(r) = rect_to_mark { self.mark_dirty(r); }
                     }
                 }
-                InputEvent::MouseButton { button, down, x, y } => { self.input.mouse_x = x; self.input.mouse_y = y; self.handle_mouse_button_event(button, down, screen_height); }
+                InputEvent::MouseButton { button, down, x, y } => { self.input.mouse_x = x; self.input.mouse_y = y; self.handle_mouse_button_event(button, down, screen_width, screen_height); }
                 InputEvent::KeyPress { key } => {
                     if key == '\x1F' {
                         self.shell.start_menu.toggle();
                         self.update_start_menu_filter();
-                        self.mark_dirty(self.shell.start_menu.rect(screen_height, self.shell.taskbar_height));
+                        self.mark_dirty(self.shell.start_menu.rect(screen_height, self.shell.taskbar_height, is_vertical));
                     } else if self.shell.start_menu.is_open {
-                        self.handle_start_menu_keys(key, screen_height);
+                        self.handle_start_menu_keys(key, screen_height, is_vertical);
                     } else if key == '\t' && self.input.alt_pressed {
                         if !self.task_switcher_open { self.task_switcher_open = true; self.task_switcher_index = 0; self.mark_dirty(Rect { x: 0, y: 0, width: screen_width as usize, height: screen_height as usize }); }
                         if !self.windows.is_empty() { self.task_switcher_index = (self.task_switcher_index + 1) % self.windows.len(); }
@@ -209,8 +210,8 @@ impl WindowManager {
         if !self.dirty_rects.is_empty() { self.draw_dirty(); }
     }
 
-    fn handle_start_menu_keys(&mut self, key: char, screen_height: isize) {
-        let menu_rect = self.shell.start_menu.rect(screen_height, self.shell.taskbar_height);
+    fn handle_start_menu_keys(&mut self, key: char, screen_height: isize, is_vertical: bool) {
+        let menu_rect = self.shell.start_menu.rect(screen_height, self.shell.taskbar_height, is_vertical);
         if key == '\x08' { self.shell.start_menu.search_query.pop(); self.update_start_menu_filter(); }
         else if key == '\x11' { let c = self.shell.start_menu.filtered_indices.len(); if c > 0 { self.shell.start_menu.selected_index = (self.shell.start_menu.selected_index + c - 1) % c; } }
         else if key == '\x12' { let c = self.shell.start_menu.filtered_indices.len(); if c > 0 { self.shell.start_menu.selected_index = (self.shell.start_menu.selected_index + 1) % c; } }
@@ -242,86 +243,104 @@ impl WindowManager {
         }
     }
 
-    fn handle_mouse_button_event(&mut self, button: MouseButton, down: bool, screen_height: isize) {
-        let taskbar_y = screen_height - self.shell.taskbar_height as isize;
+    fn handle_mouse_button_event(&mut self, button: MouseButton, down: bool, screen_width: isize, screen_height: isize) {
+        let is_vertical = self.shell.is_vertical(screen_width as usize);
+        let on_taskbar = if is_vertical {
+            self.input.mouse_x < self.shell.taskbar_height as isize
+        } else {
+            self.input.mouse_y >= screen_height - self.shell.taskbar_height as isize
+        };
+
         if let (MouseButton::Right, true) = (button, down) {
-            if self.input.mouse_y < taskbar_y {
+            if !on_taskbar {
                 if self.context_menu_open { self.mark_dirty(Rect { x: self.context_menu_x, y: self.context_menu_y, width: 150, height: 100 }); }
                 self.context_menu_open = true; self.context_menu_x = self.input.mouse_x; self.context_menu_y = self.input.mouse_y; self.shell.start_menu.is_open = false;
                 self.mark_dirty(Rect { x: self.context_menu_x, y: self.context_menu_y, width: 150, height: 100 });
             }
         }
         if let (MouseButton::Left, true) = (button, down) {
-            self.handle_left_click(screen_height, taskbar_y);
+            self.handle_left_click(screen_width, screen_height);
         } else if let (MouseButton::Left, false) = (button, down) {
             self.handle_left_release();
         }
     }
 
-    fn handle_left_click(&mut self, screen_height: isize, taskbar_y: isize) {
+    fn handle_left_click(&mut self, screen_width: isize, screen_height: isize) {
         let locale_guard = localisation::CURRENT_LOCALE.lock();
         let locale = locale_guard.as_ref().unwrap();
+        let is_vertical = self.shell.is_vertical(screen_width as usize);
+        let tb_thickness = self.shell.taskbar_height as isize;
 
         // 1. Check for click on start button
-        let start_button = Button::new(0, taskbar_y, 120, self.shell.taskbar_height, locale.start());
+        let (start_x, start_y, start_w) = if is_vertical { (0, 0, self.shell.taskbar_height) } else { (0, screen_height.saturating_sub(tb_thickness), 120usize) };
+        let start_button = Button::new(start_x, start_y, start_w, self.shell.taskbar_height, locale.start());
         if start_button.contains(self.input.mouse_x, self.input.mouse_y) {
             self.shell.start_menu.toggle();
             self.update_start_menu_filter();
-            self.mark_dirty(self.shell.start_menu.rect(screen_height, self.shell.taskbar_height));
+            self.mark_dirty(self.shell.start_menu.rect(screen_height, self.shell.taskbar_height, is_vertical));
             return;
         }
 
         // 2. Taskbar Window List Click
-        if self.input.mouse_y >= taskbar_y && self.input.mouse_x >= 120 {
-            let mut x_offset = 120 + 10;
-            let button_width = 100;
-            let mut clicked_win_id = None;
-
-            for win in &self.windows {
-                let button = Button::new(x_offset, taskbar_y + 2, button_width, self.shell.taskbar_height - 4, "");
-                if button.contains(self.input.mouse_x, self.input.mouse_y) {
-                    clicked_win_id = Some(win.id);
-                    break;
+        let mut clicked_win_id = None;
+        if is_vertical {
+            if self.input.mouse_x < tb_thickness && self.input.mouse_y >= 40 {
+                let mut y_offset = 45;
+                for win in &self.windows {
+                    let btn = Button::new(2, y_offset, self.shell.taskbar_height.saturating_sub(4), 30, "");
+                    if btn.contains(self.input.mouse_x, self.input.mouse_y) { clicked_win_id = Some(win.id); break; }
+                    y_offset += 35;
                 }
-                x_offset += (button_width + 5) as isize;
             }
-
-            if let Some(win_id) = clicked_win_id {
-                let (is_minimized, is_top) = {
-                    let win = self.windows.iter().find(|w| w.id == win_id).unwrap();
-                    (win.minimized, self.z_order.last() == Some(&win_id))
-                };
-
-                if let Some(rect) = self.get_window_rect(win_id) { self.mark_dirty(rect); }
-
-                if is_minimized {
-                    self.windows.iter_mut().find(|w| w.id == win_id).unwrap().minimized = false;
-                    if let Some(pos) = self.z_order.iter().position(|&i| i == win_id) {
-                        let id = self.z_order.remove(pos);
-                        self.z_order.push(id);
-                    }
-                } else if is_top {
-                    self.windows.iter_mut().find(|w| w.id == win_id).unwrap().minimized = true;
-                } else {
-                    if let Some(pos) = self.z_order.iter().position(|&i| i == win_id) {
-                        let id = self.z_order.remove(pos);
-                        self.z_order.push(id);
-                    }
+        } else {
+            let taskbar_y = screen_height.saturating_sub(tb_thickness);
+            if self.input.mouse_y >= taskbar_y && self.input.mouse_x >= 120 {
+                let mut x_offset = 120 + 10;
+                for win in &self.windows {
+                    let btn = Button::new(x_offset, taskbar_y + 2, 100, self.shell.taskbar_height - 4, "");
+                    if btn.contains(self.input.mouse_x, self.input.mouse_y) { clicked_win_id = Some(win.id); break; }
+                    x_offset += 105;
                 }
-                self.mark_dirty(Rect { x: 0, y: taskbar_y, width: 800, height: self.shell.taskbar_height });
-                return;
             }
         }
 
+        if let Some(win_id) = clicked_win_id {
+            let (is_minimized, is_top) = {
+                let win = self.windows.iter().find(|w| w.id == win_id).unwrap();
+                (win.minimized, self.z_order.last() == Some(&win_id))
+            };
+
+            if let Some(rect) = self.get_window_rect(win_id) { self.mark_dirty(rect); }
+
+            if is_minimized {
+                self.windows.iter_mut().find(|w| w.id == win_id).unwrap().minimized = false;
+                if let Some(pos) = self.z_order.iter().position(|&i| i == win_id) {
+                    let id = self.z_order.remove(pos);
+                    self.z_order.push(id);
+                }
+            } else if is_top {
+                self.windows.iter_mut().find(|w| w.id == win_id).unwrap().minimized = true;
+            } else {
+                if let Some(pos) = self.z_order.iter().position(|&i| i == win_id) {
+                    let id = self.z_order.remove(pos);
+                    self.z_order.push(id);
+                }
+            }
+            let tb_rect = if is_vertical { Rect { x: 0, y: 0, width: self.shell.taskbar_height, height: screen_height as usize } } else { Rect { x: 0, y: screen_height.saturating_sub(tb_thickness), width: screen_width as usize, height: self.shell.taskbar_height } };
+            self.mark_dirty(tb_rect);
+            return;
+        }
+
         // 3. Start Menu Item Click
-        if self.shell.start_menu.is_open && self.input.mouse_x < self.shell.start_menu.width as isize && self.input.mouse_y < taskbar_y {
-            let menu_rect = self.shell.start_menu.rect(screen_height, self.shell.taskbar_height);
+        let menu_rect = self.shell.start_menu.rect(screen_height, self.shell.taskbar_height, is_vertical);
+        if self.shell.start_menu.is_open && menu_rect.contains(self.input.mouse_x, self.input.mouse_y) {
             let mut draw_y = menu_rect.y + 45;
+            let menu_x = menu_rect.x;
             let app_list = self.shell.get_start_menu_data();
             
             let mut clicked_idx = None;
             for &real_idx in &self.shell.start_menu.filtered_indices {
-                let btn = Button::new(10, draw_y, self.shell.start_menu.width - 20, 30, app_list[real_idx].0);
+                let btn = Button::new(menu_x + 10, draw_y, self.shell.start_menu.width - 20, 30, app_list[real_idx].0);
                 if btn.contains(self.input.mouse_x, self.input.mouse_y) {
                     clicked_idx = Some(real_idx);
                     break;
@@ -465,7 +484,7 @@ impl WindowManager {
         draw_rect(fb, win.x, win.y, win.width, title_height, if is_active { 0x00_00_40_80 } else { 0x00_40_40_40 }, Some(clip));
         font::draw_string(fb, win.x + 6, win.y + 4, win.title, 0x00_FFFFFF, Some(clip));
         if let WindowContent::App(app) = &win.content {
-            let cr = clip.intersection(&Rect { x: win.x, y: win.y + title_height as isize, width: win.width, height: win.height - title_height }).unwrap();
+            let cr = clip.intersection(&Rect { x: win.x, y: win.y + title_height as isize, width: win.width, height: win.height.saturating_sub(title_height) }).unwrap();
             fb.set_clip(cr.x as usize, cr.y as usize, cr.width, cr.height);
             app.draw(fb, win);
             fb.clear_clip();
@@ -489,7 +508,7 @@ impl WindowManager {
                 let mut draw_w = CURSOR_WIDTH as isize;
                 let mut start_x = 0;
                 if cx < 0 { start_x = -cx; draw_w += cx; }
-                if cx + (CURSOR_WIDTH as isize) > width { draw_w = (width - cx).max(0); }
+                if cx + (CURSOR_WIDTH as isize) > width { draw_w = width.saturating_sub(cx).max(0); }
                 if draw_w <= 0 { continue; }
 
                 unsafe {
@@ -527,7 +546,7 @@ impl WindowManager {
             let mut read_w = CURSOR_WIDTH as isize;
             let mut start_x = 0;
             if cx < 0 { start_x = -cx; read_w += cx; }
-            if cx + (CURSOR_WIDTH as isize) > width { read_w = (width - cx).max(0); }
+            if cx + (CURSOR_WIDTH as isize) > width { read_w = width.saturating_sub(cx).max(0); }
             
             if read_w > 0 {
                 unsafe {

@@ -117,6 +117,11 @@ pub fn init() {
         let func_addr = crate::drivers::mouse::interrupt_handler as *const () as u32;
         set_idt_entry(44, func_addr, 0x08, 0x8E);
 
+        // 5. Add ATA Handlers (IRQ 14 and 15)
+        let ata_func = crate::drivers::ata::interrupt_handler as *const () as u32;
+        set_idt_entry(46, ata_func, 0x08, 0x8E); // Primary
+        set_idt_entry(47, ata_func, 0x08, 0x8E); // Secondary
+
         // 5. Add Syscall Handler (0x80)
         // Type 0xEE = Present, Ring3 (DPL=3), 32-bit Interrupt Gate (allows calling from userspace)
         set_idt_entry(0x80, crate::kernel::syscall::syscall_handler as *const () as u32, 0x08, 0xEE);
@@ -163,8 +168,8 @@ unsafe fn init_pics() {
     // Restore masks (or set to 0 to enable all)
     // Mask all interrupts except for the keyboard (IRQ 1) and the mouse (IRQ 12).
     // The cascade from master to slave (IRQ 2) must also be unmasked.
-    io::outb(0x21, 0b11111000); // Master: Unmask IRQ0 (timer), IRQ1 (keyboard), and IRQ2 (cascade)
-    io::outb(0xA1, 0b11101111); // Slave: Unmask IRQ12 (mouse)
+    io::outb(0x21, 0b11111000); // Master: Unmask IRQ0, IRQ1, IRQ2
+    io::outb(0xA1, 0b10001111); // Slave: Unmask IRQ12, IRQ14, IRQ15
 }
 
 // Naked assembly handler for the Timer Interrupt (IRQ 0)

@@ -11,16 +11,16 @@ use core::arch::asm;
 /// ebx, ecx, edx: Arguments 1, 2, 3
 #[no_mangle]
 pub extern "C" fn syscall_dispatcher(
+    esp: usize,
     eax: usize,
     ebx: usize,
     ecx: usize,
-    _edx: usize
+    edx: usize
 ) -> usize {
-    match eax {
+    let result = match eax {
         0 => {
-            // Syscall 0: Yield / Sleep
-            unsafe { asm!("hlt") };
-            0
+            // Syscall 0: Yield
+            return crate::kernel::process::yield_now(esp);
         }
         1 => {
             // Syscall 1: Print (ebx = ptr, ecx = len)
@@ -66,13 +66,33 @@ pub extern "C" fn syscall_dispatcher(
         5 => {
             // Syscall 5: Sleep (ebx = ms)
             crate::kernel::process::SCHEDULER.lock().sleep_current_task(ebx);
-            0
+            return crate::kernel::process::yield_now(esp);
+        }
+        6 => {
+            // Syscall 6: Get Task Priority (ebx = task_id)
+            let task_id = ebx;
+            if let Some(priority) = crate::kernel::process::SCHEDULER.lock().get_task_priority(task_id) {
+                priority
+            } else {
+                usize::MAX
+            }
+        }
+        7 => {
+            // Syscall 7: Get CPU Usage
+            // Returns the current CPU usage percentage (0-100)
+            crate::kernel::cpu::CPU_USAGE.load(core::sync::atomic::Ordering::Relaxed)
         }
         _ => {
             crate::serial_println!("Unknown Syscall: {}", eax);
             usize::MAX
         }
+    };
+
+    // For non-yielding syscalls, write the result to the EAX slot on the stack
+    unsafe {
+        *((esp + 28) as *mut usize) = result;
     }
+    esp
 }
 
 // --- Assembly Handler ---
@@ -107,15 +127,16 @@ core::arch::global_asm!(
     "push [ebp + 24]",  // Arg 2: ecx
     "push [ebp + 16]",  // Arg 1: ebx
     "push [ebp + 28]",  // Arg 0: eax
+    "push ebp",         // Arg: current_esp
 
     // 5. Call the dispatcher
     "call syscall_dispatcher",
 
-    // 6. Cleanup arguments (4 * 4 bytes)
-    "add esp, 16",
+    // 6. Cleanup arguments (5 * 4 bytes)
+    "add esp, 20",
 
-    // 7. Save the return value into the EAX slot on the stack so `popa` restores it.
-    "mov [ebp + 28], eax",
+    // 7. Switch stack to the returned ESP (allows yielding to new tasks)
+    "mov esp, eax",
 
     // 8. Restore all registers and return from interrupt
     "popa",
