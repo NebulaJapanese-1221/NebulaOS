@@ -9,6 +9,7 @@
 - Added keyboard navigation (Arrow keys + Enter) to the Start Menu.
 - Added search bar to the Start Menu with real-time application filtering.
 - Added a clear button to the Start Menu search bar for quick reset.
+- Implemented initial USB Host Controller support (UHCI) for peripheral discovery.
 - Fixed alignment issues for filesystem structures on 32-bit targets.
 
 ## v0.0.3-dev (03-22-2026)

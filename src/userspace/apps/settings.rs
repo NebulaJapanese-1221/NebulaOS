@@ -5,7 +5,7 @@ use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::ToString;
 use core::sync::atomic::Ordering;
-use crate::userspace::gui::{DESKTOP_GRADIENT_START, DESKTOP_GRADIENT_END, FULL_REDRAW_REQUESTED, HIGH_CONTRAST, LARGE_TEXT};
+use crate::userspace::gui::{DESKTOP_GRADIENT_START, DESKTOP_GRADIENT_END, FULL_REDRAW_REQUESTED, HIGH_CONTRAST, LARGE_TEXT, MOUSE_SENSITIVITY};
 use crate::userspace::localisation::{self, Language};
 use crate::kernel::cpu::CPU_BRAND;
 
@@ -129,6 +129,20 @@ impl Settings {
                 let btn_lt = Button { rect: Rect { x: content_x, y: content_y + (font_height as isize + 4) * 2 + 5, width: 280, height: (font_height + 4) }, text: btn_lt_text, bg_color: 0x00_30_30_30, text_color: 0xFFFFFF };
                 btn_hc.draw(fb, 0, 0, None);
                 btn_lt.draw(fb, 0, 0, None);
+
+                // Mouse Sensitivity Slider
+                let slider_y = content_y + (font_height as isize + 4) * 3 + 20;
+                font::draw_string(fb, content_x, slider_y, "Mouse Speed:", 0x00_FF_FF_FF, None);
+                
+                let slider_x = content_x + 110;
+                let slider_w = 150;
+                let slider_h = 2;
+                crate::userspace::gui::draw_rect(fb, slider_x, slider_y + 8, slider_w, slider_h, 0x00_80_80_80, None);
+                
+                let sensitivity = MOUSE_SENSITIVITY.load(Ordering::Relaxed);
+                // Sensitivity range 50 - 300
+                let handle_x = slider_x + (((sensitivity.saturating_sub(50)) as usize * slider_w) / 250) as isize;
+                crate::userspace::gui::draw_rect(fb, handle_x - 2, slider_y + 4, 4, 10, 0x00_FF_FF_FF, None);
             },
             Tab::Theme => {
                 font::draw_string(fb, content_x, content_y, locale.label_bg_color(), 0x00_FF_FF_FF, None);
@@ -234,6 +248,12 @@ impl App for Settings {
                             } else if btn_lt_rect.contains(rel_x, rel_y) {
                                 LARGE_TEXT.fetch_xor(true, Ordering::Relaxed);
                                 FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
+                            } else {
+                                let slider_y = (font_height as isize + 4) * 3 + 20;
+                                if rel_y >= slider_y && rel_y <= slider_y + 15 && rel_x >= 110 && rel_x <= 110 + 150 {
+                                    let new_sens = 50 + ((rel_x - 110) * 250 / 150) as u32;
+                                    MOUSE_SENSITIVITY.store(new_sens.clamp(50, 300), Ordering::Relaxed);
+                                }
                             }
                         }
                         Tab::Language => {
@@ -266,33 +286,41 @@ impl App for Settings {
                     }
                 }
             }
-            AppEvent::MouseMove { x, y, .. } if self.current_tab == Tab::Theme => {
+            AppEvent::MouseMove { x, y, .. } => {
                 if *y >= content_pane_y_start {
                     let rel_y = *y - content_pane_y_start;
                     let rel_x = *x - content_pane_x_start;
-                    let slider_x_rel = 30;
-                    let slider_w = 150;
 
-                    let r_rect = Rect { x: slider_x_rel, y: (font_height as isize + 9) - 5, width: slider_w, height: 12 };
-                    let g_rect = Rect { x: slider_x_rel, y: (font_height as isize + 9) + 20 - 5, width: slider_w, height: 12 };
-                    let b_rect = Rect { x: slider_x_rel, y: (font_height as isize + 9) + 40 - 5, width: slider_w, height: 12 };
+                    if self.current_tab == Tab::Theme {
+                        let slider_x_rel = 30;
+                        let slider_w = 150;
+                        let r_rect = Rect { x: slider_x_rel, y: (font_height as isize + 9) - 5, width: slider_w, height: 12 };
+                        let g_rect = Rect { x: slider_x_rel, y: (font_height as isize + 9) + 20 - 5, width: slider_w, height: 12 };
+                        let b_rect = Rect { x: slider_x_rel, y: (font_height as isize + 9) + 40 - 5, width: slider_w, height: 12 };
 
-                    let current_color = DESKTOP_GRADIENT_START.load(Ordering::Relaxed);
-                    let mut r = (current_color >> 16) & 0xFF;
-                    let mut g = (current_color >> 8) & 0xFF;
-                    let mut b = current_color & 0xFF;
-                    let mut changed = false;
+                        let current_color = DESKTOP_GRADIENT_START.load(Ordering::Relaxed);
+                        let mut r = (current_color >> 16) & 0xFF;
+                        let mut g = (current_color >> 8) & 0xFF;
+                        let mut b = current_color & 0xFF;
+                        let mut changed = false;
 
-                    if r_rect.contains(rel_x, rel_y) { r = (((rel_x - slider_x_rel) * 255) / slider_w as isize) as u32; changed = true; }
-                    else if g_rect.contains(rel_x, rel_y) { g = (((rel_x - slider_x_rel) * 255) / slider_w as isize) as u32; changed = true; }
-                    else if b_rect.contains(rel_x, rel_y) { b = (((rel_x - slider_x_rel) * 255) / slider_w as isize) as u32; changed = true; }
+                        if r_rect.contains(rel_x, rel_y) { r = (((rel_x - slider_x_rel) * 255) / slider_w as isize) as u32; changed = true; }
+                        else if g_rect.contains(rel_x, rel_y) { g = (((rel_x - slider_x_rel) * 255) / slider_w as isize) as u32; changed = true; }
+                        else if b_rect.contains(rel_x, rel_y) { b = (((rel_x - slider_x_rel) * 255) / slider_w as isize) as u32; changed = true; }
 
-                    if changed {
-                        let new_start = (r << 16) | (g << 8) | b;
-                        let new_end = (r.saturating_add(0x30).min(255) << 16) | (g.saturating_add(0x30).min(255) << 8) | (b.saturating_add(0x40).min(255));
-                        DESKTOP_GRADIENT_START.store(new_start, Ordering::Relaxed);
-                        DESKTOP_GRADIENT_END.store(new_end, Ordering::Relaxed);
-                        FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
+                        if changed {
+                            let new_start = (r << 16) | (g << 8) | b;
+                            let new_end = (r.saturating_add(0x30).min(255) << 16) | (g.saturating_add(0x30).min(255) << 8) | (b.saturating_add(0x40).min(255));
+                            DESKTOP_GRADIENT_START.store(new_start, Ordering::Relaxed);
+                            DESKTOP_GRADIENT_END.store(new_end, Ordering::Relaxed);
+                            FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
+                        }
+                    } else if self.current_tab == Tab::Accessibility {
+                        let slider_y = (font_height as isize + 4) * 3 + 20;
+                        if rel_y >= slider_y - 5 && rel_y <= slider_y + 15 && rel_x >= 110 && rel_x <= 110 + 150 {
+                            let new_sens = 50 + ((rel_x - 110) * 250 / 150) as u32;
+                            MOUSE_SENSITIVITY.store(new_sens.clamp(50, 300), Ordering::Relaxed);
+                        }
                     }
                 }
             }

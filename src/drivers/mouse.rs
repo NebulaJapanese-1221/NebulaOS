@@ -2,6 +2,7 @@ use super::ps2;
 use crate::kernel::interrupts::InterruptStackFrame;
 use crate::kernel::io;
 use spin::Mutex;
+use core::arch::asm;
 
 #[derive(Debug, Clone, Copy)]
 pub struct MousePacket {
@@ -44,6 +45,8 @@ static mut BYTES: [u8; 4] = [0; 4];
 static mut MOUSE_ID: u8 = 0;
 
 pub fn initialize() {
+    crate::serial_println!("[MOUSE] Initializing PS/2 mouse...");
+
     unsafe {
         // 1. Disable PS/2 devices to prevent them from sending data during setup
         ps2::write_command(0xAD); // Disable keyboard
@@ -64,46 +67,72 @@ pub fn initialize() {
 
         // 4. Send commands to the mouse itself
         // Reset mouse first to ensure clean state
-        if ps2::write_mouse_command(0xFF) {
+        if !ps2::write_mouse_command(0xFF) {
+            crate::serial_println!("[MOUSE] Reset command failed (no ACK)");
+        } else {
             // After a reset, the mouse sends an ACK (0xFA), then a self-test result (0xAA), and an ID (0x00).
             // The write_mouse_command function consumes the ACK. We must consume the other two bytes.
-            if ps2::wait_output_avail() { let _ = ps2::read_data(); } // Consume self-test result
-            if ps2::wait_output_avail() { let _ = ps2::read_data(); } // Consume mouse ID
-        } else {
-            crate::serial_println!("[MOUSE] Reset failed");
+            if ps2::wait_output_avail() {
+                let _ = ps2::read_data(); // Consume self-test result
+            } else {
+                crate::serial_println!("[MOUSE] No self-test result after reset");
+            }
+            if ps2::wait_output_avail() {
+                let _ = ps2::read_data(); // Consume mouse ID
+            } else {
+                crate::serial_println!("[MOUSE] No mouse ID after reset");
+            }
         }
 
         // Set Defaults (Note: this often disables extensions, so we do it before the magic sequence)
-        ps2::write_mouse_command(0xF6);
+        if !ps2::write_mouse_command(0xF6) { crate::serial_println!("[MOUSE] Set Defaults failed"); }
+
+        // Set Scaling 1:1 (Command 0xE6) to ensure predictable relative movement
+        if !ps2::write_mouse_command(0xE6) { crate::serial_println!("[MOUSE] Set Scaling 1:1 failed"); }
+
+        // Set Resolution (Command 0xE8, Data 0x03 = 8 counts/mm) for higher precision
+        if !ps2::write_mouse_command(0xE8) { crate::serial_println!("[MOUSE] Set Resolution command failed"); }
+        if !ps2::write_mouse_command(0x03) { crate::serial_println!("[MOUSE] Set Resolution data failed"); }
 
         // Enable Intellimouse Extensions (Magic Sequence: 200, 100, 80)
-        ps2::write_mouse_command(0xF3); ps2::write_mouse_command(200);
-        ps2::write_mouse_command(0xF3); ps2::write_mouse_command(100);
-        ps2::write_mouse_command(0xF3); ps2::write_mouse_command(80);
+        if !ps2::write_mouse_command(0xF3) { crate::serial_println!("[MOUSE] Set Sample Rate (200) command failed"); }
+        if !ps2::write_mouse_command(200) { crate::serial_println!("[MOUSE] Set Sample Rate (200) data failed"); }
+        if !ps2::write_mouse_command(0xF3) { crate::serial_println!("[MOUSE] Set Sample Rate (100) command failed"); }
+        if !ps2::write_mouse_command(100) { crate::serial_println!("[MOUSE] Set Sample Rate (100) data failed"); }
+        if !ps2::write_mouse_command(0xF3) { crate::serial_println!("[MOUSE] Set Sample Rate (80) command failed"); }
+        if !ps2::write_mouse_command(80) { crate::serial_println!("[MOUSE] Set Sample Rate (80) data failed"); }
 
         // Get Device ID to verify extension is enabled (should be 3 or 4)
-        ps2::write_mouse_command(0xF2);
+        if !ps2::write_mouse_command(0xF2) { crate::serial_println!("[MOUSE] Get Device ID command failed"); }
         if ps2::wait_output_avail() {
             MOUSE_ID = ps2::read_data();
+            crate::serial_println!("[MOUSE] Device ID: {:#x}", MOUSE_ID);
+        } else {
+            crate::serial_println!("[MOUSE] No Device ID received");
         }
 
-        ps2::write_mouse_command(0xF4); // Enable Scanning
+        // Set final sample rate to 100Hz for smoother tracking
+        if !ps2::write_mouse_command(0xF3) { crate::serial_println!("[MOUSE] Set Sample Rate (100Hz) command failed"); }
+        if !ps2::write_mouse_command(100) { crate::serial_println!("[MOUSE] Set Sample Rate (100Hz) data failed"); }
+
+        if !ps2::write_mouse_command(0xF4) { crate::serial_println!("[MOUSE] Enable Scanning failed"); }
 
         // 5. Enable the devices
         ps2::write_command(0xAE); // Enable keyboard
         ps2::write_command(0xA8); // Enable mouse
     }
+    crate::serial_println!("[MOUSE] PS/2 mouse initialization complete.");
 }
 
 pub fn handle_interrupt() {
-    unsafe {
-        let status = ps2::read_status();
-        if (status & ps2::STATUS_OUTPUT_BUFFER) != 0 {
-            let byte = ps2::read_data();
+    loop {
+        let status = unsafe { ps2::read_status() };
+        if (status & ps2::STATUS_OUTPUT_BUFFER) == 0 { break; }
+        let byte = unsafe { ps2::read_data() };
 
-            // Only process if it IS from the mouse (Bit 5 set)
-            if (status & ps2::STATUS_MOUSE_DATA) != 0 {
-                
+        // Only process if it IS from the mouse (Bit 5 set)
+        if (status & ps2::STATUS_MOUSE_DATA) != 0 {
+            unsafe {
                 // Process the byte immediately to form a packet
                 match BYTE_CYCLE {
                     0 => {
@@ -182,7 +211,8 @@ pub extern "x86-interrupt" fn interrupt_handler(_frame: &mut InterruptStackFrame
 }
 
 pub fn get_packet() -> Option<MousePacket> {
-    // This function should be non-blocking. It checks the buffer once.
+    // Disable interrupts to prevent deadlock with mouse interrupt handler
+    unsafe { asm!("cli", options(nomem, nostack)); }
     let mut buffer = MOUSE_BUFFER.lock();
     let packet = if buffer.head == buffer.tail {
         None
@@ -191,6 +221,7 @@ pub fn get_packet() -> Option<MousePacket> {
         buffer.tail = (buffer.tail + 1) % BUFFER_SIZE;
         Some(packet)
     };
-    core::mem::drop(buffer);
+    drop(buffer);
+    unsafe { asm!("sti", options(nomem, nostack)); }
     packet
 }

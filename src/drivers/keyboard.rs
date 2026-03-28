@@ -180,11 +180,10 @@ static SCANCODE_SET1_SHIFTED: [char; 128] = [
     '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0',
 ];
 
-/// Converts a PS/2 scancode (Set 1) to a character.
-/// Handles a basic QWERTY layout.
-pub fn scancode_to_char(scancode: u8) -> Option<char> {
-    let shift = is_shift_pressed();
-    let capslock = is_capslock_enabled();
+/// Internal version for use in interrupt handlers to avoid deadlock
+fn scancode_to_char_internal(kb: &KeyBuffer, scancode: u8) -> Option<char> {
+    let shift = kb.modifiers.lshift || kb.modifiers.rshift;
+    let capslock = kb.modifiers.capslock;
     let idx = scancode as usize;
 
     if idx >= SCANCODE_SET1.len() {
@@ -256,4 +255,15 @@ pub fn init() {
         ps2::write_command(0xAE); // Enable keyboard
         ps2::write_command(0xA8); // Enable mouse
     }
+}
+
+/// Converts a PS/2 scancode (Set 1) to a character.
+/// Handles a basic QWERTY layout.
+pub fn scancode_to_char(scancode: u8) -> Option<char> {
+    unsafe { asm!("cli", options(nomem, nostack)); }
+    let kb = KEY_BUFFER.lock();
+    let res = scancode_to_char_internal(&kb, scancode);
+    drop(kb);
+    unsafe { asm!("sti", options(nomem, nostack)); }
+    res
 }

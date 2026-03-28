@@ -1,4 +1,4 @@
-use super::rect::Rect;
+use crate::userspace::gui::Rect;
 use crate::drivers::framebuffer;
 use super::font;
 use alloc::string::String;
