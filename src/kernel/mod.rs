@@ -5,6 +5,7 @@ use crate::drivers::framebuffer::FRAMEBUFFER;
 use crate::userspace::fonts::font;
 use crate::userspace::gui::{self, Rect};
 use core::sync::atomic::{AtomicUsize, Ordering};
+use crate::kernel::process::TICKS;
 pub mod io;
 pub mod interrupts;
 pub mod multiboot;
@@ -22,43 +23,83 @@ pub const VERSION: &str = "0.0.3-dev2";
 
 pub static TOTAL_MEMORY: AtomicUsize = AtomicUsize::new(0);
 pub static CPU_CORES: AtomicUsize = AtomicUsize::new(1);
+static BOOT_ANIMATION_RUNNING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static BOOT_STATUS_LINE: AtomicUsize = AtomicUsize::new(2);
 
-fn draw_boot_screen() {   
-    let title = "NebulaOS";
-    let mut fb = FRAMEBUFFER.lock();
-    if let Some(ref fb_info) = fb.info {
-        let width = fb_info.width;
-        let height = fb_info.height;
+#[derive(Debug, Clone, Copy)]
+pub enum BootMilestone {
+    Interrupts,
+    Mouse,
+    Keyboard,
+    InputActive,
+    Acpi,
+    CpuInfo,
+    Gui,
+}
 
-        fb.clear(0x00_000033); // Initial dark blue background
-
-        let x_title = (width / 2).saturating_sub((title.len() * 8) / 2);
-        let y_title = (height / 2).saturating_sub(16 / 2);
-
-        // Fade-in the title over 100 steps for maximum smoothness
-        for step in 0..=100u32 {
-            let color = gui::interpolate_color(0x00_000033, 0x00_FFFFFF, step, 100);
-
-            font::draw_string(&mut fb, x_title as isize, y_title as isize, title, color, None);
-            fb.present();
-
-            // Small delay loop to make the fade visible
-            for _ in 0..2000000 { unsafe { asm!("nop"); } }
+impl BootMilestone {
+    pub fn message(&self) -> &'static str {
+        match self {
+            BootMilestone::Interrupts => "[OK] Interrupts Initialized",
+            BootMilestone::Mouse => "[OK] Mouse Driver Initialized",
+            BootMilestone::Keyboard => "[OK] Keyboard Driver Initialized",
+            BootMilestone::InputActive => "[OK] Input Drivers Active",
+            BootMilestone::Acpi => "[OK] ACPI Initialized",
+            BootMilestone::CpuInfo => "[OK] CPU Info Detected",
+            BootMilestone::Gui => "[OK] Initializing GUI...",
         }
     }
 }
 
-fn add_boot_status(status: &str) {
+fn draw_boot_screen() {   
+    let title = "NebulaOS";
+    let (width, height) = if let Some(info) = FRAMEBUFFER.lock().info.as_ref() { (info.width, info.height) } else { return };
+
+    {
+        let mut fb = FRAMEBUFFER.lock();
+        fb.clear(0x00_000033); // Initial dark blue background
+        fb.present();
+    }
+
+    let x_title = (width / 2).saturating_sub((title.len() * 8) / 2);
+    let y_title = (height / 2).saturating_sub(16 / 2);
+    let x_version = (width / 2).saturating_sub((VERSION.len() * 8) / 2);
+    let y_version = y_title + 20;
+
+    // Fade-in the title at ~60 FPS
+    for step in 0..=32u32 {
+        let start_tick = TICKS.load(Ordering::Relaxed);
+        {
+            let mut fb = FRAMEBUFFER.lock();
+            let color = gui::interpolate_color(0x00_000033, 0x00_FFFFFF, step, 32);
+            let version_color = gui::interpolate_color(0x00_000033, 0x00_888888, step, 32); // Slightly dimmer gray for version
+            font::draw_string(&mut fb, x_title as isize, y_title as isize, title, color, None);
+            font::draw_string(&mut fb, x_version as isize, y_version as isize, VERSION, version_color, None);
+            
+            // Present a rectangle covering both strings
+            let min_x = x_title.min(x_version);
+            let max_w = (title.len().max(VERSION.len())) * 8;
+            fb.present_rect(min_x, y_title, max_w, 40);
+        }
+
+        // Wait for next frame (1000ms / 60fps = ~16ms)
+        while TICKS.load(Ordering::Relaxed) < start_tick + 16 { unsafe { asm!("pause"); } }
+    }
+}
+
+fn add_boot_status(milestone: BootMilestone) {
     let line = BOOT_STATUS_LINE.fetch_add(1, Ordering::Relaxed);
     let mut fb = FRAMEBUFFER.lock();
     let x = 20;
     // Start printing status messages
     let y = 20 + (line * 20);
-    font::draw_string(&mut fb, x as isize, y as isize, status, 0x00_CCCCCC, None); // Light gray
-    fb.present();
-    // Intentional delay to make the boot process take longer and be readable
-    for _ in 0..20000000 { unsafe { asm!("nop"); } }
+    font::draw_string(&mut fb, x as isize, y as isize, milestone.message(), 0x00_CCCCCC, None); // Light gray
+    fb.present_rect(x, y as usize, 400, 20);
+    drop(fb);
+
+    // Intentional delay to make the log readable (50ms per entry)
+    let wait_until = TICKS.load(Ordering::Relaxed) + 50;
+    while TICKS.load(Ordering::Relaxed) < wait_until { unsafe { asm!("pause"); } }
 }
 
 /// Displays a critical error screen during the boot process and halts.
@@ -90,29 +131,38 @@ fn show_boot_error(message: &str) -> ! {
 
 /// Smoothly fades the entire boot screen to black before transitioning to the desktop.
 fn fade_out_boot_screen() {
-    let mut fb = FRAMEBUFFER.lock();
-
-    // Perform fade-out in 64 steps for a smoother transition to desktop
-    for step in (0..64u32).rev() {
-        gui::fade_buffer(&mut fb, step, 64);
-        fb.present();
-        // Small delay loop to make the fade visible
-        for _ in 0..2000000 { unsafe { asm!("nop"); } }
+    // Perform fade-out in 32 steps at ~60 FPS
+    for step in (0..=32u32).rev() {
+        let start_tick = TICKS.load(Ordering::Relaxed);
+        {
+            let mut fb = FRAMEBUFFER.lock();
+            gui::fade_buffer(&mut fb, step, 32);
+            fb.present();
+        }
+        while TICKS.load(Ordering::Relaxed) < start_tick + 16 { unsafe { asm!("pause"); } }
     }
 }
 
-fn draw_progress_bar(_progress: usize) {
-    let mut fb = FRAMEBUFFER.lock();
-    let (width, height) = if let Some(info) = fb.info.as_ref() {
-        (info.width, info.height)
-    } else { return };
+/// Background task that handles the animated loading spinner during boot.
+pub extern "C" fn boot_animation_task() {
+    while BOOT_ANIMATION_RUNNING.load(Ordering::Relaxed) {
+        {
+            let mut fb = FRAMEBUFFER.lock();
+            let dims = fb.info.as_ref().map(|i| (i.width, i.height));
+            
+            if let Some((width, height)) = dims {
+                let sx = (width / 2) as isize;
+                let sy = (height / 2) as isize + 60;
+                gui::draw_loading_spinner(&mut fb, sx, sy, Rect { x: 0, y: 0, width, height });
+                fb.present_rect((sx - 40) as usize, (sy - 40) as usize, 80, 100);
+            }
+        }
 
-    // Draw the loading spinner below the title (replacing the progress bar)
-    let spinner_x = (width / 2) as isize;
-    let spinner_y = (height / 2) as isize + 60;
-    gui::draw_loading_spinner(&mut fb, spinner_x, spinner_y, Rect { x: 0, y: 0, width, height });
-
-    fb.present();
+        // Target 30 FPS for the background spinner
+        unsafe { asm!("int 0x80", in("eax") 5usize, in("ebx") 33usize); }
+    }
+    // Task completed, yield forever until reaped
+    loop { unsafe { asm!("int 0x80", in("eax") 0usize); } }
 }
 
 // Entry point called by boot assembly
@@ -141,8 +191,6 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     // 2. Initialize Framebuffer to show boot progress and potential errors
     if let Some(fb_info) = fb_info_opt {
         crate::drivers::framebuffer::FRAMEBUFFER.lock().init(fb_info);
-        // Clear screen and show initial text immediately
-        draw_boot_screen(); 
     } else {
         show_boot_error("No framebuffer information found!");
     }
@@ -150,50 +198,59 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     // Initialize GDT and TSS
     gdt::init();
 
-    // Set PIT frequency for scheduler (e.g., 1000 Hz)
-    // This must be done before interrupts are enabled.
-    crate::drivers::pit::set_frequency(1000);
-
     // Initialize IDT (but do not enable interrupts yet)
     interrupts::init();
-    add_boot_status("[OK] Interrupts Initialized"); 
-    draw_progress_bar(30);
+
+    // Set PIT frequency to 1000Hz so TICKS works correctly for animations
+    crate::drivers::pit::set_frequency(1000);
+
+    // Enable interrupts now so we can use timer-based FPS for the splash screen
+    interrupts::enable_interrupts();
+    crate::serial_println!("[KERNEL] Interrupts and Ticks active.");
+
+    // Show splash screen with fade-in
+    draw_boot_screen();
+
+    // Start the background animation task for the spinner
+    BOOT_ANIMATION_RUNNING.store(true, Ordering::Relaxed);
+    let boot_task_entry = boot_animation_task as usize;
+    crate::kernel::process::SCHEDULER.lock().add_task(boot_task_entry, 15);
+
+    add_boot_status(BootMilestone::Interrupts); 
 
     // Initialize the mouse driver (polls for ACKs, so interrupts must be disabled)
     if let Err(e) = crate::drivers::mouse::initialize() {
         show_boot_error(e);
     } else {
-        add_boot_status("[OK] Mouse Driver Initialized");
+        add_boot_status(BootMilestone::Mouse);
     }
-    draw_progress_bar(60);
 
     // Initialize the keyboard driver
     if let Err(e) = crate::drivers::keyboard::init() {
         show_boot_error(e);
     } else {
-        add_boot_status("[OK] Keyboard Driver Initialized");
+        add_boot_status(BootMilestone::Keyboard);
     }
-
-    // Now it is safe to enable interrupts
-    interrupts::enable_interrupts();
-    add_boot_status("[OK] Interrupts Enabled");
-    draw_progress_bar(90);
+    add_boot_status(BootMilestone::InputActive);
 
     // Initialize ACPI
     acpi::init();
+    add_boot_status(BootMilestone::Acpi);
 
     // Initialize CPU Info detection (CPUID)
     cpu::init();
-    add_boot_status("[OK] CPU Info Detected");
+    add_boot_status(BootMilestone::CpuInfo);
 
     // NOTE: The old text-mode GUI has been disabled.
     // The next step is to build a new GUI that draws to the framebuffer.
-    add_boot_status("[OK] Initializing GUI...");
-    draw_progress_bar(100);
+    add_boot_status(BootMilestone::Gui);
     
     // Initialize localisation before GUI
     crate::userspace::localisation::init();
     
+    // Stop the background animation before the final transition
+    BOOT_ANIMATION_RUNNING.store(false, Ordering::Relaxed);
+
     // Perform final transition effect before starting the GUI
     fade_out_boot_screen();
 

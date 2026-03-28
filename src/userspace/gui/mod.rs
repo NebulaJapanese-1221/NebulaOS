@@ -30,25 +30,49 @@ pub fn draw_rect(fb: &mut framebuffer::Framebuffer, x: isize, y: isize, width: u
 /// Draws an animated loading spinner in the center of the given area.
 pub fn draw_loading_spinner(fb: &mut framebuffer::Framebuffer, x: isize, y: isize, clip: Rect) {
     let ticks = crate::kernel::process::TICKS.load(Ordering::Relaxed);
-    let frame = (ticks / 80) % 8;
+    let frame = (ticks / 60) % 8; // Faster animation for better "wheel" feel
     
-    let bg_color = 0x00_20_20_20;
-    let box_size = 80;
+    let bg_color = 0x00_1A_1A_1A; // Slightly darker for better contrast
+    let box_size = 80; 
     draw_rect(fb, x - (box_size / 2), y - (box_size / 2), box_size as usize, box_size as usize, bg_color, Some(clip));
-    // White Border
-    draw_rect(fb, x - (box_size / 2), y - (box_size / 2), box_size as usize, 1, 0x00_FF_FF_FF, Some(clip));
-    draw_rect(fb, x - (box_size / 2), y + (box_size / 2) - 1, box_size as usize, 1, 0x00_FF_FF_FF, Some(clip));
-    draw_rect(fb, x - (box_size / 2), y - (box_size / 2), 1, box_size as usize, 0x00_FF_FF_FF, Some(clip));
-    draw_rect(fb, x + (box_size / 2) - 1, y - (box_size / 2), 1, box_size as usize, 0x00_FF_FF_FF, Some(clip));
+
+    // Border
+    let border_color = 0x00_44_44_44;
+    draw_rect(fb, x - (box_size / 2), y - (box_size / 2), box_size as usize, 1, border_color, Some(clip));
+    draw_rect(fb, x - (box_size / 2), y + (box_size / 2) - 1, box_size as usize, 1, border_color, Some(clip));
+    draw_rect(fb, x - (box_size / 2), y - (box_size / 2), 1, box_size as usize, border_color, Some(clip));
+    draw_rect(fb, x + (box_size / 2) - 1, y - (box_size / 2), 1, box_size as usize, border_color, Some(clip));
 
     for i in 0..8 {
-        let dot_color = if i == frame as usize { 0x00_00_FF_FF } else { 0x00_60_60_60 };
-        let (ox, oy) = match i {
-            0 => (0, -15), 1 => (11, -11), 2 => (15, 0), 3 => (11, 11),
-            4 => (0, 15), 5 => (-11, 11), 6 => (-15, 0), 7 => (-11, -11),
-            _ => (0, 0)
+        // Calculate "distance" from the leading frame to create a trailing effect
+        let dist = (8 + frame as isize - i as isize) % 8;
+        
+        let dot_color = match dist {
+            0 => 0x00_00_FF_FF, // Leading dot (Cyan)
+            1 => 0x00_00_AA_AA, // Trail 1
+            2 => 0x00_00_77_77, // Trail 2
+            3 => 0x00_00_44_44, // Trail 3
+            _ => 0x00_28_28_28, // Dim inactive dots
         };
-        draw_rect(fb, x + ox - 3, y + oy - 3, 6, 6, dot_color, Some(clip));
+
+        // Radial positions with segment dimensions (w, h)
+        let (ox, oy, sw, sh) = match i {
+            0 => (0, -18, 2, 8),   // North
+            1 => (13, -13, 4, 4),  // North-East
+            2 => (18, 0, 8, 2),    // East
+            3 => (13, 13, 4, 4),   // South-East
+            4 => (0, 18, 2, 8),    // South
+            5 => (-13, 13, 4, 4),  // South-West
+            6 => (-18, 0, 8, 2),   // West
+            7 => (-13, -13, 4, 4), // North-West
+            _ => (0, 0, 0, 0)
+        };
+
+        draw_rect(
+            fb, 
+            x + ox - (sw / 2), y + oy - (sh / 2), 
+            sw as usize, sh as usize, dot_color, Some(clip)
+        );
     }
     
     font::draw_string(fb, x - 35, y + 25, "Starting...", 0x00_FF_FF_FF, Some(clip));
@@ -80,13 +104,13 @@ pub fn fade_buffer(fb: &mut framebuffer::Framebuffer, step: u32, total_steps: u3
     if step >= total_steps { return; }
     if step == 0 { buffer.fill(0); return; }
 
-    // Optimized bit-shifting path for 64-step fades (common in NebulaOS boot)
-    if total_steps == 64 {
+    // Optimized bit-shifting path for 32-step fades (common in NebulaOS boot)
+    if total_steps == 32 {
         for pixel in buffer.iter_mut() {
             let c = *pixel;
-            // Scale channels: (Channel * Step) >> 6
-            let rb = ((c & 0xFF00FF) * step) >> 6;
-            let g = ((c & 0x00FF00) * step) >> 6;
+            // Scale channels: (Channel * Step) >> 5
+            let rb = ((c & 0xFF00FF) * step) >> 5;
+            let g = ((c & 0x00FF00) * step) >> 5;
             *pixel = (rb & 0xFF00FF) | (g & 0x00FF00);
         }
     } else {

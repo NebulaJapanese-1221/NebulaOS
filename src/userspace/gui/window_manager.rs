@@ -155,9 +155,9 @@ impl WindowManager {
                             if matches!(self.resize_direction, ResizeDirection::Top | ResizeDirection::TopLeft | ResizeDirection::TopRight) { let nh = win.height as isize - dy; if nh >= min_h { win.y += dy; win.height = nh as usize; } }
                         }
                     } else if let Some(id) = self.drag_win_id {
-                        if let Some(win_dims) = self.windows.iter().find(|w| w.id == id).map(|w| (w.width, w.height)) {
+                        if let Some((w, h)) = self.windows.iter().find(|w| w.id == id).map(|w| (w.width, w.height)) {
                             if let Some(old_rect) = self.drag_rect { self.mark_dirty(old_rect); }
-                            self.drag_rect = Some(Rect { x: self.input.mouse_x - self.drag_offset_x, y: self.input.mouse_y - self.drag_offset_y, width: win_dims.0, height: win_dims.1 });
+                            self.drag_rect = Some(Rect { x: self.input.mouse_x - self.drag_offset_x, y: self.input.mouse_y - self.drag_offset_y, width: w, height: h });
                             if let Some(new_rect) = self.drag_rect { self.mark_dirty(new_rect); }
                         }
                     }
@@ -485,7 +485,8 @@ impl WindowManager {
     /// The entry point for the dedicated GUI rendering task.
     pub fn render_loop() -> ! {
         loop {
-            let mut fb_info_copy = None;
+            let start_tick = crate::kernel::process::TICKS.load(Ordering::Relaxed);
+            let fb_info_copy;
 
             {
                 let mut wm = crate::userspace::gui::WINDOW_MANAGER.lock();
@@ -502,13 +503,15 @@ impl WindowManager {
                     wm.ready_dirty_rects.extend(composition_regions);
 
                     // 2. Cursor Region Management: Mark old and new positions as dirty for synchronization
-                    wm.ready_dirty_rects.push(wm.last_cursor_rect);
+                    let old_cursor_rect = wm.last_cursor_rect;
+                    wm.ready_dirty_rects.push(old_cursor_rect);
                     
                     wm.last_cursor_x = wm.input.mouse_x; 
                     wm.last_cursor_y = wm.input.mouse_y;
                     wm.last_cursor_rect = Rect { x: wm.last_cursor_x, y: wm.last_cursor_y, width: CURSOR_WIDTH, height: CURSOR_HEIGHT };
                     
-                    wm.ready_dirty_rects.push(wm.last_cursor_rect);
+                    let new_cursor_rect = wm.last_cursor_rect;
+                    wm.ready_dirty_rects.push(new_cursor_rect);
 
                     // 3. Merging: Collapse overlapping dirty regions to minimize synchronization overhead
                     let mut final_sync_rects: Vec<Rect> = Vec::with_capacity(wm.ready_dirty_rects.len());
@@ -522,8 +525,9 @@ impl WindowManager {
 
                     // 4. Synchronization: Sync only the merged regions from backbuffer -> ready_buffer
                     // This effectively "erases" the old cursor and updates window content in one pass.
-                    for r in &wm.ready_dirty_rects {
-                        wm.sync_ready_rect(*r, fb_info.width, fb_info.height);
+                    let sync_rects = wm.ready_dirty_rects.clone();
+                    for r in sync_rects {
+                        wm.sync_ready_rect(r, fb_info.width, fb_info.height);
                     }
 
                     // 5. Cursor Overlay: Draw the cursor onto the assembled ready_buffer
@@ -532,7 +536,7 @@ impl WindowManager {
             }
 
             // 6. Presentation: Blit the consolidated dirty regions from ready_buffer to VRAM
-            if let (Some(info), true) = (fb_info_copy, !wm_is_empty_ready_dirty()) {
+            if let (Some(info), true) = (fb_info_copy, !Self::wm_is_empty_ready_dirty()) {
                 let mut wm = crate::userspace::gui::WINDOW_MANAGER.lock();
                 let raw_blit = core::mem::take(&mut wm.ready_dirty_rects);
 
@@ -553,15 +557,23 @@ impl WindowManager {
                 }
             }
 
-            // Yield the CPU to allow the input loop and applications to run
-            unsafe { core::arch::asm!("int 0x80", in("eax") 0usize); }
+            let end_tick = crate::kernel::process::TICKS.load(Ordering::Relaxed);
+            let elapsed = end_tick.wrapping_sub(start_tick);
+            
+            // Target ~60 FPS (1000ms / 60 = 16.6ms)
+            if elapsed < 16 {
+                unsafe { core::arch::asm!("int 0x80", in("eax") 5usize, in("ebx") 16 - elapsed); }
+            } else {
+                // Always yield at least once even if the frame was slow
+                unsafe { core::arch::asm!("int 0x80", in("eax") 0usize); }
+            }
         }
     }
 
-/// Helper to check if there are pending ready dirty rects without holding the lock for the whole operation.
-fn wm_is_empty_ready_dirty() -> bool {
-    crate::userspace::gui::WINDOW_MANAGER.lock().ready_dirty_rects.is_empty()
-}
+    /// Helper to check if there are pending ready dirty rects without holding the lock for the whole operation.
+    fn wm_is_empty_ready_dirty() -> bool {
+        crate::userspace::gui::WINDOW_MANAGER.lock().ready_dirty_rects.is_empty()
+    }
 
     /// Composes the desktop and windows into the backbuffer. Returns dirty regions.
     fn draw_dirty_to_backbuffer(&mut self, fb_info: framebuffer::FramebufferInfo) -> Vec<Rect> {
@@ -608,6 +620,8 @@ fn wm_is_empty_ready_dirty() -> bool {
 
         if self.backbuffer.len() != sw * sh { self.backbuffer.resize(sw * sh, 0); }
         let mut local_fb = framebuffer::Framebuffer::new(); local_fb.info = Some(fb_info); local_fb.draw_buffer = Some(core::mem::take(&mut self.backbuffer));
+
+        let _menu_data = if self.shell.start_menu.is_open { Some(self.shell.get_start_menu_data()) } else { None };
 
         for dirty_rect in &final_rects {
             self.draw_desktop_bg(&mut local_fb, *dirty_rect);
@@ -664,6 +678,17 @@ fn wm_is_empty_ready_dirty() -> bool {
         for y in y_start..y_start + h {
             let offset = y * info.width + x_start;
             buffer[offset..offset + w].fill(0x00_10_20_40);
+        }
+
+        // Draw the version string in the bottom-right corner of the desktop
+        let version = crate::kernel::VERSION;
+        let v_w = version.len() * 8;
+        let v_x = (info.width as isize) - v_w as isize - 10;
+        let v_y = (info.height as isize) - (self.shell.taskbar_height as isize) - 26;
+        let v_rect = Rect { x: v_x, y: v_y, width: v_w, height: 16 };
+
+        if clip.intersects(&v_rect) {
+            font::draw_string(fb, v_x, v_y, version, 0x00_80_80_80, Some(clip));
         }
     }
 
