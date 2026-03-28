@@ -217,7 +217,7 @@ impl App for PartitionManager {
 
         for file in &self.files {
             let color = if file.ends_with('/') { 0x00_FFFF00 } else { 0x00_CCCCCC };
-            font::draw_string(fb, file_x, y, file, color, None);
+            font::draw_string(fb, file_x, y, file.as_str(), color, None);
             y += font_height as isize + 2;
         }
 

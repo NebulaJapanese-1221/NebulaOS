@@ -126,8 +126,10 @@ unsafe fn get_s5_val(dsdt_ptr: *const SdtHeader) -> Option<u8> {
     let data = slice::from_raw_parts(data_ptr, dsdt_len - size_of::<SdtHeader>());
 
     if let Some(s5_ptr) = find_signature_in_slice(data, b"_S5_") {
-        if *s5_ptr.offset(4) == 0x12 {
-            return Some(*s5_ptr.offset(8));
+        unsafe {
+            if *s5_ptr.offset(4) == 0x12 {
+                return Some(*s5_ptr.offset(8));
+            }
         }
     }
     None
@@ -140,23 +142,24 @@ unsafe fn parse_madt(madt_ptr: *const SdtHeader) {
     
     // Skip the standard header (36 bytes) + Local APIC Address (4) + Flags (4) = 44 bytes
     let mut current_ptr = (madt_ptr as *const u8).add(44);
-    let end_ptr = (madt_ptr as *const u8).add(len);
+    let end_ptr = unsafe { (madt_ptr as *const u8).add(len) };
 
     let mut cores = 0;
 
     while current_ptr < end_ptr {
-        let entry_type = *current_ptr;
-        let entry_len = *current_ptr.add(1);
+        unsafe {
+            let entry_type = *current_ptr;
+            let entry_len = *current_ptr.add(1);
 
-        if entry_type == 0 { // Processor Local APIC
-            // Offset 4 is the Flags field (u32). Bit 0 is 'Processor Enabled'.
-            let flags = (current_ptr.add(4) as *const u32).read_unaligned();
-            if (flags & 1) == 1 {
-                cores += 1;
+            if entry_type == 0 { // Processor Local APIC
+                // Offset 4 is the Flags field (u32). Bit 0 is 'Processor Enabled'.
+                let flags = (current_ptr.add(4) as *const u32).read_unaligned();
+                if (flags & 1) == 1 {
+                    cores += 1;
+                }
             }
+            current_ptr = current_ptr.add(entry_len as usize);
         }
-
-        current_ptr = current_ptr.add(entry_len as usize);
     }
 
     if cores > 0 {

@@ -1,6 +1,6 @@
 use crate::drivers::framebuffer;
 use crate::drivers::rtc::{CURRENT_DATETIME};
-use crate::userspace::gui::{font, Rect, Button, HIGH_CONTRAST, LARGE_TEXT, draw_rect, Window};
+use crate::userspace::gui::{font, Rect, Button, HIGH_CONTRAST, draw_rect, Window};
 use crate::userspace::localisation;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -174,7 +174,7 @@ pub struct StartMenu {
 }
 
 impl StartMenu {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             is_open: false,
             selected_index: 0,

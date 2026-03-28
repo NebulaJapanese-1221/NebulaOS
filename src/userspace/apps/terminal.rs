@@ -102,7 +102,7 @@ impl App for Terminal {
         }
 
         let input_line = format!("{}{}_", self.prompt, self.current_input);
-        font::draw_string(fb, x, y, &input_line, 0x00_FF_FF_FF, None);
+        font::draw_string(fb, x, y, input_line.as_str(), 0x00_FF_FF_FF, None);
     }
 
     fn handle_event(&mut self, event: &AppEvent) {

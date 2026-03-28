@@ -1,6 +1,6 @@
 use crate::userspace::gui::Rect;
 use crate::drivers::framebuffer;
-use super::font;
+use crate::userspace::gui::font;
 use alloc::string::String;
 
 #[derive(Clone)]
@@ -33,10 +33,10 @@ impl Button {
             self.rect
         };
 
-        let high_contrast = super::HIGH_CONTRAST.load(core::sync::atomic::Ordering::Relaxed);
+        let high_contrast = crate::userspace::gui::HIGH_CONTRAST.load(core::sync::atomic::Ordering::Relaxed);
 
         let draw_color = if high_contrast { 0x00_00_00_00 } else { self.bg_color };
-        super::draw_rect(fb, self.rect.x, self.rect.y, self.rect.width, self.rect.height, draw_color, Some(draw_clip));
+        crate::userspace::gui::draw_rect(fb, self.rect.x, self.rect.y, self.rect.width, self.rect.height, draw_color, Some(draw_clip));
 
         // Add 3D bevel effect
         let (bright, dark) = if high_contrast {
@@ -45,12 +45,12 @@ impl Button {
             (0x00_FF_FF_FF, 0x00_40_40_40)
         };
         
-        super::draw_rect(fb, self.rect.x, self.rect.y, self.rect.width, 1, bright, Some(draw_clip)); // Top
-        super::draw_rect(fb, self.rect.x, self.rect.y, 1, self.rect.height, bright, Some(draw_clip)); // Left
-        super::draw_rect(fb, self.rect.x + self.rect.width as isize - 1, self.rect.y, 1, self.rect.height, dark, Some(draw_clip)); // Right
-        super::draw_rect(fb, self.rect.x, self.rect.y + self.rect.height as isize - 1, self.rect.width, 1, dark, Some(draw_clip)); // Bottom
+        crate::userspace::gui::draw_rect(fb, self.rect.x, self.rect.y, self.rect.width, 1, bright, Some(draw_clip)); // Top
+        crate::userspace::gui::draw_rect(fb, self.rect.x, self.rect.y, 1, self.rect.height, bright, Some(draw_clip)); // Left
+        crate::userspace::gui::draw_rect(fb, self.rect.x + self.rect.width as isize - 1, self.rect.y, 1, self.rect.height, dark, Some(draw_clip)); // Right
+        crate::userspace::gui::draw_rect(fb, self.rect.x, self.rect.y + self.rect.height as isize - 1, self.rect.width, 1, dark, Some(draw_clip)); // Bottom
 
-        let font_height = if super::LARGE_TEXT.load(core::sync::atomic::Ordering::Relaxed) { 32 } else { 16 };
+        let font_height = if crate::userspace::gui::LARGE_TEXT.load(core::sync::atomic::Ordering::Relaxed) { 32 } else { 16 };
         let text_x = self.rect.x + (self.rect.width as isize - font::string_width(self.text.as_str()) as isize) / 2;
         let text_y = self.rect.y + (self.rect.height as isize - font_height) / 2;
         
