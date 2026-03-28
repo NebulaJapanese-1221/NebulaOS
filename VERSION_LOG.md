@@ -1,6 +1,7 @@
 # NebulaOS Version History
 
 *Note: The date in between "()" is the release date of each version.*
+TBD = To Be Defined
 
 ## v0.0.3-dev3 (TBD)
 - TBD
