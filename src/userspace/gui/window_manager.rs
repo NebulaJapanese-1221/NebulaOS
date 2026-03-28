@@ -81,6 +81,7 @@ pub struct WindowManager {
     pub last_cursor_x: isize,
     pub last_cursor_y: isize,
     pub cursor_save_buffer: Vec<u32>,
+    pub app_loading: bool,
 }
 
 impl WindowManager {
@@ -94,6 +95,7 @@ impl WindowManager {
             backbuffer: Vec::new(), drag_rect: None, task_switcher_open: false, task_switcher_index: 0,
             last_cursor_x: 400, last_cursor_y: 300,
             cursor_save_buffer: Vec::new(),
+            app_loading: false,
         }
     }
 
@@ -199,6 +201,11 @@ impl WindowManager {
             self.task_switcher_open = false; self.mark_dirty(Rect { x: 0, y: 0, width: screen_width as usize, height: screen_height as usize });
         }
 
+        if self.app_loading {
+            let (sw, sh) = if let Some(info) = FRAMEBUFFER.lock().info.as_ref() { (info.width as isize, info.height as isize) } else { (800, 600) };
+            self.mark_dirty(Rect { x: sw/2 - 40, y: sh/2 - 40, width: 80, height: 100 });
+        }
+
         if mouse_moved {
             if let Some(rect) = start_interaction_rect { self.mark_dirty(rect); }
             if let Some(id) = start_interaction_id { if let Some(rect) = self.get_window_rect(id) { self.mark_dirty(rect); } }
@@ -302,15 +309,19 @@ impl WindowManager {
     }
 
     fn handle_left_click(&mut self, screen_width: isize, screen_height: isize) {
-        let locale_guard = localisation::CURRENT_LOCALE.lock();
-        let locale = locale_guard.as_ref().unwrap();
         let is_vertical = self.shell.is_vertical(screen_width as usize);
         let tb_thickness = self.shell.taskbar_height as isize;
 
         // 1. Check for click on start button
-        let (start_x, start_y, start_w) = if is_vertical { (0, 0, self.shell.taskbar_height) } else { (0, screen_height.saturating_sub(tb_thickness), 120usize) };
-        let start_button = Button::new(start_x, start_y, start_w, self.shell.taskbar_height, locale.start());
-        if start_button.contains(self.input.mouse_x, self.input.mouse_y) {
+        let start_button_clicked = {
+            let locale_guard = localisation::CURRENT_LOCALE.lock();
+            let locale = locale_guard.as_ref().unwrap();
+            let (start_x, start_y, start_w) = if is_vertical { (0, 0, self.shell.taskbar_height) } else { (0, screen_height.saturating_sub(tb_thickness), 120usize) };
+            let start_button = Button::new(start_x, start_y, start_w, self.shell.taskbar_height, locale.start());
+            start_button.contains(self.input.mouse_x, self.input.mouse_y)
+        };
+
+        if start_button_clicked {
             self.shell.start_menu.toggle();
             self.update_start_menu_filter();
             self.mark_dirty(self.shell.start_menu.rect(screen_height, self.shell.taskbar_height, is_vertical));
@@ -370,24 +381,25 @@ impl WindowManager {
         // 3. Start Menu Item Click
         let menu_rect = self.shell.start_menu.rect(screen_height, self.shell.taskbar_height, is_vertical);
         if self.shell.start_menu.is_open && menu_rect.contains(self.input.mouse_x, self.input.mouse_y) {
-            let mut draw_y = menu_rect.y + 45;
-            let menu_x = menu_rect.x;
             let app_list = self.shell.get_start_menu_data();
-            
             let mut clicked_idx = None;
+
+            let menu_x = menu_rect.x;
+            let mut draw_y = menu_rect.y + 45;
+
             for &real_idx in &self.shell.start_menu.filtered_indices {
-                let btn = Button::new(menu_x + 10, draw_y, self.shell.start_menu.width - 20, 30, app_list[real_idx].0);
-                if btn.contains(self.input.mouse_x, self.input.mouse_y) {
-                    clicked_idx = Some(real_idx);
-                    break;
+                let btn_rect = Rect { x: menu_x + 10, y: draw_y, width: self.shell.start_menu.width - 20, height: 30 };
+                if btn_rect.contains(self.input.mouse_x, self.input.mouse_y) {
+                    clicked_idx = Some(real_idx); break;
                 }
                 draw_y += 35;
             }
 
             if let Some(idx) = clicked_idx {
-                self.launch_start_menu_item(idx, screen_height);
+                // Close menu first so the UI updates before the potentially slow app construction starts
                 self.shell.start_menu.is_open = false;
                 self.mark_dirty(menu_rect);
+                self.launch_start_menu_item(idx, screen_height);
             }
             return;
         }
@@ -481,6 +493,11 @@ impl WindowManager {
             for &id in &self.z_order { if let Some(win) = self.windows.iter().find(|w| w.id == id) { if !win.minimized && dirty_rect.intersects(&win.rect()) { self.draw_window(&mut local_fb, win, *dirty_rect); } } }
             self.shell.draw(&mut local_fb, self.windows.as_slice(), self.input.mouse_x, self.input.mouse_y, *dirty_rect, self.shell.start_menu.is_open, if self.context_menu_open { Some((self.context_menu_x, self.context_menu_y)) } else { None });
             if self.task_switcher_open { self.shell.draw_task_switcher(&mut local_fb, *dirty_rect, self.z_order.as_slice(), self.windows.as_slice(), self.task_switcher_index); }
+            
+            if self.app_loading {
+                let (sw, sh) = (fb_info.width as isize, fb_info.height as isize);
+                self.shell.draw_loading_spinner(&mut local_fb, sw / 2, sh / 2, *dirty_rect);
+            }
         }
 
         // Erase the current cursor from VRAM before blitting new pixels
@@ -655,49 +672,60 @@ impl WindowManager {
     }
 
     fn launch_start_menu_item(&mut self, index: usize, _screen_height: isize) {
-        let locale_guard = localisation::CURRENT_LOCALE.lock();
-        let locale = locale_guard.as_ref().unwrap();
+        self.app_loading = true;
+        let (sw, sh) = if let Some(info) = FRAMEBUFFER.lock().info.as_ref() { (info.width as isize, info.height as isize) } else { (800, 600) };
+        self.mark_dirty(Rect { x: sw/2 - 40, y: sh/2 - 40, width: 80, height: 100 });
+        self.draw_dirty(); // Show spinner immediately
+
+        // Pre-fetch locale strings to avoid holding the lock during slow construction
+        let (title, color) = {
+            let locale_guard = localisation::CURRENT_LOCALE.lock();
+            let l = locale_guard.as_ref().unwrap();
+            match index {
+                0 => (l.app_text_editor(), 0x00_1E_1E_1E),
+                1 => (l.app_calculator(), 0x00_20_20_20),
+                2 => (l.app_paint(), 0x00_20_20_20),
+                3 => (l.app_settings(), 0x00_40_20_40),
+                4 => (l.app_terminal(), 0x00_1E_1E_1E),
+                5 => ("Task Manager", 0x00_00_40_40),
+                6 => ("Partition Manager", 0x00_00_20_40),
+                _ => ("", 0),
+            }
+        };
 
         match index {
             0 => self.add_window(Window {
-                id: 0, x: 150, y: 150, width: 400, height: 300,
-                color: 0x00_1E_1E_1E, title: locale.app_text_editor(),
+                id: 0, x: 150, y: 150, width: 400, height: 300, color, title,
                 content: WindowContent::App(Box::new(TextEditor::new())),
                 minimized: false, maximized: false, restore_rect: None,
             }),
             1 => self.add_window(Window {
-                id: 0, x: 50, y: 350, width: 200, height: 220,
-                color: 0x00_20_20_20, title: locale.app_calculator(),
+                id: 0, x: 50, y: 350, width: 200, height: 220, color, title,
                 content: WindowContent::App(Box::new(Calculator::new())),
                 minimized: false, maximized: false, restore_rect: None,
             }),
             2 => self.add_window(Window {
-                id: 0, x: 180, y: 100, width: 400, height: 300,
-                color: 0x00_20_20_20, title: locale.app_paint(),
+                id: 0, x: 180, y: 100, width: 400, height: 300, color, title,
                 content: WindowContent::App(Box::new(Paint::new())),
                 minimized: false, maximized: false, restore_rect: None,
             }),
             3 => self.add_window(Window {
-                id: 0, x: 250, y: 250, width: 300, height: 300,
-                color: 0x00_40_20_40, title: locale.app_settings(),
+                id: 0, x: 250, y: 250, width: 300, height: 300, color, title,
                 content: WindowContent::App(Box::new(Settings::new())),
                 minimized: false, maximized: false, restore_rect: None,
             }),
             4 => self.add_window(Window {
-                id: 0, x: 100, y: 100, width: 480, height: 320,
-                color: 0x00_1E_1E_1E, title: locale.app_terminal(),
+                id: 0, x: 100, y: 100, width: 480, height: 320, color, title,
                 content: WindowContent::App(Box::new(Terminal::new())),
                 minimized: false, maximized: false, restore_rect: None,
             }),
             5 => self.add_window(Window {
-                id: 0, x: 150, y: 150, width: 300, height: 400,
-                color: 0x00_00_40_40, title: "Task Manager",
+                id: 0, x: 150, y: 150, width: 300, height: 400, color, title,
                 content: WindowContent::App(Box::new(TaskManager::new())),
                 minimized: false, maximized: false, restore_rect: None,
             }),
             6 => self.add_window(Window {
-                id: 0, x: 200, y: 200, width: 400, height: 300,
-                color: 0x00_00_20_40, title: "Partition Manager",
+                id: 0, x: 200, y: 200, width: 400, height: 300, color, title,
                 content: WindowContent::App(Box::new(PartitionManager::new())),
                 minimized: false, maximized: false, restore_rect: None,
             }),
@@ -705,6 +733,9 @@ impl WindowManager {
             8 => crate::kernel::power::shutdown(),
             _ => {}
         }
+
+        self.app_loading = false;
+        self.mark_dirty(Rect { x: sw/2 - 40, y: sh/2 - 40, width: 80, height: 100 });
     }
 }
 

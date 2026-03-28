@@ -14,7 +14,7 @@
 - Implemented initial USB Host Controller support (UHCI) for peripheral discovery.
 - Fixed alignment issues for filesystem structures on 32-bit targets.
 - Major stability fixes
-- Major GUI fixes
+- Major GUI fixes and improvements
 
 ## v0.0.3-dev (03-22-2026)
 - Added proper System Information detection (CPUID for Brand String).

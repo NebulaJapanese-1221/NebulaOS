@@ -124,28 +124,28 @@ impl Shell {
     pub fn draw_start_menu(&self, fb: &mut framebuffer::Framebuffer, mouse_x: isize, mouse_y: isize, clip: Rect, width: usize, height: usize) {
         let is_vertical = self.is_vertical(width);
         let menu_rect = self.start_menu.rect(height as isize, self.taskbar_height, is_vertical);
-        let menu_x = menu_rect.x;
-        let menu_y = menu_rect.y;
-
         let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
         let bg_color = if high_contrast { 0x00_00_00_00 } else { 0x00_C0_C0_C0 };
         let border_color = if high_contrast { 0x00_FF_FF_FF } else { 0x00_C0_C0_C0 };
 
-        draw_rect(fb, menu_x, menu_y, self.start_menu.width, self.start_menu.height, bg_color, Some(clip));
+        draw_rect(fb, menu_rect.x, menu_rect.y, self.start_menu.width, self.start_menu.height, bg_color, Some(clip));
         if high_contrast {
-            draw_rect(fb, menu_x, menu_y, self.start_menu.width, 1, border_color, Some(clip));
-            draw_rect(fb, menu_x, menu_y, 1, self.start_menu.height, border_color, Some(clip));
-            draw_rect(fb, menu_x + self.start_menu.width as isize - 1, menu_y, 1, self.start_menu.height, border_color, Some(clip));
-            draw_rect(fb, menu_x, menu_y + self.start_menu.height as isize - 1, self.start_menu.width, 1, border_color, Some(clip));
+            draw_rect(fb, menu_rect.x, menu_rect.y, self.start_menu.width, 1, border_color, Some(clip));
+            draw_rect(fb, menu_rect.x, menu_rect.y, 1, self.start_menu.height, border_color, Some(clip));
+            draw_rect(fb, menu_rect.x + self.start_menu.width as isize - 1, menu_rect.y, 1, self.start_menu.height, border_color, Some(clip));
+            draw_rect(fb, menu_rect.x, menu_rect.y + self.start_menu.height as isize - 1, self.start_menu.width, 1, border_color, Some(clip));
         }
 
         let item_width = self.start_menu.width - 20;
-        let search_y = menu_y + 10;
-        draw_rect(fb, menu_x + 10, search_y, item_width, 25, 0x00_FFFFFF, Some(clip));
-        font::draw_string(fb, menu_x + 15, search_y + 5, self.start_menu.search_query.as_str(), 0x00_00_00_00, Some(clip));
+        let search_y = menu_rect.y + 10;
+        draw_rect(fb, menu_rect.x + 10, search_y, item_width, 25, 0x00_FFFFFF, Some(clip));
+        font::draw_string(fb, menu_rect.x + 15, search_y + 5, self.start_menu.search_query.as_str(), 0x00_00_00_00, Some(clip));
 
+        // Allocation inside the draw loop is expensive. We fetch the list once.
         let app_list = self.get_start_menu_data();
-        let mut draw_y = menu_y + 45;
+        let mut draw_y = menu_rect.y + 45;
+        let menu_x = menu_rect.x;
+
         for (i, &real_idx) in self.start_menu.filtered_indices.iter().enumerate() {
             let (text, color) = app_list[real_idx];
             let mut btn = Button::new(menu_x + 10, draw_y, item_width, 30, text);
@@ -200,6 +200,11 @@ impl Shell {
             (locale.btn_reboot(), 0x00_FF_A0_40),
             (locale.btn_shutdown(), 0x00_FF_60_60),
         ]
+    }
+
+    /// Draws an animated loading spinner in the center of the given area.
+    pub fn draw_loading_spinner(&self, fb: &mut framebuffer::Framebuffer, x: isize, y: isize, clip: Rect) {
+        crate::userspace::gui::draw_loading_spinner(fb, x, y, clip);
     }
 }
 
