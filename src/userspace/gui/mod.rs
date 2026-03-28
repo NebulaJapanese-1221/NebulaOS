@@ -13,7 +13,7 @@ pub use self::widgets::{rect, button};
 pub use self::widgets::rect::Rect;
 pub use self::widgets::button::Button;
 pub use self::shell::Shell;
-pub use self::window_manager::{WindowManager, Window, WindowContent};
+pub use self::window_manager::{WindowManager, Window};
 pub use crate::userspace::fonts::font;
 
 pub static DESKTOP_GRADIENT_START: AtomicU32 = AtomicU32::new(0x00_10_20_40);

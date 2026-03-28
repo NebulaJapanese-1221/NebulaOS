@@ -417,7 +417,7 @@ impl WindowManager {
             if self.task_switcher_open { self.shell.draw_task_switcher(&mut local_fb, *dirty_rect, self.z_order.as_slice(), self.windows.as_slice(), self.task_switcher_index); }
         }
 
-        // IMPORTANT: Erase current cursor from VRAM before we blit new pixels
+        // Erase the current cursor from VRAM before blitting new pixels
         self.restore_hardware_cursor();
 
         unsafe { core::arch::asm!("cli") };
@@ -440,7 +440,7 @@ impl WindowManager {
         }
         unsafe { core::arch::asm!("sti") };
 
-        // Saved background is now invalid (blit changed pixels). Redraw to capture new background.
+        // After blitting the new frame, the hardware cursor's background is invalid.
         self.cursor_save_buffer.clear();
         self.refresh_hardware_cursor();
 
@@ -471,17 +471,15 @@ impl WindowManager {
         }
     }
 
-    fn refresh_hardware_cursor(&mut self) {
+    fn restore_hardware_cursor(&self) {
         let fb = FRAMEBUFFER.lock();
         let (width, height, addr, pitch) = if let Some(info) = fb.info.as_ref() {
             (info.width as isize, info.height as isize, info.address, info.pitch)
         } else { return };
 
-        let cursor_w = 12;
-        let cursor_h = 17;
-
-        // 1. Restore old background to VRAM
         if !self.cursor_save_buffer.is_empty() {
+            let cursor_w = 12;
+            let cursor_h = 17;
             let src_ptr = self.cursor_save_buffer.as_ptr() as *const u8;
             let dst_base = addr as *mut u8;
 
@@ -492,18 +490,31 @@ impl WindowManager {
                 let mut draw_w = cursor_w as isize;
                 let mut start_x = 0;
                 if cx < 0 { start_x = -cx; draw_w += cx; }
-                if cx + cursor_w as isize > width { draw_w = (width - cx).min(cursor_w as isize); }
+                if cx + 12 > width { draw_w = (width - cx).min(12); }
                 if draw_w <= 0 { continue; }
 
                 unsafe {
                     core::ptr::copy_nonoverlapping(
-                        src_ptr.add((i * cursor_w + start_x as usize) * 4),
+                        src_ptr.add((i * 12 + start_x as usize) * 4),
                         dst_base.add(cy as usize * pitch + (cx + start_x) as usize * 4),
                         draw_w as usize * 4
                     );
                 }
             }
         }
+    }
+
+    fn refresh_hardware_cursor(&mut self) {
+        let fb = FRAMEBUFFER.lock();
+        let (width, height, addr, pitch) = if let Some(info) = fb.info.as_ref() {
+            (info.width as isize, info.height as isize, info.address, info.pitch)
+        } else { return };
+
+        let cursor_w = 12;
+        let cursor_h = 17;
+
+        // 1. Restore old background to VRAM
+        self.restore_hardware_cursor();
 
         // 2. Save new background from VRAM
         self.last_cursor_x = self.input.mouse_x;
@@ -641,35 +652,9 @@ impl InputManager {
     pub fn update(&mut self, max_w: isize, max_h: isize) {
         self.event_queue.clear();
         while let Some(packet) = mouse::get_packet() {
-            let mut dx = packet.x as isize;
-            let mut dy = -(packet.y as isize); // Invert Y for screen coordinates
-
-            // Calculate acceleration multiplier based on movement magnitude
-            let max_delta = dx.abs().max(dy.abs());
-            let accel = if max_delta > 15 {
-                4 // Fast flicks travel much further
-            } else if max_delta > 8 {
-                3
-            } else if max_delta > 3 {
-                2
-            } else {
-                1 // Slow movements remain precise
-            };
-
-            dx *= accel;
-            dy *= accel;
-
-            let sens = (MOUSE_SENSITIVITY.load(Ordering::Relaxed) * 2) as isize;
-            let final_dx = (dx * sens) / 100;
-            let final_dy = (dy * sens) / 100;
-
-            self.mouse_x = (self.mouse_x + final_dx).clamp(0, max_w - 1);
-            self.mouse_y = (self.mouse_y + final_dy).clamp(0, max_h - 1);
-
-            if final_dx != 0 || final_dy != 0 {
-                self.event_queue.push(InputEvent::MouseMove { x: self.mouse_x, y: self.mouse_y, dx: final_dx, dy: final_dy });
-            }
-
+            let sens = MOUSE_SENSITIVITY.load(Ordering::Relaxed) as isize;
+            self.mouse_x = (self.mouse_x + (packet.x as isize * sens) / 100).clamp(0, max_w - 1);
+            self.mouse_y = (self.mouse_y - (packet.y as isize * sens) / 100).clamp(0, max_h - 1);
             let left = (packet.buttons & 0x1) != 0;
             if left != self.left_button_pressed { self.left_button_pressed = left; self.event_queue.push(InputEvent::MouseButton { button: MouseButton::Left, down: left, x: self.mouse_x, y: self.mouse_y }); }
             if packet.wheel != 0 { self.event_queue.push(InputEvent::Scroll { delta: packet.wheel as isize, x: self.mouse_x, y: self.mouse_y }); }
