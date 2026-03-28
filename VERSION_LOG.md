@@ -1,5 +1,7 @@
 # NebulaOS Version History
 
+*Note: The date in between "()" is the release date of each version.*
+
 ## v0.0.3-dev2 (04-14-2026)
 - Implemented NebulaFS: A ZFS-inspired Copy-On-Write (COW) filesystem.
 - Added SPA (Storage Pool Allocator) with VDEV hierarchy support (Leaf, Mirror, RAID-Z).
