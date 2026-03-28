@@ -539,6 +539,11 @@ impl WindowManager {
 
     fn restore_hardware_cursor(&self) {
         let fb = FRAMEBUFFER.lock();
+        self.restore_vram_cursor(&fb);
+    }
+
+    /// Internal version of restore that uses an already-locked framebuffer to avoid deadlocks.
+    fn restore_vram_cursor(&self, fb: &framebuffer::Framebuffer) {
         let (width, height, addr, pitch) = if let Some(info) = fb.info.as_ref() {
             (info.width as isize, info.height as isize, info.address, info.pitch)
         } else { return };
@@ -574,8 +579,8 @@ impl WindowManager {
             (info.width as isize, info.height as isize, info.address, info.pitch)
         } else { return };
 
-        // 1. Restore old background to VRAM
-        self.restore_hardware_cursor();
+        // 1. Restore old background to VRAM using the current lock
+        self.restore_vram_cursor(&fb);
 
         // 2. Save new background from VRAM
         self.last_cursor_x = self.input.mouse_x;
@@ -606,8 +611,7 @@ impl WindowManager {
         }
 
         // 3. Draw cursor bitmap directly to VRAM
-        let cursor_bitmap = match self.cursor_style {
-            CursorStyle::Arrow => [
+        const ARROW_BITMAP: [[u8; 12]; 17] = [
                 [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
                 [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
                 [1, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -625,8 +629,11 @@ impl WindowManager {
                 [1, 0, 0, 0, 0, 1, 2, 2, 1, 0, 0, 0],
                 [0, 0, 0, 0, 0, 1, 2, 2, 1, 0, 0, 0],
                 [0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
-            ],
-            _ => [[0; CURSOR_WIDTH]; CURSOR_HEIGHT],
+        ];
+
+        let cursor_bitmap = match self.cursor_style {
+            CursorStyle::Arrow => ARROW_BITMAP,
+            _ => ARROW_BITMAP, // Fallback to arrow for resize styles until bitmaps are implemented
         };
 
         let vram = addr as *mut u32;

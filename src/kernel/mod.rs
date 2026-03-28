@@ -123,12 +123,21 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     draw_progress_bar(30);
 
     // Initialize the mouse driver (polls for ACKs, so interrupts must be disabled)
-    crate::drivers::mouse::initialize();
-    add_boot_status("[OK] Mouse Driver Initialized", 3);
+    if let Err(e) = crate::drivers::mouse::initialize() {
+        crate::serial_println!("Mouse Driver Error: {}", e);
+        add_boot_status("[WARN] Mouse Driver failed", 3);
+    } else {
+        add_boot_status("[OK] Mouse Driver Initialized", 3);
+    }
     draw_progress_bar(60);
 
     // Initialize the keyboard driver
-    crate::drivers::keyboard::init();
+    if let Err(e) = crate::drivers::keyboard::init() {
+        crate::serial_println!("Keyboard Driver Error: {}", e);
+        add_boot_status("[WARN] Keyboard Driver failed", 4);
+    } else {
+        add_boot_status("[OK] Keyboard Driver Initialized", 4);
+    }
 
     // Now it is safe to enable interrupts
     interrupts::enable_interrupts();

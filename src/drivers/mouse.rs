@@ -1,8 +1,9 @@
 use super::ps2;
 use crate::kernel::interrupts::InterruptStackFrame;
 use crate::kernel::io;
-use spin::Mutex;
+use crate::kernel::process::IrqSafeMutex; // Use IrqSafeMutex
 use core::arch::asm;
+use core::sync::atomic::{AtomicU8, Ordering};
 
 #[derive(Debug, Clone, Copy)]
 pub struct MousePacket {
@@ -37,14 +38,14 @@ impl MouseBuffer {
     }
 }
 
-pub static MOUSE_BUFFER: Mutex<MouseBuffer> = Mutex::new(MouseBuffer::new());
+pub static MOUSE_BUFFER: IrqSafeMutex<MouseBuffer> = IrqSafeMutex::new(MouseBuffer::new());
 
 // State for the interrupt handler to track packet assembly
 static mut BYTE_CYCLE: u8 = 0;
 static mut BYTES: [u8; 4] = [0; 4];
-static mut MOUSE_ID: u8 = 0;
+static MOUSE_ID: AtomicU8 = AtomicU8::new(0); // Use AtomicU8 for thread-safe access
 
-pub fn initialize() {
+pub fn initialize() -> Result<(), &'static str> {
     crate::serial_println!("[MOUSE] Initializing PS/2 mouse...");
 
     unsafe {
@@ -67,62 +68,44 @@ pub fn initialize() {
 
         // 4. Send commands to the mouse itself
         // Reset mouse first to ensure clean state
-        if !ps2::write_mouse_command(0xFF) {
-            crate::serial_println!("[MOUSE] Reset command failed (no ACK)");
-        } else {
-            // After a reset, the mouse sends an ACK (0xFA), then a self-test result (0xAA), and an ID (0x00).
-            // The write_mouse_command function consumes the ACK. We must consume the other two bytes.
-            if ps2::wait_output_avail() {
-                let _ = ps2::read_data(); // Consume self-test result
-            } else {
-                crate::serial_println!("[MOUSE] No self-test result after reset");
-            }
-            if ps2::wait_output_avail() {
-                let _ = ps2::read_data(); // Consume mouse ID
-            } else {
-                crate::serial_println!("[MOUSE] No mouse ID after reset");
-            }
-        }
+        ps2::send_device_command(0xFF, true)?;
+        if ps2::wait_and_read()? != 0xAA { return Err("Mouse reset: Self-test failed"); }
+        if ps2::wait_and_read()? != 0x00 { return Err("Mouse reset: Unexpected ID"); }
 
         // Set Defaults (Note: this often disables extensions, so we do it before the magic sequence)
-        if !ps2::write_mouse_command(0xF6) { crate::serial_println!("[MOUSE] Set Defaults failed"); }
+        ps2::send_device_command(0xF6, true)?;
 
         // Set Scaling 1:1 (Command 0xE6) to ensure predictable relative movement
-        if !ps2::write_mouse_command(0xE6) { crate::serial_println!("[MOUSE] Set Scaling 1:1 failed"); }
+        ps2::send_device_command(0xE6, true)?;
 
         // Set Resolution (Command 0xE8, Data 0x03 = 8 counts/mm) for higher precision
-        if !ps2::write_mouse_command(0xE8) { crate::serial_println!("[MOUSE] Set Resolution command failed"); }
-        if !ps2::write_mouse_command(0x03) { crate::serial_println!("[MOUSE] Set Resolution data failed"); }
+        ps2::send_device_command(0xE8, true)?;
+        ps2::send_device_command(0x03, true)?;
 
         // Enable Intellimouse Extensions (Magic Sequence: 200, 100, 80)
-        if !ps2::write_mouse_command(0xF3) { crate::serial_println!("[MOUSE] Set Sample Rate (200) command failed"); }
-        if !ps2::write_mouse_command(200) { crate::serial_println!("[MOUSE] Set Sample Rate (200) data failed"); }
-        if !ps2::write_mouse_command(0xF3) { crate::serial_println!("[MOUSE] Set Sample Rate (100) command failed"); }
-        if !ps2::write_mouse_command(100) { crate::serial_println!("[MOUSE] Set Sample Rate (100) data failed"); }
-        if !ps2::write_mouse_command(0xF3) { crate::serial_println!("[MOUSE] Set Sample Rate (80) command failed"); }
-        if !ps2::write_mouse_command(80) { crate::serial_println!("[MOUSE] Set Sample Rate (80) data failed"); }
-
-        // Get Device ID to verify extension is enabled (should be 3 or 4)
-        if !ps2::write_mouse_command(0xF2) { crate::serial_println!("[MOUSE] Get Device ID command failed"); }
-        if ps2::wait_output_avail() {
-            let id = ps2::read_data();
-            MOUSE_ID = id;
-            crate::serial_println!("[MOUSE] Device ID: {:#x}", id);
-        } else {
-            crate::serial_println!("[MOUSE] No Device ID received");
+        for rate in [200, 100, 80] {
+            ps2::send_device_command(0xF3, true)?;
+            ps2::send_device_command(rate, true)?;
         }
 
-        // Set final sample rate to 100Hz for smoother tracking
-        if !ps2::write_mouse_command(0xF3) { crate::serial_println!("[MOUSE] Set Sample Rate (100Hz) command failed"); }
-        if !ps2::write_mouse_command(100) { crate::serial_println!("[MOUSE] Set Sample Rate (100Hz) data failed"); }
+        // Get Device ID to verify extension is enabled (should be 3 or 4)
+        ps2::send_device_command(0xF2, true)?;
+        let id = ps2::wait_and_read()?;
+        MOUSE_ID.store(id, Ordering::Relaxed);
+        crate::serial_println!("[MOUSE] Device ID: {:#x}", id);
 
-        if !ps2::write_mouse_command(0xF4) { crate::serial_println!("[MOUSE] Enable Scanning failed"); }
+        // Set final sample rate to 100Hz for smoother tracking
+        ps2::send_device_command(0xF3, true)?;
+        ps2::send_device_command(100, true)?;
+
+        ps2::send_device_command(0xF4, true)?; // Enable Scanning
 
         // 5. Enable the devices
         ps2::write_command(0xAE); // Enable keyboard
         ps2::write_command(0xA8); // Enable mouse
     }
     crate::serial_println!("[MOUSE] PS/2 mouse initialization complete.");
+    Ok(())
 }
 
 pub fn handle_interrupt() {
@@ -152,7 +135,7 @@ pub fn handle_interrupt() {
                         BYTE_CYCLE = 0;
 
                         // If Intellimouse (ID 3 or 4), expect a 4th byte
-                        if MOUSE_ID == 3 || MOUSE_ID == 4 {
+                        if MOUSE_ID.load(Ordering::Relaxed) == 3 || MOUSE_ID.load(Ordering::Relaxed) == 4 {
                             BYTE_CYCLE = 3;
                         } else {
                             let mut x = BYTES[1] as i16;
@@ -180,9 +163,10 @@ pub fn handle_interrupt() {
                         if (BYTES[0] & 0x10) != 0 { x |= 0xFF00u16 as i16; }
                         if (BYTES[0] & 0x20) != 0 { y |= 0xFF00u16 as i16; }
 
-                        let wheel = if MOUSE_ID == 3 {
+                        let mouse_id = MOUSE_ID.load(Ordering::Relaxed);
+                        let wheel = if mouse_id == 3 {
                             byte as i8 // ID 3: standard signed byte
-                        } else if MOUSE_ID == 4 {
+                        } else if mouse_id == 4 {
                             let val = byte & 0x0F; // ID 4: lower 4 bits are wheel
                             if (val & 0x08) != 0 { (val | 0xF0) as i8 } else { val as i8 }
                         } else { 0 };
@@ -212,8 +196,6 @@ pub extern "x86-interrupt" fn interrupt_handler(_frame: &mut InterruptStackFrame
 }
 
 pub fn get_packet() -> Option<MousePacket> {
-    // Disable interrupts to prevent deadlock with mouse interrupt handler
-    unsafe { asm!("cli", options(nomem, nostack)); }
     let mut buffer = MOUSE_BUFFER.lock();
     let packet = if buffer.head == buffer.tail {
         None
@@ -223,6 +205,5 @@ pub fn get_packet() -> Option<MousePacket> {
         Some(packet)
     };
     drop(buffer);
-    unsafe { asm!("sti", options(nomem, nostack)); }
     packet
 }

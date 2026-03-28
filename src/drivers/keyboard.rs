@@ -1,8 +1,8 @@
-use spin::Mutex;
 use super::ps2;
 use crate::kernel::interrupts::InterruptStackFrame;
 use crate::kernel::io;
 use core::arch::asm;
+use crate::kernel::process::IrqSafeMutex; // Use IrqSafeMutex
 
 /// A simple ring buffer for buffering key presses.
 pub struct KeyBuffer {
@@ -89,16 +89,13 @@ pub struct Modifiers {
 }
 
 /// The global keyboard buffer.
-pub static KEY_BUFFER: Mutex<KeyBuffer> = Mutex::new(KeyBuffer::new());
+pub static KEY_BUFFER: IrqSafeMutex<KeyBuffer> = IrqSafeMutex::new(KeyBuffer::new());
 
 /// Retreives the next char from the buffer, if any.
 pub fn get_char() -> Option<char> {
-    // Disable interrupts to prevent deadlock with the interrupt handler
-    unsafe { asm!("cli", options(nomem, nostack)); }
     let mut kb = KEY_BUFFER.lock(); 
     let c = kb.pop();
     drop(kb); // Release lock before re-enabling interrupts
-    unsafe { asm!("sti", options(nomem, nostack)); }
     c
 }
 
@@ -158,66 +155,73 @@ pub fn is_win_pressed() -> bool {
     kb.modifiers.win
 }
 
-static SCANCODE_SET1: [char; 128] = [
-    '\0', '\x1B', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\x08', '\t',
-    'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\n', '\0', 'a', 's',
-    'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`', '\0', '\\', 'z', 'x', 'c', 'v',
-    'b', 'n', 'm', ',', '.', '/', '\0', '*', '\0', ' ', '\0', '\0', '\0', '\0', '\0', '\0',
-    '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\x11', '\0', '-', '\0', '\0', '\0', '+', '\0',
-    '\x12', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\x1F', '\x1F', '\0', '\0', '\0',
-    '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0',
-    '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0',
-];
+#[derive(Clone, Copy)]
+struct ScancodeEntry {
+    normal: char,
+    shifted: char,
+    is_alpha: bool,
+}
 
-static SCANCODE_SET1_SHIFTED: [char; 128] = [
-    '\0', '\x1B', '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '\x08', '\t',
-    'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', '\n', '\0', 'A', 'S',
-    'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', '"', '~', '\0', '|', 'Z', 'X', 'C', 'V',
-    'B', 'N', 'M', '<', '>', '?', '\0', '*', '\0', ' ', '\0', '\0', '\0', '\0', '\0', '\0',
-    '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\x11', '\0', '-', '\0', '\0', '\0', '+', '\0',
-    '\x12', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\x1F', '\x1F', '\0', '\0', '\0',
-    '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0',
-    '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0',
+impl ScancodeEntry {
+    const fn new(normal: char, shifted: char, is_alpha: bool) -> Self {
+        Self { normal, shifted, is_alpha }
+    }
+}
+
+static SCANCODE_TABLE: [ScancodeEntry; 128] = [
+    ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\x1B', '\x1B', false), ScancodeEntry::new('1', '!', false), ScancodeEntry::new('2', '@', false),
+    ScancodeEntry::new('3', '#', false), ScancodeEntry::new('4', '$', false), ScancodeEntry::new('5', '%', false), ScancodeEntry::new('6', '^', false),
+    ScancodeEntry::new('7', '&', false), ScancodeEntry::new('8', '*', false), ScancodeEntry::new('9', '(', false), ScancodeEntry::new('0', ')', false),
+    ScancodeEntry::new('-', '_', false), ScancodeEntry::new('=', '+', false), ScancodeEntry::new('\x08', '\x08', false), ScancodeEntry::new('\t', '\t', false), // 0x0F
+    ScancodeEntry::new('q', 'Q', true), ScancodeEntry::new('w', 'W', true), ScancodeEntry::new('e', 'E', true), ScancodeEntry::new('r', 'R', true),
+    ScancodeEntry::new('t', 'T', true), ScancodeEntry::new('y', 'Y', true), ScancodeEntry::new('u', 'U', true), ScancodeEntry::new('i', 'I', true),
+    ScancodeEntry::new('o', 'O', true), ScancodeEntry::new('p', 'P', true), ScancodeEntry::new('[', '{', false), ScancodeEntry::new(']', '}', false),
+    ScancodeEntry::new('\n', '\n', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('a', 'A', true), ScancodeEntry::new('s', 'S', true), // 0x1F
+    ScancodeEntry::new('d', 'D', true), ScancodeEntry::new('f', 'F', true), ScancodeEntry::new('g', 'G', true), ScancodeEntry::new('h', 'H', true),
+    ScancodeEntry::new('j', 'J', true), ScancodeEntry::new('k', 'K', true), ScancodeEntry::new('l', 'L', true), ScancodeEntry::new(';', ':', false),
+    ScancodeEntry::new('\'', '"', false), ScancodeEntry::new('`', '~', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\\', '|', false),
+    ScancodeEntry::new('z', 'Z', true), ScancodeEntry::new('x', 'X', true), ScancodeEntry::new('c', 'C', true), ScancodeEntry::new('v', 'V', true), // 0x2F
+    ScancodeEntry::new('b', 'B', true), ScancodeEntry::new('n', 'N', true), ScancodeEntry::new('m', 'M', true), ScancodeEntry::new(',', '<', false),
+    ScancodeEntry::new('.', '>', false), ScancodeEntry::new('/', '?', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('*', '*', false),
+    ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new(' ', ' ', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false),
+    ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), // 0x3F
+    ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false),
+    ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false),
+    ScancodeEntry::new('\x11', '\x11', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('-', '-', false), ScancodeEntry::new('\0', '\0', false),
+    ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('+', '+', false), ScancodeEntry::new('\0', '\0', false), // 0x4F
+    ScancodeEntry::new('\x12', '\x12', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false),
+    ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false),
+    ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\x1F', '\x1F', false),
+    ScancodeEntry::new('\x1F', '\x1F', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), // 0x5F
+    ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false),
+    ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false),
+    ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false),
+    ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), // 0x6F
+    ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false),
+    ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false),
+    ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false),
+    ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), ScancodeEntry::new('\0', '\0', false), // 0x7F
 ];
 
 /// Internal version for use in interrupt handlers to avoid deadlock
 fn scancode_to_char_internal(kb: &KeyBuffer, scancode: u8) -> Option<char> {
+    let idx = scancode as usize;
+    if idx >= SCANCODE_TABLE.len() { return None; }
+
+    let entry = &SCANCODE_TABLE[idx];
     let shift = kb.modifiers.lshift || kb.modifiers.rshift;
     let capslock = kb.modifiers.capslock;
-    let idx = scancode as usize;
-
-    if idx >= SCANCODE_SET1.len() {
-        return None;
-    }
-
-    let c = SCANCODE_SET1[idx];
-    if c == '\0' {
-        return None;
-    }
-
-    let is_letter = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
     
-    // If it is a letter, Shift XOR CapsLock determines case.
-    // If it is NOT a letter (e.g. number or symbol), only Shift determines the alternate char.
-    let use_shifted = if is_letter {
-        shift ^ capslock
-    } else {
-        shift
-    };
+    // Determine if we should use the shifted character table.
+    // For alpha keys, Shift and CapsLock toggle each other. 
+    // For symbols/numbers, only Shift matters.
+    let use_shifted = shift ^ (capslock && entry.is_alpha);
+    let c = if use_shifted { entry.shifted } else { entry.normal };
 
-    if use_shifted {
-        Some(SCANCODE_SET1_SHIFTED[idx])
-    } else {
-        Some(c)
-    }
+    if c == '\0' { None } else { Some(c) }
 }
 
-unsafe fn send_cmd(byte: u8) {
-    while (ps2::read_status() & 0x02) != 0 {}
-    ps2::write_data(byte);
-}
-
-pub fn init() {
+pub fn init() -> Result<(), &'static str> {
     unsafe {
         // 1. Disable PS/2 devices to prevent them from sending data during setup
         ps2::write_command(0xAD); // Disable keyboard
@@ -238,32 +242,27 @@ pub fn init() {
 
         // 4. Send commands to the keyboard itself
         // Reset keyboard first to ensure clean state
-        send_cmd(0xFF); // Reset
-        ps2::read_data(); // Consume ACK
+        ps2::send_device_command(0xFF, false)?;
+        if ps2::wait_and_read()? != 0xAA { return Err("Keyboard self-test failed"); }
 
-        send_cmd(0xF0); // Set Scan Code Set
-        send_cmd(0x02); // Scan Code Set 2
-        ps2::read_data(); // Consume ACK
+        ps2::send_device_command(0xF0, false)?;
+        ps2::send_device_command(0x02, false)?; // Set Scan Code Set 2
 
-        send_cmd(0xF6); // Set Defaults
-        ps2::read_data(); // Consume ACK
+        ps2::send_device_command(0xF6, false)?; // Set Defaults
 
-        send_cmd(0xF4); // Enable Scanning
-        ps2::read_data(); // Consume ACK
+        ps2::send_device_command(0xF4, false)?; // Enable Scanning
 
         // 5. Enable the devices
         ps2::write_command(0xAE); // Enable keyboard
         ps2::write_command(0xA8); // Enable mouse
     }
+    Ok(())
 }
 
 /// Converts a PS/2 scancode (Set 1) to a character.
 /// Handles a basic QWERTY layout.
 pub fn scancode_to_char(scancode: u8) -> Option<char> {
-    unsafe { asm!("cli", options(nomem, nostack)); }
     let kb = KEY_BUFFER.lock();
     let res = scancode_to_char_internal(&kb, scancode);
-    drop(kb);
-    unsafe { asm!("sti", options(nomem, nostack)); }
     res
 }
