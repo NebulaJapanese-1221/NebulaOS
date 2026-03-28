@@ -60,6 +60,7 @@ impl<'a, T> Drop for IrqSafeGuard<'a, T> {
 pub enum TaskState {
     Ready,
     Sleeping,
+    #[allow(dead_code)]
     Blocked,
 }
 
@@ -177,6 +178,7 @@ impl Scheduler {
     }
 
     /// Marks the current task as blocked (waiting for I/O).
+    #[allow(dead_code)]
     pub fn block_current_task(&mut self) {
         if self.current_index < self.tasks.len() {
             self.tasks[self.current_index].state = TaskState::Blocked;
@@ -244,8 +246,9 @@ pub fn yield_now(current_esp: usize) -> usize {
     scheduler.last_tsc = now;
 
     // Save current ESP
-    if scheduler.current_index < total_user_tasks {
-        scheduler.tasks[scheduler.current_index].kernel_esp = current_esp;
+    let old_idx = scheduler.current_index;
+    if old_idx < total_user_tasks {
+        scheduler.tasks[old_idx].kernel_esp = current_esp;
     } else {
         scheduler.kernel_esp = current_esp;
     }
@@ -254,7 +257,8 @@ pub fn yield_now(current_esp: usize) -> usize {
 
     // Switch to new stack
     if scheduler.current_index < total_user_tasks {
-        let next_task = &scheduler.tasks[scheduler.current_index];
+        let new_idx = scheduler.current_index;
+        let next_task = &scheduler.tasks[new_idx];
         let kstack_top = next_task.kernel_stack.as_ptr() as usize + next_task.kernel_stack.len();
         crate::kernel::gdt::set_interrupt_stack(kstack_top as u32);
         next_task.kernel_esp
@@ -268,8 +272,6 @@ pub fn yield_now(current_esp: usize) -> usize {
 #[no_mangle]
 pub extern "C" fn schedule(current_esp: usize) -> usize {
     // 1. Handle Timer Logic
-    const KERNEL_PRIORITY: usize = 10;
-
     rtc::handle_timer_tick();
     TICKS.fetch_add(1, Ordering::Relaxed);
     unsafe { io::outb(0x20, 0x20); } // Send EOI
@@ -321,8 +323,7 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
     let current_task_index = scheduler.current_index;
     if current_task_index < total_user_tasks {
         // The current task is a user task
-        let idx = scheduler.current_index;
-        scheduler.tasks[idx].kernel_esp = current_esp;
+        scheduler.tasks[current_task_index].kernel_esp = current_esp;
     } else {
         // The current task is the main kernel loop
         scheduler.kernel_esp = current_esp;
@@ -332,9 +333,10 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
     scheduler.pick_next();
 
     // 4. Get ESP of the task we are switching TO
-    if scheduler.current_index < total_user_tasks {
+    let next_idx = scheduler.current_index;
+    if next_idx < total_user_tasks {
         // It's a user task. Update TSS and return its ESP.
-        let next_task = &scheduler.tasks[scheduler.current_index];
+        let next_task = &scheduler.tasks[next_idx];
         let kstack_top = next_task.kernel_stack.as_ptr() as usize + next_task.kernel_stack.len();
         crate::kernel::gdt::set_interrupt_stack(kstack_top as u32);
         next_task.kernel_esp

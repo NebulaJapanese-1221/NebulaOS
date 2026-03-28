@@ -6,6 +6,7 @@ use super::io;
 
 extern "C" {
     fn timer_handler();
+    #[allow(dead_code)]
     fn schedule(esp: usize) -> usize;
 }
 

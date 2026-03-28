@@ -17,6 +17,7 @@ static SECONDARY_BUS_LOCK: Mutex<()> = Mutex::new(());
 enum Command {
     Read = 0x20,
     Write = 0x30,
+    #[allow(dead_code)]
     Identify = 0xEC,
     CacheFlush = 0xE7,
 }
@@ -167,6 +168,7 @@ impl AtaDrive {
     }
 
     /// Waits for the drive to be ready (BSY=0, DRQ=1) for data transfer.
+    #[allow(dead_code)]
     unsafe fn poll(&self) {
         // Delay (400ns)
         for _ in 0..4 { io::inb(self.port_base + 7); }
@@ -200,13 +202,13 @@ impl AtaDrive {
     #[inline(always)]
     unsafe fn yield_task(&self) {
         core::arch::asm!(
-            "pushfd", "push cs", "lea eax, [1f]", "push eax",
+            "pushfd", "push cs", "lea eax, [2f]", "push eax",
             "push 0", "push ds", "push es", "push fs", "push gs", "pusha",
             "mov eax, esp", "push eax",
             "call {yield_now}",
             "add esp, 4", "mov esp, eax",
             "popa", "pop gs", "pop fs", "pop es", "pop ds", "add esp, 4", "iretd",
-            "1:",
+            "2:",
             yield_now = sym crate::kernel::process::yield_now,
             out("eax") _,
         );

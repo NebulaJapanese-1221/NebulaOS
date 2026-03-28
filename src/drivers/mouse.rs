@@ -105,8 +105,9 @@ pub fn initialize() {
         // Get Device ID to verify extension is enabled (should be 3 or 4)
         if !ps2::write_mouse_command(0xF2) { crate::serial_println!("[MOUSE] Get Device ID command failed"); }
         if ps2::wait_output_avail() {
-            MOUSE_ID = ps2::read_data();
-            crate::serial_println!("[MOUSE] Device ID: {:#x}", MOUSE_ID);
+            let id = ps2::read_data();
+            MOUSE_ID = id;
+            crate::serial_println!("[MOUSE] Device ID: {:#x}", id);
         } else {
             crate::serial_println!("[MOUSE] No Device ID received");
         }

@@ -41,7 +41,7 @@ pub enum WindowContent {
 } 
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MouseButton { Left, Right, Middle }
+pub enum MouseButton { Left, Right, #[allow(dead_code)] Middle }
 
 #[derive(Clone, Copy, Debug)]
 pub enum InputEvent {
