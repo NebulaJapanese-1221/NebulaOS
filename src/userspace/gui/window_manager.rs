@@ -81,6 +81,8 @@ pub struct WindowManager {
     pub last_cursor_x: isize,
     pub last_cursor_y: isize,
     pub cursor_save_buffer: Vec<u32>,
+    pub ready_buffer: Vec<u32>,
+    pub last_cursor_rect: Rect,
     pub app_loading: bool,
 }
 
@@ -95,6 +97,8 @@ impl WindowManager {
             backbuffer: Vec::new(), drag_rect: None, task_switcher_open: false, task_switcher_index: 0,
             last_cursor_x: 400, last_cursor_y: 300,
             cursor_save_buffer: Vec::new(),
+            ready_buffer: Vec::new(),
+            last_cursor_rect: Rect { x: 400, y: 300, width: CURSOR_WIDTH, height: CURSOR_HEIGHT },
             app_loading: false,
         }
     }
@@ -132,7 +136,6 @@ impl WindowManager {
         let start_interaction_id = self.resize_win_id;
         let start_interaction_rect = start_interaction_id.and_then(|id| self.get_window_rect(id));
 
-        if let Some(rect) = self.drag_rect { self.mark_dirty(rect); }
         self.input.update(screen_width, screen_height);
         let mut mouse_moved = false;
         let events = core::mem::take(&mut self.input.event_queue);
@@ -151,7 +154,9 @@ impl WindowManager {
                         }
                     } else if let Some(id) = self.drag_win_id {
                         if let Some(win) = self.windows.iter().find(|w| w.id == id) {
+                            if let Some(old_rect) = self.drag_rect { self.mark_dirty(old_rect); }
                             self.drag_rect = Some(Rect { x: self.input.mouse_x - self.drag_offset_x, y: self.input.mouse_y - self.drag_offset_y, width: win.width, height: win.height });
+                            if let Some(new_rect) = self.drag_rect { self.mark_dirty(new_rect); }
                         }
                     }
                 }
@@ -206,21 +211,12 @@ impl WindowManager {
             self.mark_dirty(Rect { x: sw/2 - 40, y: sh/2 - 40, width: 80, height: 100 });
         }
 
-        if mouse_moved {
-            if let Some(rect) = start_interaction_rect { self.mark_dirty(rect); }
-            if let Some(id) = start_interaction_id { if let Some(rect) = self.get_window_rect(id) { self.mark_dirty(rect); } }
-            if let Some(rect) = self.drag_rect { self.mark_dirty(rect); }
-            
-            if self.shell.start_menu.is_open {
-                self.update_start_menu_hover(screen_height, is_vertical);
-            }
-
-            // Use hardware-mimicking overlay for zero-lag response
-            self.refresh_hardware_cursor();
+        if mouse_moved && self.shell.start_menu.is_open {
+            self.update_start_menu_hover(screen_height, is_vertical);
         }
-        self.update_cursor_style();
+
+        if mouse_moved { self.update_cursor_style(); }
         if FULL_REDRAW_REQUESTED.load(Ordering::Relaxed) { FULL_REDRAW_REQUESTED.store(false, Ordering::Relaxed); self.mark_dirty(Rect { x: 0, y: 0, width: screen_width as usize, height: screen_height as usize }); }
-        if !self.dirty_rects.is_empty() { self.draw_dirty(); }
     }
 
     fn handle_start_menu_keys(&mut self, key: char, screen_height: isize, is_vertical: bool) {
@@ -280,10 +276,7 @@ impl WindowManager {
                 }
             }
         }
-        if self.cursor_style != ns || self.resize_direction != ns_dir {
-            self.cursor_style = ns; self.resize_direction = ns_dir;
-            self.refresh_hardware_cursor();
-        }
+        self.cursor_style = ns; self.resize_direction = ns_dir;
     }
 
     fn handle_mouse_button_event(&mut self, button: MouseButton, down: bool, screen_width: isize, screen_height: isize) {
@@ -381,7 +374,6 @@ impl WindowManager {
         // 3. Start Menu Item Click
         let menu_rect = self.shell.start_menu.rect(screen_height, self.shell.taskbar_height, is_vertical);
         if self.shell.start_menu.is_open && menu_rect.contains(self.input.mouse_x, self.input.mouse_y) {
-            let app_list = self.shell.get_start_menu_data();
             let mut clicked_idx = None;
 
             let menu_x = menu_rect.x;
@@ -475,18 +467,140 @@ impl WindowManager {
     }
     fn contains_insensitive(&self, haystack: &str, needle: &str) -> bool { if needle.is_empty() { return true; } haystack.as_bytes().windows(needle.len()).any(|window| window.eq_ignore_ascii_case(needle.as_bytes())) }
 
-    fn draw_dirty(&mut self) {
-        if self.dirty_rects.is_empty() { return; }
+    /// Syncs a rectangle from the desktop state (backbuffer) to the ready buffer.
+    fn sync_ready_rect(&mut self, rect: Rect, sw: usize, sh: usize) {
+        let x = rect.x.max(0) as usize;
+        let y = rect.y.max(0) as usize;
+        let w = rect.width.min(sw.saturating_sub(x));
+        let h = rect.height.min(sh.saturating_sub(y));
+        if w == 0 || h == 0 { return; }
+        for i in 0..h {
+            let offset = (y + i) * sw + x;
+            self.ready_buffer[offset..offset + w].copy_from_slice(&self.backbuffer[offset..offset + w]);
+        }
+    }
+
+    /// The entry point for the dedicated GUI rendering task.
+    pub fn render_loop() -> ! {
+        loop {
+            let mut vram_blit_rects = Vec::new();
+            let mut fb_info_copy = None;
+
+            {
+                let mut wm = crate::userspace::gui::WINDOW_MANAGER.lock();
+                let fb_info = if let Some(info) = FRAMEBUFFER.lock().info.as_ref() { *info } else { 
+                    drop(wm); unsafe { core::arch::asm!("int 0x80", in("eax") 0usize); } continue; 
+                };
+                fb_info_copy = Some(fb_info);
+
+                let mouse_moved = wm.input.mouse_x != wm.last_cursor_x || wm.input.mouse_y != wm.last_cursor_y;
+                
+                if !wm.dirty_rects.is_empty() || mouse_moved {
+                    // 1. Composition: Update backbuffer with window changes
+                    let dirty_regions = wm.draw_dirty_to_backbuffer(fb_info);
+                    
+                    // 2. Sync window changes to ready_buffer
+                    for r in &dirty_regions {
+                        wm.sync_ready_rect(*r, fb_info.width, fb_info.height);
+                        vram_blit_rects.push(*r);
+                    }
+
+                    // 3. Flicker-Free Cursor Sync
+                    // Erase old cursor in ready_buffer by restoring from backbuffer
+                    wm.sync_ready_rect(wm.last_cursor_rect, fb_info.width, fb_info.height);
+                    vram_blit_rects.push(wm.last_cursor_rect);
+
+                    // Update position
+                    wm.last_cursor_x = wm.input.mouse_x; wm.last_cursor_y = wm.input.mouse_y;
+                    wm.last_cursor_rect = Rect { x: wm.last_cursor_x, y: wm.last_cursor_y, width: CURSOR_WIDTH, height: CURSOR_HEIGHT };
+
+                    // Draw cursor into ready_buffer
+                    wm.draw_cursor_to_ready(fb_info);
+                    vram_blit_rects.push(wm.last_cursor_rect);
+                }
+            }
+
+            // 4. Presentation: Blit from ready_buffer to VRAM without holding the WM lock longer than necessary
+            if let (Some(info), true) = (fb_info_copy, !vram_blit_rects.is_empty()) {
+                let mut wm = crate::userspace::gui::WINDOW_MANAGER.lock();
+                
+                // Final merge to minimize VRAM transactions
+                let mut final_rects: Vec<Rect> = Vec::new();
+                for r in vram_blit_rects {
+                    let mut current = r; let mut j = 0;
+                    while j < final_rects.len() { if current.intersects(&final_rects[j]) { let other = final_rects.swap_remove(j); current = current.union(&other); j = 0; } else { j += 1; } }
+                    final_rects.push(current);
+                }
+
+                let vram_ptr = info.address as *mut u32;
+                let src = wm.ready_buffer.as_ptr();
+
+                for dr in final_rects {
+                    let rx = dr.x.max(0) as usize; let ry = dr.y.max(0) as usize;
+                    let rw = dr.width.min(info.width.saturating_sub(rx)); let rh = dr.height.min(info.height.saturating_sub(ry));
+                    for i in 0..rh {
+                        let cy = ry + i;
+                        unsafe {
+                            let src_ptr = src.add(cy * info.width + rx);
+                            let dst_ptr = vram_ptr.add(cy * (info.pitch / 4) + rx);
+                            core::ptr::copy_nonoverlapping(src_ptr, dst_ptr, rw);
+                        }
+                    }
+                }
+            }
+
+            // Yield the CPU to allow the input loop and applications to run
+            unsafe { core::arch::asm!("int 0x80", in("eax") 0usize); }
+        }
+    }
+
+    /// Composes the desktop and windows into the backbuffer. Returns dirty regions.
+    fn draw_dirty_to_backbuffer(&mut self, fb_info: framebuffer::FramebufferInfo) -> Vec<Rect> {
+        if self.dirty_rects.is_empty() { return Vec::new(); }
+        
+        let mut final_rects: Vec<Rect> = Vec::with_capacity(self.dirty_rects.len());
         let raw_dirty = core::mem::take(&mut self.dirty_rects);
-        let mut final_rects = Vec::new();
+
         for r in raw_dirty {
-            let mut current = r; let mut i = 0;
-            while i < final_rects.len() { if current.intersects(&final_rects[i]) { let other = final_rects.remove(i); current = current.union(&other); i = 0; } else { i += 1; } }
+            if r.width == 0 || r.height == 0 { continue; }
+            let mut current = r;
+            let mut j = 0;
+            while j < final_rects.len() {
+                if current.intersects(&final_rects[j]) {
+                    // Heuristic: Only merge if the union isn't too wasteful.
+                    // This prevents two tiny distant rects from dirtying the whole screen.
+                    let union = current.union(&final_rects[j]);
+                    let combined_area = (current.width * current.height) + (final_rects[j].width * final_rects[j].height);
+                    let union_area = union.width * union.height;
+
+                    // If the union area is less than 2x the combined area, merge them.
+                    // This reduces the number of draw calls while keeping the blit size reasonable.
+                    if union_area < combined_area * 2 {
+                        current = union;
+                        final_rects.swap_remove(j);
+                        j = 0; // Restart to check new union against existing rects
+                        continue;
+                    }
+                }
+                j += 1;
+            }
             final_rects.push(current);
         }
-        let fb_info = if let Some(info) = FRAMEBUFFER.lock().info.as_ref() { framebuffer::FramebufferInfo { address: info.address, width: info.width, height: info.height, pitch: info.pitch, bpp: info.bpp } } else { return };
-        if self.backbuffer.len() != fb_info.width * fb_info.height { self.backbuffer.resize(fb_info.width * fb_info.height, 0); }
+
+        let (sw, sh) = (fb_info.width, fb_info.height);
+
+        // Global Fallback: If we have too many disjoint rects or they cover half the screen,
+        // it's significantly faster in software to do a single full-screen pass.
+        let total_dirty_area: usize = final_rects.iter().map(|r| r.width * r.height).sum();
+        if final_rects.len() > 12 || total_dirty_area > (sw * sh) / 2 {
+            final_rects.clear();
+            final_rects.push(Rect { x: 0, y: 0, width: sw, height: sh });
+        }
+
+        if self.backbuffer.len() != sw * sh { self.backbuffer.resize(sw * sh, 0); }
         let mut local_fb = framebuffer::Framebuffer::new(); local_fb.info = Some(fb_info); local_fb.draw_buffer = Some(core::mem::take(&mut self.backbuffer));
+
+        let menu_data = if self.shell.start_menu.is_open { Some(self.shell.get_start_menu_data()) } else { None };
 
         for dirty_rect in &final_rects {
             self.draw_desktop_bg(&mut local_fb, *dirty_rect);
@@ -495,48 +609,54 @@ impl WindowManager {
             if self.task_switcher_open { self.shell.draw_task_switcher(&mut local_fb, *dirty_rect, self.z_order.as_slice(), self.windows.as_slice(), self.task_switcher_index); }
             
             if self.app_loading {
-                let (sw, sh) = (fb_info.width as isize, fb_info.height as isize);
-                self.shell.draw_loading_spinner(&mut local_fb, sw / 2, sh / 2, *dirty_rect);
+                self.shell.draw_loading_spinner(&mut local_fb, sw as isize / 2, sh as isize / 2, *dirty_rect);
             }
         }
-
-        // Erase the current cursor from VRAM before blitting new pixels
-        self.restore_hardware_cursor();
-
-        unsafe { core::arch::asm!("cli") };
-        {
-            let fb = FRAMEBUFFER.lock();
-            if let (Some(ref info), Some(ref src)) = (&fb.info, &local_fb.draw_buffer) {
-                for dr in final_rects {
-                    let x = dr.x.max(0) as usize; let y = dr.y.max(0) as usize;
-                    let w = dr.width.min(info.width.saturating_sub(x)); let h = dr.height.min(info.height.saturating_sub(y));
-                    for i in 0..h {
-                        let cy = y + i;
-                        unsafe {
-                            let src_ptr = src.as_ptr().add(cy * info.width + x);
-                            let dst_ptr = (info.address as *mut u32).add(cy * (info.pitch / 4) + x);
-                            core::ptr::copy_nonoverlapping(src_ptr, dst_ptr, w);
-                        }
-                    }
-                }
-            }
-        }
-        unsafe { core::arch::asm!("sti") };
-
-        // After blitting the new frame, the hardware cursor's background is invalid.
-        self.cursor_save_buffer.clear();
-        self.refresh_hardware_cursor();
 
         self.backbuffer = local_fb.draw_buffer.take().unwrap();
+        final_rects
+    }
+
+    fn draw_cursor_to_ready(&mut self, info: framebuffer::FramebufferInfo) {
+        let width = info.width as isize;
+        let height = info.height as isize;
+        const ARROW_BITMAP: [[u8; 12]; 17] = [
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [1, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0], [1, 2, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+            [1, 2, 2, 2, 1, 0, 0, 0, 0, 0, 0, 0], [1, 2, 2, 2, 2, 1, 0, 0, 0, 0, 0, 0],
+            [1, 2, 2, 2, 2, 2, 1, 0, 0, 0, 0, 0], [1, 2, 2, 2, 2, 2, 2, 1, 0, 0, 0, 0],
+            [1, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0, 0], [1, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0],
+            [1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0], [1, 2, 2, 1, 2, 2, 1, 0, 0, 0, 0, 0],
+            [1, 2, 1, 0, 1, 2, 2, 1, 0, 0, 0, 0], [1, 1, 0, 0, 1, 2, 2, 1, 0, 0, 0, 0],
+            [1, 0, 0, 0, 0, 1, 2, 2, 1, 0, 0, 0], [0, 0, 0, 0, 0, 1, 2, 2, 1, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
+        ];
+
+        for (dy, row) in ARROW_BITMAP.iter().enumerate() {
+            let py = self.input.mouse_y + dy as isize;
+            if py < 0 || py >= height { continue; }
+            for (dx, &pixel) in row.iter().enumerate() {
+                if pixel == 0 { continue; }
+                let px = self.input.mouse_x + dx as isize;
+                if px < 0 || px >= width { continue; }
+                let color = if pixel == 1 { 0x00_00_00_00 } else { 0x00_FF_FF_FF };
+                self.ready_buffer[py as usize * info.width + px as usize] = color;
+            }
+        }
     }
 
     fn draw_desktop_bg(&self, fb: &mut framebuffer::Framebuffer, clip: Rect) {
-        let _info = if let Some(info) = &fb.info { info } else { return };
-        for y in clip.y..(clip.y + clip.height as isize) {
-            let _start_c = DESKTOP_GRADIENT_START.load(Ordering::Relaxed);
-            let _end_c = DESKTOP_GRADIENT_END.load(Ordering::Relaxed);
-            // Gradient math omitted for brevity...
-            for x in clip.x..(clip.x + clip.width as isize) { fb.set_pixel(x as usize, y as usize, 0x00_10_20_40); }
+        let info = if let Some(info) = &fb.info { info } else { return };
+        let buffer = if let Some(buffer) = &mut fb.draw_buffer { buffer } else { return };
+        
+        let x_start = clip.x.max(0) as usize;
+        let y_start = clip.y.max(0) as usize;
+        let w = clip.width.min(info.width.saturating_sub(x_start));
+        let h = clip.height.min(info.height.saturating_sub(y_start));
+
+        for y in y_start..y_start + h {
+            let offset = y * info.width + x_start;
+            buffer[offset..offset + w].fill(0x00_10_20_40);
         }
     }
 

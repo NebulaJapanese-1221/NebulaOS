@@ -36,15 +36,15 @@ fn draw_boot_screen() {
         let x_title = (width / 2).saturating_sub((title.len() * 8) / 2);
         let y_title = (height / 2).saturating_sub(16 / 2);
 
-        // Fade-in the title over 32 steps
-        for step in 0..=32u32 {
-            let color = gui::interpolate_color(0x00_000033, 0x00_FFFFFF, step, 32);
+        // Fade-in the title over 100 steps for maximum smoothness
+        for step in 0..=100u32 {
+            let color = gui::interpolate_color(0x00_000033, 0x00_FFFFFF, step, 100);
 
             font::draw_string(&mut fb, x_title as isize, y_title as isize, title, color, None);
             fb.present();
 
             // Small delay loop to make the fade visible
-            for _ in 0..1000000 { unsafe { asm!("nop"); } }
+            for _ in 0..2000000 { unsafe { asm!("nop"); } }
         }
     }
 }
@@ -57,6 +57,8 @@ fn add_boot_status(status: &str) {
     let y = 20 + (line * 20);
     font::draw_string(&mut fb, x as isize, y as isize, status, 0x00_CCCCCC, None); // Light gray
     fb.present();
+    // Intentional delay to make the boot process take longer and be readable
+    for _ in 0..20000000 { unsafe { asm!("nop"); } }
 }
 
 /// Displays a critical error screen during the boot process and halts.
@@ -90,25 +92,27 @@ fn show_boot_error(message: &str) -> ! {
 fn fade_out_boot_screen() {
     let mut fb = FRAMEBUFFER.lock();
 
-    // Perform fade-out in 16 steps. 
-    for step in (0..16u32).rev() {
-        gui::fade_buffer(&mut fb, step, 16);
+    // Perform fade-out in 64 steps for a smoother transition to desktop
+    for step in (0..64u32).rev() {
+        gui::fade_buffer(&mut fb, step, 64);
         fb.present();
         // Small delay loop to make the fade visible
-        for _ in 0..1000000 { unsafe { asm!("nop"); } }
+        for _ in 0..2000000 { unsafe { asm!("nop"); } }
     }
 }
 
 fn draw_progress_bar(_progress: usize) {
     let mut fb = FRAMEBUFFER.lock();
-    if let Some(info) = fb.info.as_ref() {
-        // Draw the loading spinner below the title (replacing the progress bar)
-        let spinner_x = (info.width / 2) as isize;
-        let spinner_y = (info.height / 2) as isize + 60;
-        gui::draw_loading_spinner(&mut fb, spinner_x, spinner_y, Rect { x: 0, y: 0, width: info.width, height: info.height });
+    let (width, height) = if let Some(info) = fb.info.as_ref() {
+        (info.width, info.height)
+    } else { return };
 
-        fb.present();
-    }
+    // Draw the loading spinner below the title (replacing the progress bar)
+    let spinner_x = (width / 2) as isize;
+    let spinner_y = (height / 2) as isize + 60;
+    gui::draw_loading_spinner(&mut fb, spinner_x, spinner_y, Rect { x: 0, y: 0, width, height });
+
+    fb.present();
 }
 
 // Entry point called by boot assembly
@@ -195,6 +199,10 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
 
     crate::userspace::gui::init();
     
+    // Spawn the dedicated Render Task to offload blitting from this input loop
+    let render_entry = crate::userspace::gui::window_manager::WindowManager::render_loop as usize;
+    crate::kernel::process::SCHEDULER.lock().add_task(render_entry, 15);
+
     // Halt loop (The scheduler will hijack execution on the next timer tick)
     loop {
         crate::userspace::gui::update();

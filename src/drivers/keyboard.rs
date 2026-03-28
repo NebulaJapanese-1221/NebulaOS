@@ -1,7 +1,6 @@
 use super::ps2;
 use crate::kernel::interrupts::InterruptStackFrame;
 use crate::kernel::io;
-use core::arch::asm;
 use crate::kernel::process::IrqSafeMutex; // Use IrqSafeMutex
 
 /// A simple ring buffer for buffering key presses.

@@ -76,10 +76,26 @@ pub fn interpolate_color(src: u32, dest: u32, step: u32, total_steps: u32) -> u3
 
 /// Fades all pixels in the current draw buffer toward black based on the given step.
 pub fn fade_buffer(fb: &mut framebuffer::Framebuffer, step: u32, total_steps: u32) {
-    if let Some(ref mut buffer) = fb.draw_buffer {
+    let buffer = if let Some(ref mut b) = fb.draw_buffer { b } else { return };
+    if step >= total_steps { return; }
+    if step == 0 { buffer.fill(0); return; }
+
+    // Optimized bit-shifting path for 64-step fades (common in NebulaOS boot)
+    if total_steps == 64 {
         for pixel in buffer.iter_mut() {
-            // Interpolate from black (0x000000) to the current pixel color
-            *pixel = interpolate_color(0, *pixel, step, total_steps);
+            let c = *pixel;
+            // Scale channels: (Channel * Step) >> 6
+            let rb = ((c & 0xFF00FF) * step) >> 6;
+            let g = ((c & 0x00FF00) * step) >> 6;
+            *pixel = (rb & 0xFF00FF) | (g & 0x00FF00);
+        }
+    } else {
+        for pixel in buffer.iter_mut() {
+            let c = *pixel;
+            let r = (((c >> 16) & 0xFF) * step / total_steps) << 16;
+            let g = (((c >> 8) & 0xFF) * step / total_steps) << 8;
+            let b = (c & 0xFF) * step / total_steps;
+            *pixel = r | g | b;
         }
     }
 }
@@ -90,8 +106,11 @@ pub static WINDOW_MANAGER: Mutex<WindowManager> = Mutex::new(WindowManager::new(
 pub fn init() {
     let mut wm = WINDOW_MANAGER.lock();
     if let Some(info) = FRAMEBUFFER.lock().info.as_ref() {
-        // Allocate backbuffer based on current resolution
-        wm.backbuffer.resize(info.width * info.height, 0);
+        let size = info.width * info.height;
+        // Allocate buffers based on current resolution
+        wm.backbuffer.resize(size, 0);
+        wm.ready_buffer.resize(size, 0);
+
         // Mark the entire screen as dirty for the first frame
         wm.mark_dirty(Rect { x: 0, y: 0, width: info.width, height: info.height });
     }

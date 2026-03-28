@@ -2,7 +2,6 @@ use super::ps2;
 use crate::kernel::interrupts::InterruptStackFrame;
 use crate::kernel::io;
 use crate::kernel::process::IrqSafeMutex; // Use IrqSafeMutex
-use core::arch::asm;
 use core::sync::atomic::{AtomicU8, Ordering};
 
 #[derive(Debug, Clone, Copy)]

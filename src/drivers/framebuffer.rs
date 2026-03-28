@@ -5,6 +5,7 @@ use spin::Mutex;
 use core::ptr;
 
 /// Holds the information about the framebuffer provided by the bootloader.
+#[derive(Debug, Clone, Copy)]
 pub struct FramebufferInfo {
 
     pub address: usize,
