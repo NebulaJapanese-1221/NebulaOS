@@ -45,15 +45,6 @@ pub fn check_header(data: &[u8]) -> bool {
     header.ident[0..4] == ELF_MAGIC && header.ident[4] == 1
 }
 
-/// Returns the entry point address if valid.
-pub fn get_entry_point(data: &[u8]) -> Option<u32> {
-    if !check_header(data) {
-        return None;
-    }
-    let header = unsafe { &*(data.as_ptr() as *const ElfHeader) };
-    Some(header.entry)
-}
-
 /// Loads the ELF binary into memory and adds it as a task.
 /// Returns true if successful.
 pub fn load_and_run(data: &[u8]) -> bool {

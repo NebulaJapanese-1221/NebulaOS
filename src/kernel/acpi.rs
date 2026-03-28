@@ -137,11 +137,6 @@ fn find_sdt(root: *const SdtHeader, signature: &[u8; 4]) -> Option<*const SdtHea
     }
     None
 }
-fn find_signature_in_slice(data: &[u8], signature: &[u8; 4]) -> Option<*const u8> {
-    data.windows(4)
-        .position(|window| window == signature)
-        .map(|pos| unsafe { data.as_ptr().add(pos) })
-}
 
 
 fn get_s5_val(dsdt_ptr: *const SdtHeader) -> Option<u8> {

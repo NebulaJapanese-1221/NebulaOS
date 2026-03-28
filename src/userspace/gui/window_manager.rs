@@ -53,7 +53,7 @@ pub enum InputEvent {
 enum CursorStyle { Arrow, ResizeNS, ResizeEW, ResizeNESW, ResizeNWSE }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ResizeDirection { None, Left, Right, Top, Bottom, TopLeft, TopRight, BottomLeft, BottomRight }
+pub enum ResizeDirection { None, Left, Right, Top, Bottom, TopLeft, TopRight, BottomLeft, BottomRight }
 
 pub struct WindowManager {
     pub windows: Vec<Window>,
@@ -105,7 +105,6 @@ impl WindowManager {
     }
 
     pub fn mark_dirty(&mut self, rect: Rect) { self.dirty_rects.push(rect); }
-    fn get_cursor_rect(&self) -> Rect { Rect { x: self.input.mouse_x, y: self.input.mouse_y, width: 12, height: 17 } }
     fn get_window_rect(&self, win_id: usize) -> Option<Rect> {
         self.windows.iter().find(|w| w.id == win_id).map(|w| Rect { x: w.x, y: w.y, width: w.width, height: w.height })
     }
@@ -221,22 +220,24 @@ impl WindowManager {
     }
 
     fn update_cursor_style(&mut self) {
-        let mut ns = CursorStyle::Arrow; const BS: isize = 5;
+        let mut ns = CursorStyle::Arrow;
+        let mut ns_dir = ResizeDirection::None;
+        const BS: isize = 5;
         if self.resize_win_id.is_none() {
             if let Some(win) = self.z_order.last().and_then(|&id| self.windows.iter().find(|w| w.id == id)) {
                 if !win.minimized && !win.maximized {
                     let (mx, my) = (self.input.mouse_x, self.input.mouse_y);
                     let (ol, or, ot, ob) = (mx >= win.x-BS && mx < win.x+BS, mx >= win.x+win.width as isize-BS && mx < win.x+win.width as isize, my >= win.y-BS && my < win.y+BS, my >= win.y+win.height as isize-BS && my < win.y+win.height as isize);
                     let (ix, iy) = (mx >= win.x && mx < win.x+win.width as isize, my >= win.y && my < win.y+win.height as isize);
-                    if (ot && ol) || (ob && or) { ns = CursorStyle::ResizeNWSE; }
-                    else if (ot && or) || (ob && ol) { ns = CursorStyle::ResizeNESW; }
-                    else if (ol && iy) || (or && iy) { ns = CursorStyle::ResizeEW; }
-                    else if (ot && ix) || (ob && ix) { ns = CursorStyle::ResizeNS; }
+                    if (ot && ol) || (ob && or) { ns = CursorStyle::ResizeNWSE; ns_dir = if ot { ResizeDirection::TopLeft } else { ResizeDirection::BottomRight }; }
+                    else if (ot && or) || (ob && ol) { ns = CursorStyle::ResizeNESW; ns_dir = if ot { ResizeDirection::TopRight } else { ResizeDirection::BottomLeft }; }
+                    else if (ol && iy) || (or && iy) { ns = CursorStyle::ResizeEW; ns_dir = if ol { ResizeDirection::Left } else { ResizeDirection::Right }; }
+                    else if (ot && ix) || (ob && ix) { ns = CursorStyle::ResizeNS; ns_dir = if ot { ResizeDirection::Top } else { ResizeDirection::Bottom }; }
                 }
             }
         }
-        if self.cursor_style != ns {
-            self.cursor_style = ns;
+        if self.cursor_style != ns || self.resize_direction != ns_dir {
+            self.cursor_style = ns; self.resize_direction = ns_dir;
             self.refresh_hardware_cursor();
         }
     }
@@ -652,14 +653,39 @@ impl InputManager {
     pub fn update(&mut self, max_w: isize, max_h: isize) {
         self.event_queue.clear();
         while let Some(packet) = mouse::get_packet() {
-            let sens = MOUSE_SENSITIVITY.load(Ordering::Relaxed) as isize;
-            self.mouse_x = (self.mouse_x + (packet.x as isize * sens) / 100).clamp(0, max_w - 1);
-            self.mouse_y = (self.mouse_y - (packet.y as isize * sens) / 100).clamp(0, max_h - 1);
+            let mut dx = packet.x as isize;
+            let mut dy = -(packet.y as isize);
+
+            // Cursor Acceleration Curve
+            let max_delta = dx.abs().max(dy.abs());
+            let accel = if max_delta > 15 { 4 } else if max_delta > 8 { 3 } else if max_delta > 3 { 2 } else { 1 };
+            dx *= accel; dy *= accel;
+
+            let sens = (MOUSE_SENSITIVITY.load(Ordering::Relaxed) * 2) as isize;
+            let final_dx = (dx * sens) / 100;
+            let final_dy = (dy * sens) / 100;
+
+            self.mouse_x = (self.mouse_x + final_dx).clamp(0, max_w - 1);
+            self.mouse_y = (self.mouse_y + final_dy).clamp(0, max_h - 1);
+
+            if final_dx != 0 || final_dy != 0 {
+                self.event_queue.push(InputEvent::MouseMove { x: self.mouse_x, y: self.mouse_y, dx: final_dx, dy: final_dy });
+            }
+
             let left = (packet.buttons & 0x1) != 0;
             if left != self.left_button_pressed { self.left_button_pressed = left; self.event_queue.push(InputEvent::MouseButton { button: MouseButton::Left, down: left, x: self.mouse_x, y: self.mouse_y }); }
+            
+            let right = (packet.buttons & 0x2) != 0;
+            if right != self.right_button_pressed { self.right_button_pressed = right; self.event_queue.push(InputEvent::MouseButton { button: MouseButton::Right, down: right, x: self.mouse_x, y: self.mouse_y }); }
+
             if packet.wheel != 0 { self.event_queue.push(InputEvent::Scroll { delta: packet.wheel as isize, x: self.mouse_x, y: self.mouse_y }); }
         }
+        
         self.alt_pressed = keyboard::is_alt_pressed();
+        self.ctrl_pressed = keyboard::is_ctrl_pressed();
+        self.shift_pressed = keyboard::is_shift_pressed();
+        self.win_pressed = keyboard::is_win_pressed();
+
         while let Some(key) = keyboard::get_char() { self.event_queue.push(InputEvent::KeyPress { key }); }
     }
 }

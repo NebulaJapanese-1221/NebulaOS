@@ -15,7 +15,6 @@ struct PartitionEntry {
     id: usize,
     status: u8,
     fs_type: String, // Replaces type_code for display
-    type_code: u8,
     lba_start: u32,
     sector_count: u32,
 }
@@ -26,8 +25,6 @@ pub struct PartitionManager {
     drive_status: String,
     fs_type: String,
     files: Vec<String>,
-    btn_init_mbr: Option<Button>,
-    btn_format: Option<Button>,
     show_confirm: bool,
     show_install_confirm: bool,
 }
@@ -39,8 +36,6 @@ impl PartitionManager {
             drive_status: String::from("Reading Primary Master..."),
             fs_type: String::from("Unknown"),
             files: Vec::new(),
-            btn_init_mbr: None,
-            btn_format: None,
             show_confirm: false,
             show_install_confirm: false,
         };
@@ -98,7 +93,6 @@ impl PartitionManager {
                     id: i + 1,
                     status,
                     fs_type,
-                    type_code,
                     lba_start,
                     sector_count,
                 });
