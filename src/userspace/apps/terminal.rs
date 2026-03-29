@@ -110,9 +110,7 @@ impl App for Terminal {
              y += (font_height + line_spacing) as isize;
         }
 
-        let caps_prefix = if crate::drivers::keyboard::is_capslock_enabled() { "[CAPS] " } else { "" };
-        let input_line = format!("{}{}{}_", caps_prefix, self.prompt, self.current_input);
-        
+        let input_line = format!("{}{}_", self.prompt, self.current_input);
         font::draw_string(fb, x, y, input_line.as_str(), 0x00_FF_FF_FF, None);
     }
 

@@ -19,7 +19,6 @@ pub mod syscall;
 pub mod process;
 pub mod cpu;
 pub mod elf;
-pub mod symbols;
 
 pub const VERSION: &str = "0.0.3-dev2";
 
@@ -193,22 +192,20 @@ fn show_boot_error(message: &str) -> ! {
     unsafe { FRAMEBUFFER.force_unlock(); }
     let mut fb_lock = FRAMEBUFFER.lock();
     if fb_lock.info.is_some() && fb_lock.draw_buffer.is_some() {
-        fb_lock.clear(0x00_CC0000); 
+        fb_lock.clear(0x00_880000); // Dark red background
         
-        font::draw_string(&mut fb_lock, 30, 30, "BOOT_INITIALIZATION_FAILURE", 0xFFFFFFFF, None);
-        font::draw_string(&mut fb_lock, 30, 60, "The kernel failed to stabilize essential drivers.", 0xFFDDDDDD, None);
+        font::draw_string(&mut fb_lock, 30, 30, "!! BOOT ERROR !!", 0xFFFFFFFF, None);
+        font::draw_string(&mut fb_lock, 30, 60, "NebulaOS failed to initialize during boot.", 0xFFFFFFFF, None);
         
         let mut y = 100;
-        font::draw_string(&mut fb_lock, 30, y, "REASON:", 0xFFFFFFFF, None);
+        font::draw_string(&mut fb_lock, 30, y, "Reason:", 0x00_CCCCCC, None);
         y += 20;
         font::draw_string(&mut fb_lock, 30, y, message, 0xFFFFFFFF, None);
         
         y += 40;
-        font::draw_string(&mut fb_lock, 30, y, "Check serial logs for TRACE and STACK_DUMP.", 0xFFDDDDDD, None);
+        font::draw_string(&mut fb_lock, 30, y, "The system has been halted to prevent damage.", 0x00_CCCCCC, None);
+        font::draw_string(&mut fb_lock, 30, y + 20, "Please check the serial log for more details.", 0x00_CCCCCC, None);
         
-        let mut writer = exceptions::PanicWriter::new(&mut fb_lock, 30, y + 40);
-        unsafe { exceptions::dump_stack_memory(&mut writer); }
-
         fb_lock.present();
     }
     
@@ -443,18 +440,17 @@ fn panic(info: &PanicInfo) -> ! {
     // Force unlock the framebuffer to prevent deadlock if the panic happened while drawing
     unsafe { FRAMEBUFFER.force_unlock(); }
     let mut fb = FRAMEBUFFER.lock();
-    fb.clear(0x00_CC0000); 
+    fb.clear(0x00_CC0000); // Red (RSOD)
     
-    font::draw_string(&mut fb, 30, 30, "KERNEL_PANIC_DETECTED", 0xFFFFFFFF, None);
-    font::draw_string(&mut fb, 30, 60, "An unhandled exception has forced a system halt.", 0xFFDDDDDD, None);
+    font::draw_string(&mut fb, 30, 30, ":(", 0xFFFFFFFF, None);
+    font::draw_string(&mut fb, 30, 60, "NebulaOS ran into a problem and needs to restart.", 0xFFFFFFFF, None);
 
     let mut writer = exceptions::PanicWriter::new(&mut fb, 30, 90);
     use core::fmt::Write;
     let _ = writeln!(writer, "Stop Code: KERNEL_PANIC");
     let _ = writeln!(writer, "Details: {}", info);
-    let _ = writeln!(writer, "\nTRACING_FAILURE:\n----------------");
+    let _ = writeln!(writer, "\nTechnical Information:\n----------------------");
     unsafe { exceptions::print_stack_trace_to(&mut writer); }
-    unsafe { exceptions::dump_stack_memory(&mut writer); }
     
     fb.present();
 

@@ -57,14 +57,6 @@ pub unsafe fn print_stack_trace() {
     while rbp != 0 && i < 20 {
         // The return address is stored on the stack just above the saved RBP.
         let return_address = *(rbp as *const u32).add(1);
-        
-        let symbol_info = crate::kernel::symbols::resolve(return_address as usize);
-        if let Some((name, offset)) = symbol_info {
-            crate::serial_println!("  Frame {:02}: 0x{:08x} <{}+{:#x}>", i, return_address, name, offset);
-        } else {
-            crate::serial_println!("  Frame {:02}: 0x{:08x} <unknown>", i, return_address);
-        }
-
         crate::serial_println!("  Frame {:02}: Return to 0x{:08x}", i, return_address);
         // The next RBP is the value pointed to by the current RBP.
         let next_rbp = *(rbp as *const u32);
@@ -89,13 +81,6 @@ pub unsafe fn print_stack_trace_to<W: fmt::Write>(writer: &mut W) {
     let mut i = 0;
     while rbp != 0 && i < 20 {
         let return_address = *(rbp as *const u32).add(1);
-
-        let symbol_info = crate::kernel::symbols::resolve(return_address as usize);
-        if let Some((name, offset)) = symbol_info {
-            let _ = writeln!(writer, "  Frame {:02}: 0x{:08x} <{}+{:#x}>", i, return_address, name, offset);
-        } else {
-            let _ = writeln!(writer, "  Frame {:02}: 0x{:08x} <unknown>", i, return_address);
-        }
         let _ = writeln!(writer, "  Frame {:02}: Return to 0x{:08x}", i, return_address);
         
         let next_rbp = *(rbp as *const u32);
@@ -155,32 +140,12 @@ pub unsafe fn dump_stack_memory<W: fmt::Write>(writer: &mut W) {
 pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code: Option<u32>) -> ! {
     unsafe { asm!("cli", options(nomem, nostack)); }
 
-    // Capture CPU state immediately
-    let (eax, ebx, ecx, edx, esi, edi): (u32, u32, u32, u32, u32, u32);
-    let (cr0, cr2, cr3, cr4): (u32, u32, u32, u32);
-    unsafe {
-        asm!("mov {0}, eax", out(reg) eax);
-        asm!("mov {0}, ebx", out(reg) ebx);
-        asm!("mov {0}, ecx", out(reg) ecx);
-        asm!("mov {0}, edx", out(reg) edx);
-        asm!("mov {0}, esi", out(reg) esi);
-        asm!("mov {0}, edi", out(reg) edi);
-        asm!("mov {0}, cr0", out(reg) cr0);
-        asm!("mov {0}, cr2", out(reg) cr2);
-        asm!("mov {0}, cr3", out(reg) cr3);
-        asm!("mov {0}, cr4", out(reg) cr4);
-    }
-
     // Print details to serial port immediately, as drawing to screen might fail or deadlock
     crate::serial_println!("\nCRITICAL SYSTEM ERROR: {}", name);
     if let Some(code) = error_code {
         crate::serial_println!("Error Code: {:#x}", code);
     }
     crate::serial_println!("CONTEXT:\nIP: {:#010x}  CS: {:#06x}  FLAGS: {:#010x}", frame.instruction_pointer, frame.code_segment, frame.cpu_flags);
-    crate::serial_println!("GPR: EAX={:#x} EBX={:#x} ECX={:#x} EDX={:#x}", eax, ebx, ecx, edx);
-    crate::serial_println!("GPR: ESI={:#x} EDI={:#x}", esi, edi);
-    crate::serial_println!("CRs: CR0={:#x} CR2={:#x} CR3={:#x} CR4={:#x}", cr0, cr2, cr3, cr4);
-
     
     crate::serial_println!("Stack Frame:\n{:#?}", frame);
     unsafe { print_stack_trace(); }
@@ -202,11 +167,6 @@ pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code
     if let Some(code) = error_code {
         let _ = writeln!(writer, "Error Code: {:#x}", code);
     }
-    let _ = writeln!(writer, "\nREGISTERS:\n----------\nIP: {:#010x} CS: {:#06x} FLAGS: {:#010x}", frame.instruction_pointer, frame.code_segment, frame.cpu_flags);
-    let _ = writeln!(writer, "EAX: {:#010x} EBX: {:#010x} ECX: {:#010x} EDX: {:#010x}", eax, ebx, ecx, edx);
-    let _ = writeln!(writer, "ESI: {:#010x} EDI: {:#010x}", esi, edi);
-    let _ = writeln!(writer, "\nCONTROL REGISTERS:\n------------------\nCR0: {:#010x} CR2: {:#010x}\nCR3: {:#010x} CR4: {:#010x}", cr0, cr2, cr3, cr4);
-    
     let _ = writeln!(writer, "\nTechnical Information:\n----------------------\nIP: {:#010x}  CS: {:#06x}  FLAGS: {:#010x}", 
         frame.instruction_pointer, frame.code_segment, frame.cpu_flags);
     unsafe { print_stack_trace_to(&mut writer); }

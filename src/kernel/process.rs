@@ -94,9 +94,14 @@ impl TraceBuffer {
 pub static KERNEL_TRACE: IrqSafeMutex<TraceBuffer> = IrqSafeMutex::new(TraceBuffer::new());
 
 pub fn record_context_switch(task_id: usize, esp: usize) {
+    // Safety: Verify ESP is within a reasonable kernel memory range to prevent recursive faults
+    if esp < 0x100000 || esp > 0xFFFFFFF0 { return; }
+
     // Offset 52 is EIP in our common interrupt/syscall/task stack frame
-    let eip = unsafe { *((esp + 52) as *const usize) };
-    KERNEL_TRACE.lock().record(task_id, eip);
+    unsafe {
+        let eip = *((esp + 52) as *const usize);
+        KERNEL_TRACE.lock().record(task_id, eip);
+    }
 }
 
 pub fn print_kernel_trace() {
@@ -412,16 +417,18 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
     // 5. Select Next Task
     scheduler.pick_next();
 
-    // 6. Restore Next Task
-    let next_task = &scheduler.tasks[scheduler.current_index];
-    
-    record_context_switch(next_task.id, next_task.kernel_esp);
+    // 6. Restore Next Task (Copy values out to avoid dangling references if Vec reallocates)
+    let (next_esp, next_id, stack_ptr, stack_len) = {
+        let t = &scheduler.tasks[scheduler.current_index];
+        (t.kernel_esp, t.id, t.kernel_stack.as_ptr() as usize, t.kernel_stack.len())
+    };
 
-    // Update TSS only if the task has a managed stack (User/New Kernel tasks)
-    if !next_task.kernel_stack.is_empty() {
-        let kstack_top = next_task.kernel_stack.as_ptr() as usize + next_task.kernel_stack.len();
+    record_context_switch(next_id, next_esp);
+
+    if stack_len > 0 {
+        let kstack_top = stack_ptr + stack_len;
         crate::kernel::gdt::set_interrupt_stack(kstack_top as u32);
     }
-    
-    next_task.kernel_esp
+
+    next_esp
 }
