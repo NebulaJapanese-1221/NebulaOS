@@ -149,12 +149,13 @@ impl Scheduler {
         stack.resize(stack_size, 0);
         
         // Calculate the top of the stack (high address)
-        let stack_top = stack.as_ptr() as usize + stack_size;
+        // Ensure 16-byte alignment for real hardware (SSE/Alignment safety)
+        let stack_top = (stack.as_ptr() as usize + stack_size) & !0xF;
         let mut sp = stack_top;
 
         unsafe {
             // Helper to push a value onto the stack
-            let mut push = |val: usize, sp_ptr: &mut usize| {
+            let push = |val: usize, sp_ptr: &mut usize| {
                 *sp_ptr -= 4;
                 *(*sp_ptr as *mut usize) = val;
             };
@@ -345,8 +346,8 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
 
     let mut scheduler = SCHEDULER.lock();
 
+    // 1. Promote/Initialize Kernel Task if needed
     if !scheduler.initialized {
-        // 1. Promote the existing kernel execution to Task 0
         let main_id = scheduler.tasks.len();
         scheduler.tasks.push(Task {
             id: main_id,
@@ -362,19 +363,22 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
         scheduler.last_tsc = crate::kernel::cpu::read_tsc();
     }
 
+    // 2. Save ESP of the task we are switching FROM immediately
+    // We do this before reaping to ensure current_index is still valid
+    let task_count = scheduler.tasks.len();
+    if scheduler.current_index < task_count {
+        let current_idx = scheduler.current_index;
+        scheduler.tasks[current_idx].kernel_esp = current_esp;
+    }
+
     let current_ticks = TICKS.load(Ordering::Relaxed);
 
-    // 1.2 Reap exited tasks
+    // 3. Reap inactive exited tasks
     let mut i = 0;
-    let current_running_id = if scheduler.current_index < scheduler.tasks.len() {
-        Some(scheduler.tasks[scheduler.current_index].id) 
-    } else { None };
-
     while i < scheduler.tasks.len() {
-        // Protection: Never reap Task 0 (Kernel) or the task currently being processed.
-        let is_protected = scheduler.tasks[i].id == 0 || Some(scheduler.tasks[i].id) == current_running_id;
-        
-        if scheduler.tasks[i].state == TaskState::Exited && !is_protected {
+        // Protection: Never reap Task 0 or the task we just saved (the current one)
+        let is_current = i == scheduler.current_index;
+        if scheduler.tasks[i].state == TaskState::Exited && scheduler.tasks[i].id != 0 && !is_current {
             scheduler.tasks.remove(i);
             if i < scheduler.current_index {
                 scheduler.current_index -= 1;
@@ -384,7 +388,7 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
         }
     }
 
-    // 1.5 Wake up tasks that have finished sleeping
+    // 4. Wake up sleepers
     for task in &mut scheduler.tasks {
         if task.state == TaskState::Sleeping {
             if let Some(until) = task.sleep_until {
@@ -405,17 +409,10 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
     }
     scheduler.last_tsc = now;
 
-    // 2. Save ESP of the task we are switching FROM
-    let task_count = scheduler.tasks.len();
-    if scheduler.current_index < task_count {
-        let current_idx = scheduler.current_index;
-        scheduler.tasks[current_idx].kernel_esp = current_esp;
-    }
-
-    // 3. Priority-based Selection
+    // 5. Select Next Task
     scheduler.pick_next();
 
-    // 4. Get ESP of the task we are switching TO
+    // 6. Restore Next Task
     let next_task = &scheduler.tasks[scheduler.current_index];
     
     record_context_switch(next_task.id, next_task.kernel_esp);

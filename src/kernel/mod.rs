@@ -19,6 +19,7 @@ pub mod syscall;
 pub mod process;
 pub mod cpu;
 pub mod elf;
+pub mod symbols;
 
 pub const VERSION: &str = "0.0.3-dev2";
 
@@ -449,8 +450,8 @@ fn panic(info: &PanicInfo) -> ! {
 
     let mut writer = exceptions::PanicWriter::new(&mut fb, 30, 90);
     use core::fmt::Write;
-    let _ = writeln!(writer, "FAULT_ID: KERNEL_PANIC");
-    let _ = writeln!(writer, "ENTROPY: {}", info);
+    let _ = writeln!(writer, "Stop Code: KERNEL_PANIC");
+    let _ = writeln!(writer, "Details: {}", info);
     let _ = writeln!(writer, "\nTRACING_FAILURE:\n----------------");
     unsafe { exceptions::print_stack_trace_to(&mut writer); }
     unsafe { exceptions::dump_stack_memory(&mut writer); }

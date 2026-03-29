@@ -1,8 +1,14 @@
 KERNEL_BIN := target/i686-unknown-none/debug/nebula_os
+NM := nm
 
 all: iso
 
 build:
+	# Pass 1: Generate the initial kernel binary
+	RUSTFLAGS="-C link-arg=-Tlinker.ld" cargo +nightly build --target i686-unknown-none.json -Z build-std=core,compiler_builtins,alloc -Z unstable-options -Z json-target-spec
+	# Extract symbols from Pass 1 to trigger build.rs update
+	$(NM) -n $(KERNEL_BIN) > kernel.sym
+	# Pass 2: Re-link with the baked-in symbol map
 	RUSTFLAGS="-C link-arg=-Tlinker.ld" cargo +nightly build --target i686-unknown-none.json -Z build-std=core,compiler_builtins,alloc -Z unstable-options -Z json-target-spec
 
 iso: build
