@@ -1,8 +1,7 @@
 use super::ps2;
 use crate::kernel::interrupts::InterruptStackFrame;
 use crate::kernel::io;
-use crate::kernel::process::IrqSafeMutex; // Use IrqSafeMutex
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicUsize, AtomicU8, AtomicBool, Ordering};
 
 #[derive(Debug, Clone, Copy)]
 pub struct MousePacket {
@@ -14,30 +13,79 @@ pub struct MousePacket {
 
 const BUFFER_SIZE: usize = 256;
 pub struct MouseBuffer {
-    packets: [MousePacket; BUFFER_SIZE],
-    head: usize,
-    tail: usize,
+    packets: [u64; BUFFER_SIZE],
+    ready: [AtomicBool; BUFFER_SIZE],
+    head: AtomicUsize,
+    tail: AtomicUsize,
 }
 
 impl MouseBuffer {
     pub const fn new() -> Self {
+        const DEFAULT_READY: AtomicBool = AtomicBool::new(false);
         Self {
-            packets: [MousePacket { x: 0, y: 0, buttons: 0, wheel: 0 }; BUFFER_SIZE],
-            head: 0,
-            tail: 0,
+            packets: [0; BUFFER_SIZE],
+            ready: [DEFAULT_READY; BUFFER_SIZE],
+            head: AtomicUsize::new(0),
+            tail: AtomicUsize::new(0),
         }
     }
 
-    pub fn push(&mut self, packet: MousePacket) {
-        let next = (self.head + 1) % BUFFER_SIZE;
-        if next != self.tail {
-            self.packets[self.head] = packet;
-            self.head = next;
+    pub fn push(&self, packet: MousePacket) {
+        // Pack 6 bytes into u64: buttons(8), wheel(8), x(16), y(16)
+        let val = (packet.buttons as u64) | 
+                  ((packet.wheel as u8 as u64) << 8) | 
+                  ((packet.x as u16 as u64) << 16) | 
+                  ((packet.y as u16 as u64) << 32);
+
+        loop {
+            let head = self.head.load(Ordering::Relaxed);
+            let tail = self.tail.load(Ordering::Acquire);
+            let next = (head + 1) % BUFFER_SIZE;
+
+            if next == tail { return; } // Buffer full, drop packet
+
+            if self.head.compare_exchange_weak(head, next, Ordering::SeqCst, Ordering::Relaxed).is_ok() {
+                // SAFETY: We have atomically reserved this slot via compare_exchange on 'head'.
+                // No other producer can write to this index until the consumer processes it.
+                unsafe {
+                    let packets_ptr = self.packets.as_ptr() as *mut u64;
+                    core::ptr::write_volatile(packets_ptr.add(head), val);
+                }
+                self.ready[head].store(true, Ordering::Release);
+                break;
+            }
+            core::hint::spin_loop();
+        }
+    }
+
+    pub fn pop(&self) -> Option<MousePacket> {
+        let tail = self.tail.load(Ordering::Relaxed);
+        let head = self.head.load(Ordering::Acquire);
+
+        if tail == head { return None; }
+
+        if self.ready[tail].load(Ordering::Acquire) {
+            // SAFETY: The 'ready' flag with Acquire ordering ensures that the producer 
+            // has finished writing to this slot.
+            let val = unsafe {
+                core::ptr::read_volatile(self.packets.as_ptr().add(tail))
+            };
+            self.ready[tail].store(false, Ordering::Release);
+            self.tail.store((tail + 1) % BUFFER_SIZE, Ordering::Release);
+
+            Some(MousePacket {
+                buttons: val as u8,
+                wheel: (val >> 8) as i8,
+                x: (val >> 16) as i16,
+                y: (val >> 32) as i16,
+            })
+        } else {
+            None
         }
     }
 }
 
-pub static MOUSE_BUFFER: IrqSafeMutex<MouseBuffer> = IrqSafeMutex::new(MouseBuffer::new());
+pub static MOUSE_BUFFER: MouseBuffer = MouseBuffer::new();
 
 // State for the interrupt handler to track packet assembly
 static mut BYTE_CYCLE: u8 = 0;
@@ -145,7 +193,7 @@ pub fn handle_interrupt() {
                             if (BYTES[0] & 0x20) != 0 { y |= 0xFF00u16 as i16; }
 
                             // Packet complete, push to buffer
-                            MOUSE_BUFFER.lock().push(MousePacket {
+                            MOUSE_BUFFER.push(MousePacket {
                                 buttons: BYTES[0] & 0x07,
                                 x,
                                 y,
@@ -170,7 +218,7 @@ pub fn handle_interrupt() {
                             if (val & 0x08) != 0 { (val | 0xF0) as i8 } else { val as i8 }
                         } else { 0 };
 
-                        MOUSE_BUFFER.lock().push(MousePacket {
+                        MOUSE_BUFFER.push(MousePacket {
                             buttons: BYTES[0] & 0x07,
                             x,
                             y,
@@ -195,14 +243,5 @@ pub extern "x86-interrupt" fn interrupt_handler(_frame: &mut InterruptStackFrame
 }
 
 pub fn get_packet() -> Option<MousePacket> {
-    let mut buffer = MOUSE_BUFFER.lock();
-    let packet = if buffer.head == buffer.tail {
-        None
-    } else {
-        let packet = buffer.packets[buffer.tail];
-        buffer.tail = (buffer.tail + 1) % BUFFER_SIZE;
-        Some(packet)
-    };
-    drop(buffer);
-    packet
+    MOUSE_BUFFER.pop()
 }

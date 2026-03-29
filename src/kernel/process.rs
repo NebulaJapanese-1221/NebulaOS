@@ -60,6 +60,7 @@ impl<'a, T> Drop for IrqSafeGuard<'a, T> {
 pub enum TaskState {
     Ready,
     Sleeping,
+    Exited,
     #[allow(dead_code)]
     Blocked,
 }
@@ -76,7 +77,6 @@ pub struct Task {
 pub struct Scheduler {
     pub tasks: Vec<Task>,
     pub current_index: usize,
-    kernel_esp: usize,
     last_tsc: u64,
     initialized: bool,
 }
@@ -86,7 +86,6 @@ impl Scheduler {
         Self {
             tasks: Vec::new(),
             current_index: 0, // This will be updated on first schedule
-            kernel_esp: 0,
             last_tsc: 0,
             initialized: false,
         }
@@ -106,6 +105,11 @@ impl Scheduler {
         let mut sp = stack_top;
 
         unsafe {
+            // Push the task_exit_handler address as the return address.
+            // When the entry_point function returns, it will jump here.
+            sp -= 4;
+            *(sp as *mut usize) = task_exit_handler as usize;
+
             // Helper to push a value onto the stack
             let mut push = |val: usize| {
                 sp -= 4;
@@ -163,7 +167,7 @@ impl Scheduler {
         if self.current_index < self.tasks.len() {
             self.tasks[self.current_index].id
         } else {
-            usize::MAX // Represents the main kernel loop
+            usize::MAX 
         }
     }
 
@@ -194,11 +198,11 @@ impl Scheduler {
 
     /// Picks the next task to run based on priority and state.
     fn pick_next(&mut self) {
-        let total_user_tasks = self.tasks.len();
-        const KERNEL_PRIORITY: usize = 10;
+        let total_tasks = self.tasks.len();
+        if total_tasks == 0 { return; }
 
         // Find the maximum priority level among all ready tasks
-        let mut max_priority = KERNEL_PRIORITY;
+        let mut max_priority = 0;
         for task in &self.tasks {
             if task.state == TaskState::Ready && task.priority > max_priority {
                 max_priority = task.priority;
@@ -206,16 +210,12 @@ impl Scheduler {
         }
 
         // Round-robin selection among tasks with max_priority
-        let start_search = (self.current_index + 1) % (total_user_tasks + 1);
-        for i in 0..=(total_user_tasks) {
-            let idx = (start_search + i) % (total_user_tasks + 1);
-            let (task_prio, is_ready) = if idx < total_user_tasks {
-                (self.tasks[idx].priority, self.tasks[idx].state == TaskState::Ready)
-            } else {
-                (KERNEL_PRIORITY, true)
-            };
+        let start_search = (self.current_index + 1) % total_tasks;
+        for i in 0..total_tasks {
+            let idx = (start_search + i) % total_tasks;
+            let task = &self.tasks[idx];
 
-            if is_ready && task_prio == max_priority {
+            if task.state == TaskState::Ready && task.priority == max_priority {
                 self.current_index = idx;
                 break;
             }
@@ -226,11 +226,33 @@ impl Scheduler {
 pub static SCHEDULER: IrqSafeMutex<Scheduler> = IrqSafeMutex::new(Scheduler::new());
 pub static TICKS: AtomicUsize = AtomicUsize::new(0);
 
+/// Handler called when a task's entry point returns.
+/// Marks the task as exited and yields forever until reaped.
+pub extern "C" fn task_exit_handler() {
+    let mut scheduler = SCHEDULER.lock();
+    let current = scheduler.current_index;
+    if current < scheduler.tasks.len() {
+        scheduler.tasks[current].state = TaskState::Exited;
+    }
+    drop(scheduler);
+    loop { unsafe { asm!("int 0x80", in("eax") 0usize); } }
+}
+
+/// The Idle Task: Runs when no other tasks are ready.
+pub extern "C" fn idle_task() {
+    loop {
+        crate::kernel::cpu::IS_IDLE.store(true, Ordering::Relaxed);
+        unsafe { asm!("hlt", options(nomem, nostack)); }
+        // The CPU wakes up here after an interrupt
+        crate::kernel::cpu::IS_IDLE.store(false, Ordering::Relaxed);
+    }
+}
+
 /// Voluntary task yield. Saves current state and switches to the next task.
 pub fn yield_now(current_esp: usize) -> usize {
     let mut scheduler = SCHEDULER.lock();
-    let total_user_tasks = scheduler.tasks.len();
-    if total_user_tasks == 0 { return current_esp; }
+    let total_tasks = scheduler.tasks.len();
+    if total_tasks == 0 { return current_esp; }
 
     // Save result 0 for the yielding task so the syscall returns 0 from its perspective upon resume
     unsafe { *((current_esp + 28) as *mut usize) = 0; }
@@ -239,32 +261,22 @@ pub fn yield_now(current_esp: usize) -> usize {
     let now = crate::kernel::cpu::read_tsc();
     if scheduler.last_tsc > 0 && now > scheduler.last_tsc {
         let delta = now - scheduler.last_tsc;
-        let is_kernel = scheduler.current_index >= total_user_tasks;
-        let was_idle = is_kernel && crate::kernel::cpu::IS_IDLE.load(Ordering::Relaxed);
+        let was_idle = crate::kernel::cpu::IS_IDLE.load(Ordering::Relaxed);
         crate::kernel::cpu::accumulate_usage(delta, was_idle);
     }
     scheduler.last_tsc = now;
 
     // Save current ESP
-    let old_idx = scheduler.current_index;
-    if old_idx < total_user_tasks {
-        scheduler.tasks[old_idx].kernel_esp = current_esp;
-    } else {
-        scheduler.kernel_esp = current_esp;
-    }
+    let current_idx = scheduler.current_index;
+    scheduler.tasks[current_idx].kernel_esp = current_esp;
 
     scheduler.pick_next();
 
     // Switch to new stack
-    if scheduler.current_index < total_user_tasks {
-        let new_idx = scheduler.current_index;
-        let next_task = &scheduler.tasks[new_idx];
-        let kstack_top = next_task.kernel_stack.as_ptr() as usize + next_task.kernel_stack.len();
-        crate::kernel::gdt::set_interrupt_stack(kstack_top as u32);
-        next_task.kernel_esp
-    } else {
-        scheduler.kernel_esp
-    }
+    let next_task = &scheduler.tasks[scheduler.current_index];
+    let kstack_top = next_task.kernel_stack.as_ptr() as usize + next_task.kernel_stack.len();
+    crate::kernel::gdt::set_interrupt_stack(kstack_top as u32);
+    next_task.kernel_esp
 }
 
 /// Called by the assembly timer handler. 
@@ -278,15 +290,40 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
     // Update RTC/System time after EOI to prevent hardware bus stalls
     rtc::handle_timer_tick();
 
-    let current_ticks = TICKS.load(Ordering::Relaxed);
-
     let mut scheduler = SCHEDULER.lock();
     let total_user_tasks = scheduler.tasks.len();
 
     if !scheduler.initialized {
-        scheduler.current_index = total_user_tasks;
+        // 1. Promote the existing kernel execution to Task 0
+        let main_id = total_user_tasks;
+        scheduler.tasks.push(Task {
+            id: main_id,
+            kernel_stack: Vec::new(), // The bootloader/kernel stack is managed externally
+            kernel_esp: current_esp,
+            priority: 10,
+            state: TaskState::Ready,
+            sleep_until: None,
+        });
+
+        scheduler.current_index = main_id;
         scheduler.initialized = true;
         scheduler.last_tsc = crate::kernel::cpu::read_tsc();
+    }
+
+    let current_ticks = TICKS.load(Ordering::Relaxed);
+    let total_tasks = scheduler.tasks.len();
+
+    // 1.2 Reap exited tasks
+    let mut i = 0;
+    while i < scheduler.tasks.len() {
+        if scheduler.tasks[i].state == TaskState::Exited && i != scheduler.current_index {
+            scheduler.tasks.remove(i);
+            if i < scheduler.current_index {
+                scheduler.current_index -= 1;
+            }
+        } else {
+            i += 1;
+        }
     }
 
     // 1.5 Wake up tasks that have finished sleeping
@@ -301,47 +338,32 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
         }
     }
 
-    // If no tasks, just return current stack (continue running kernel loop)
-    if total_user_tasks == 0 {
-        return current_esp;
-    }
-
     // --- CPU Usage Calculation ---
     let now = crate::kernel::cpu::read_tsc();
     if scheduler.last_tsc > 0 && now > scheduler.last_tsc {
         let delta = now - scheduler.last_tsc;
-        let is_kernel = scheduler.current_index >= total_user_tasks;
-        // If we were in the kernel task and the IS_IDLE flag was set, count as idle.
-        // Otherwise (User task or Kernel doing GUI work), count as active.
-        let was_idle = is_kernel && crate::kernel::cpu::IS_IDLE.load(Ordering::Relaxed);
+        let was_idle = crate::kernel::cpu::IS_IDLE.load(Ordering::Relaxed);
         crate::kernel::cpu::accumulate_usage(delta, was_idle);
     }
     scheduler.last_tsc = now;
 
     // 2. Save ESP of the task we are switching FROM
-    let current_task_index = scheduler.current_index;
-    if current_task_index < total_user_tasks {
-        // The current task is a user task
-        scheduler.tasks[current_task_index].kernel_esp = current_esp;
-    } else {
-        // The current task is the main kernel loop
-        scheduler.kernel_esp = current_esp;
+    if scheduler.current_index < total_tasks {
+        let current_idx = scheduler.current_index;
+        scheduler.tasks[current_idx].kernel_esp = current_esp;
     }
 
     // 3. Priority-based Selection
     scheduler.pick_next();
 
     // 4. Get ESP of the task we are switching TO
-    let next_idx = scheduler.current_index;
-    if next_idx < total_user_tasks {
-        // It's a user task. Update TSS and return its ESP.
-        let next_task = &scheduler.tasks[next_idx];
+    let next_task = &scheduler.tasks[scheduler.current_index];
+    
+    // Update TSS only if the task has a managed stack (User/New Kernel tasks)
+    if !next_task.kernel_stack.is_empty() {
         let kstack_top = next_task.kernel_stack.as_ptr() as usize + next_task.kernel_stack.len();
         crate::kernel::gdt::set_interrupt_stack(kstack_top as u32);
-        next_task.kernel_esp
-    } else {
-        // It's the kernel main loop. Return its saved ESP.
-        // No need to update TSS for Ring 0.
-        scheduler.kernel_esp
     }
+    
+    next_task.kernel_esp
 }

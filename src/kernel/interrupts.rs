@@ -180,8 +180,8 @@ unsafe fn init_pics() {
     // Restore masks (or set to 0 to enable all)
     // Mask all interrupts except for the keyboard (IRQ 1) and the mouse (IRQ 12).
     // The cascade from master to slave (IRQ 2) must also be unmasked.
-    io::outb(0x21, 0b11111000); // Master: Unmask IRQ0, IRQ1, IRQ2
-    io::outb(0xA1, 0b10001111); // Slave: Unmask IRQ12, IRQ14, IRQ15
+    io::outb(0x21, 0xF8); // Master: 11111000 -> Unmask IRQ 0, 1, 2
+    io::outb(0xA1, 0x2F); // Slave:  00101111 -> Unmask IRQ 12, 14, 15 (and 13 for FPU)
 }
 
 // Naked assembly handler for the Timer Interrupt (IRQ 0)

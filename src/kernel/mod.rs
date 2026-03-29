@@ -26,15 +26,25 @@ pub static TOTAL_MEMORY: AtomicUsize = AtomicUsize::new(0);
 pub static CPU_CORES: AtomicUsize = AtomicUsize::new(1);
 static BOOT_ANIMATION_RUNNING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static BOOT_STATUS_LINE: AtomicUsize = AtomicUsize::new(2);
-static WATCHDOG_STATE: Mutex<(usize, u64, u32)> = Mutex::new((0, 0, 0));
+/// (last_tick, last_tick_tsc, pit_retries, last_gpu_val, last_gpu_tsc)
+static WATCHDOG_STATE: Mutex<(usize, u64, u32, usize, u64)> = Mutex::new((0, 0, 0, 0, 0));
 
 /// Monitors the health of the kernel heartbeat.
 /// If TICKS stays the same while TSC continues to increase significantly, triggers a diagnostic halt.
 fn check_watchdog() {
     let current_tick = TICKS.load(Ordering::Relaxed);
+    let current_gpu = crate::drivers::framebuffer::GPU_HEARTBEAT.load(Ordering::Relaxed);
     let current_tsc = crate::kernel::cpu::read_tsc();
     
     let mut state = WATCHDOG_STATE.lock();
+    
+    // If the watchdog hasn't been initialized with a real TSC value yet, do it now
+    if state.1 == 0 {
+        state.0 = current_tick;
+        state.1 = current_tsc;
+        return;
+    }
+
     if current_tick != state.0 {
         // Heartbeat is healthy
         state.0 = current_tick;
@@ -54,6 +64,22 @@ fn check_watchdog() {
                 drop(state);
                 show_boot_error("Watchdog Timeout: System heartbeat (TICKS) stopped responding after 3 recovery attempts.");
             }
+        }
+    }
+
+    // GPU Render Task Watchdog
+    if crate::drivers::framebuffer::RENDER_TASK_ACTIVE.load(Ordering::Relaxed) {
+        if state.4 == 0 {
+            // Initialize GPU tracking state
+            state.3 = current_gpu;
+            state.4 = current_tsc;
+        } else if current_gpu != state.3 {
+            state.3 = current_gpu;
+            state.4 = current_tsc;
+        } else if current_tsc > state.4.wrapping_add(2_000_000_000) {
+            // RSOD if GPU task hasn't checked in for ~1 second while marked active
+            drop(state);
+            show_boot_error("GPU Watchdog: The background rendering task has stopped responding (Heartbeat Timeout).");
         }
     }
 }
@@ -87,58 +113,56 @@ fn draw_boot_screen() {
     let title = "NebulaOS";
     let (width, height) = if let Some(info) = FRAMEBUFFER.lock().info.as_ref() { (info.width, info.height) } else { return };
 
-    {
-        let mut fb = FRAMEBUFFER.lock();
-        fb.clear(0x00_000033); // Initial dark blue background
-        fb.present();
-    }
-
     let x_title = (width / 2).saturating_sub((title.len() * 8) / 2);
     let y_title = (height / 2).saturating_sub(16 / 2);
     let x_version = (width / 2).saturating_sub((VERSION.len() * 8) / 2);
     let y_version = y_title + 20;
+
+    let min_x = x_title.min(x_version);
+    let max_w = (title.len().max(VERSION.len())) * 8;
 
     // Fade-in the title at ~60 FPS
     for step in 0..=32u32 {
         let start_tick = TICKS.load(Ordering::Relaxed);
         {
             let mut fb = FRAMEBUFFER.lock();
-            let color = gui::interpolate_color(0x00_000033, 0x00_FFFFFF, step, 32);
-            let version_color = gui::interpolate_color(0x00_000033, 0x00_888888, step, 32); // Slightly dimmer gray for version
+            // Clear only the title area to the background blue to prevent pixel accumulation
+            gui::draw_rect(&mut fb, min_x as isize, y_title as isize, max_w, 40, 0x00_000033, None);
+
+            let color = gui::interpolate_color(0xFF_000033, 0xFF_FFFFFF, step, 32);
+            let version_color = gui::interpolate_color(0xFF_000033, 0xFF_888888, step, 32);
             font::draw_string(&mut fb, x_title as isize, y_title as isize, title, color, None);
             font::draw_string(&mut fb, x_version as isize, y_version as isize, VERSION, version_color, None);
             
-            // Present a rectangle covering both strings
-            let min_x = x_title.min(x_version);
-            let max_w = (title.len().max(VERSION.len())) * 8;
             fb.present_rect(min_x, y_title, max_w, 40);
         }
 
         // Wait for next frame (1000ms / 60fps = ~16ms)
         let frame_timeout_tsc = crate::kernel::cpu::read_tsc().wrapping_add(10_000_000);
-        while TICKS.load(Ordering::Relaxed).wrapping_sub(start_tick) < 16 { 
+        while TICKS.load(Ordering::Relaxed).wrapping_sub(start_tick) < 8 { 
             unsafe { asm!("pause"); }
             check_watchdog();
-            // Soft timeout: If 16ms of ticks don't pass but 10M cycles do, the PIT is likely stuck
+            // Soft timeout: If 8ms of ticks don't pass but 10M cycles do, the PIT is likely stuck
             if crate::kernel::cpu::read_tsc() > frame_timeout_tsc { break; }
         }
     }
 }
 
 fn add_boot_status(milestone: BootMilestone) {
+    crate::serial_println!("[BOOT] {}", milestone.message());
     let line = BOOT_STATUS_LINE.fetch_add(1, Ordering::Relaxed);
     let mut fb = FRAMEBUFFER.lock();
     let x = 20;
     // Start printing status messages
     let y = 20 + (line * 20);
-    font::draw_string(&mut fb, x as isize, y as isize, milestone.message(), 0x00_CCCCCC, None); // Light gray
+    font::draw_string(&mut fb, x as isize, y as isize, milestone.message(), 0xFF_CCCCCC, None); 
     fb.present_rect(x, y as usize, 400, 20);
     drop(fb);
 
-    // Intentional delay to make the log readable (50ms per entry) 
+    // Intentional delay to make the log readable (10ms per entry) 
     let start_wait = TICKS.load(Ordering::Relaxed);
     let wait_timeout_tsc = crate::kernel::cpu::read_tsc().wrapping_add(20_000_000);
-    while TICKS.load(Ordering::Relaxed).wrapping_sub(start_wait) < 50 { 
+    while TICKS.load(Ordering::Relaxed).wrapping_sub(start_wait) < 10 { 
         unsafe { asm!("pause"); }
         check_watchdog();
         if crate::kernel::cpu::read_tsc() > wait_timeout_tsc { break; }
@@ -147,7 +171,17 @@ fn add_boot_status(milestone: BootMilestone) {
 
 /// Displays a critical error screen during the boot process and halts.
 fn show_boot_error(message: &str) -> ! {
+    // Revert to direct writes for the error report
+    crate::drivers::serial::SERIAL_TASK_ACTIVE.store(false, Ordering::SeqCst);
+    crate::drivers::framebuffer::RENDER_TASK_ACTIVE.store(false, Ordering::SeqCst);
+
     crate::serial_println!("\nBOOT ERROR: {}", message);
+    
+    // Force flush the serial queue directly to hardware since the background task is likely not running
+    while let Some(b) = crate::drivers::serial::SERIAL_OUT_QUEUE.pop_byte() {
+        crate::drivers::serial::SERIAL1.lock().write_byte(b);
+    }
+
     
     // Check if the framebuffer is initialized and has a draw buffer to draw the error screen
     unsafe { FRAMEBUFFER.force_unlock(); }
@@ -183,7 +217,82 @@ fn fade_out_boot_screen() {
             gui::fade_buffer(&mut fb, step, 32);
             fb.present();
         }
-        while TICKS.load(Ordering::Relaxed) < start_tick + 16 { unsafe { asm!("pause"); } }
+        let timeout = crate::kernel::cpu::read_tsc().wrapping_add(10_000_000);
+        while TICKS.load(Ordering::Relaxed).wrapping_sub(start_tick) < 16 { 
+            unsafe { asm!("pause"); } 
+            if crate::kernel::cpu::read_tsc() > timeout { break; }
+        }
+    }
+}
+
+/// Background task that flushes the framebuffer intermediate buffer to VRAM.
+pub extern "C" fn framebuffer_blit_task() {
+    // Signal that the background task is now active
+    crate::drivers::framebuffer::RENDER_TASK_ACTIVE.store(true, Ordering::SeqCst);
+
+    let mut frame_count = 0;
+    let mut last_fps_check = crate::kernel::cpu::read_tsc();
+
+    loop {
+        // Update heartbeat to signal this task is alive
+        crate::drivers::framebuffer::GPU_HEARTBEAT.fetch_add(1, Ordering::Relaxed);
+
+        // Kernel Watchdog: Verify VRAM metadata sanity before attempting a blit
+        {
+            let fb = crate::drivers::framebuffer::FRAMEBUFFER.lock();
+            if let Some(info) = fb.info {
+                // Detect corruption: Address shouldn't be null, and dimensions shouldn't be impossible
+                if info.address == 0 || info.width == 0 || info.height == 0 || info.width > 8192 {
+                    show_boot_error("VRAM Watchdog: Framebuffer metadata is invalid or corrupted.");
+                }
+            } else {
+                show_boot_error("VRAM Watchdog: Framebuffer info is missing during active render task.");
+            }
+        }
+
+        let start = crate::kernel::cpu::read_tsc();
+        let blitted = crate::drivers::framebuffer::FRAMEBUFFER.lock().blit_to_vram();
+        let end = crate::kernel::cpu::read_tsc();
+
+        if blitted {
+            let latency = end.wrapping_sub(start) as usize;
+            frame_count += 1;
+            crate::drivers::framebuffer::BLIT_LATENCY.store(latency, Ordering::Relaxed);
+
+            // Performance Watchdog: Detect Graphics Bus Stalls
+            // If a single blit takes > 1 second (approx 2 billion cycles at 2GHz), the VRAM is unresponsive.
+            if latency > 2_000_000_000 {
+                show_boot_error("VRAM Unresponsive: Hardware bus timeout detected during VRAM blit operation.");
+            }
+        }
+
+        let now = crate::kernel::cpu::read_tsc();
+        // Update FPS counter every ~1 second (assuming ~2GHz CPU clock)
+        if now.wrapping_sub(last_fps_check) >= 2_000_000_000 {
+            crate::drivers::framebuffer::FPS.store(frame_count, Ordering::Relaxed);
+            frame_count = 0;
+            last_fps_check = now;
+        }
+
+        // Yield to allow other tasks to perform drawing operations
+        unsafe { asm!("int 0x80", in("eax") 0usize); }
+    }
+}
+
+/// Background task that flushes the serial buffer to the actual hardware.
+pub extern "C" fn serial_output_task() {
+    // Signal that the background task is now active and consuming the queue
+    crate::drivers::serial::SERIAL_TASK_ACTIVE.store(true, Ordering::SeqCst);
+
+    loop {
+        let byte = crate::drivers::serial::SERIAL_OUT_QUEUE.pop_byte();
+        if let Some(b) = byte {
+            crate::drivers::serial::SERIAL1.lock().write_byte(b);
+        } else {
+            // No data to flush, yield to other tasks
+            // Using Syscall 5 (Sleep 1ms) to prevent pinning the CPU in a tight loop
+            unsafe { asm!("int 0x80", in("eax") 5usize, in("ebx") 1usize); }
+        }
     }
 }
 
@@ -202,116 +311,93 @@ pub extern "C" fn boot_animation_task() {
             }
         }
 
-        // Target 30 FPS for the background spinner
-        unsafe { asm!("int 0x80", in("eax") 5usize, in("ebx") 33usize); }
+        // Adjust spin speed based on blit latency to reflect system pressure.
+        // We assume ~2,000,000 cycles per ms (for a ~2GHz CPU).
+        let latency_cycles = crate::drivers::framebuffer::BLIT_LATENCY.load(Ordering::Relaxed);
+        let latency_ms = latency_cycles / 2_000_000;
+
+        // Target 30 FPS (33ms) + current hardware overhead. Cap at 200ms (5 FPS).
+        let dynamic_sleep = (33 + latency_ms).min(200);
+
+        unsafe { asm!("int 0x80", in("eax") 5usize, in("ebx") dynamic_sleep); }
     }
-    // Task completed, yield forever until reaped
-    loop { unsafe { asm!("int 0x80", in("eax") 0usize); } }
 }
 
 // Entry point called by boot assembly
 #[no_mangle]
 pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
-    // It's crucial to disable interrupts before initializing the allocator
+    // PHASE 1: Minimal Environment
     unsafe { asm!("cli", options(nomem, nostack)); }
-
-    // Initialize Serial Port
     crate::drivers::serial::SERIAL1.lock().init(); 
 
-    // --- Early hardware discovery and initialization ---
+    // PHASE 2: Core Memory & Graphics
     let heap_region = allocator::find_heap_region(multiboot_info_ptr);
     let fb_info_opt = multiboot::framebuffer_info(multiboot_info_ptr);
 
-    // 1. Initialize the heap allocator first (required for FB draw buffer allocation)
     if let Some((heap_start, heap_size)) = heap_region {
-        unsafe {
-            allocator::ALLOCATOR.lock().init(heap_start as *mut u8, heap_size);
-            TOTAL_MEMORY.store(heap_size, Ordering::Relaxed);
-        }
-    } else {
-        show_boot_error("Could not find a suitable heap region!");
-    }
+        unsafe { allocator::ALLOCATOR.lock().init(heap_start as *mut u8, heap_size); }
+        TOTAL_MEMORY.store(heap_size, Ordering::Relaxed);
+    } else { show_boot_error("Could not find a suitable heap region!"); }
 
-    // 2. Initialize Framebuffer to show boot progress and potential errors
     if let Some(fb_info) = fb_info_opt {
-        crate::drivers::framebuffer::FRAMEBUFFER.lock().init(fb_info);
+        let mut fb = crate::drivers::framebuffer::FRAMEBUFFER.lock();
+        fb.init(fb_info);
+        fb.clear(0x00_000033); // Establish the boot background immediately
+        fb.present();
     } else {
         show_boot_error("No framebuffer information found!");
     }
     
-    // Initialize GDT and TSS
+    // PHASE 3: System Tables & Interrupts
     gdt::init();
+    if let Err(e) = interrupts::init() { show_boot_error(e); }
+    
+    // Start critical background services before showing the logo.
+    // This ensures that VRAM blitting and serial logging are non-blocking.
+    crate::kernel::process::SCHEDULER.lock().add_task(framebuffer_blit_task as usize, 20); // High priority
+    crate::kernel::process::SCHEDULER.lock().add_task(serial_output_task as usize, 5);
 
-    // Initialize IDT (but do not enable interrupts yet)
-    if let Err(e) = interrupts::init() {
-        show_boot_error(e);
-    }
-
-    // Enable interrupts now so we can use timer-based FPS for the splash screen
+    // Enable interrupts: Background tasks and PIT heartbeat (TICKS) start now.
     interrupts::enable_interrupts();
-    crate::serial_println!("[KERNEL] Interrupts and Ticks active.");
-
-    // Initialize Watchdog with current state
-    {
-        let mut state = WATCHDOG_STATE.lock();
-        state.0 = TICKS.load(Ordering::Relaxed);
-        state.1 = cpu::read_tsc();
-        state.2 = 0;
-    }
-
-    // Show splash screen with fade-in
-    draw_boot_screen();
-
-    // Start the background animation task for the spinner
-    BOOT_ANIMATION_RUNNING.store(true, Ordering::Relaxed);
-    let boot_task_entry = boot_animation_task as usize;
-    crate::kernel::process::SCHEDULER.lock().add_task(boot_task_entry, 15);
-
     add_boot_status(BootMilestone::Interrupts); 
 
-    // Initialize the mouse driver (polls for ACKs, so interrupts must be disabled)
-    if let Err(e) = crate::drivers::mouse::initialize() {
-        show_boot_error(e);
-    } else {
-        add_boot_status(BootMilestone::Mouse);
-    }
+    // PHASE 3.5: Initialize Idle Task
+    let idle_entry = crate::kernel::process::idle_task as usize;
+    crate::kernel::process::SCHEDULER.lock().add_task(idle_entry, 0);
 
-    // Initialize the keyboard driver
-    if let Err(e) = crate::drivers::keyboard::init() {
-        show_boot_error(e);
-    } else {
-        add_boot_status(BootMilestone::Keyboard);
-    }
+    // PHASE 4: Visual Startup
+    draw_boot_screen();
+    BOOT_ANIMATION_RUNNING.store(true, Ordering::Relaxed);
+    crate::kernel::process::SCHEDULER.lock().add_task(boot_animation_task as usize, 15);
+
+    // PHASE 5: Peripheral Drivers
+    if let Err(e) = crate::drivers::mouse::initialize() { show_boot_error(e); }
+    else { add_boot_status(BootMilestone::Mouse); }
+
+    if let Err(e) = crate::drivers::keyboard::init() { show_boot_error(e); }
+    else { add_boot_status(BootMilestone::Keyboard); }
+
     add_boot_status(BootMilestone::InputActive);
 
-    // Initialize ACPI
+    // PHASE 6: Subsystems
     acpi::init();
     add_boot_status(BootMilestone::Acpi);
 
-    // Initialize CPU Info detection (CPUID)
     cpu::init();
     add_boot_status(BootMilestone::CpuInfo);
 
-    // NOTE: The old text-mode GUI has been disabled.
-    // The next step is to build a new GUI that draws to the framebuffer.
     add_boot_status(BootMilestone::Gui);
-    
-    // Initialize localisation before GUI
     crate::userspace::localisation::init();
     
-    // Stop the background animation before the final transition
+    // PHASE 7: Desktop Transition
     BOOT_ANIMATION_RUNNING.store(false, Ordering::Relaxed);
-
-    // Perform final transition effect before starting the GUI
     fade_out_boot_screen();
-
     crate::userspace::gui::init();
     
-    // Spawn the dedicated Render Task to offload blitting from this input loop
     let render_entry = crate::userspace::gui::window_manager::WindowManager::render_loop as usize;
     crate::kernel::process::SCHEDULER.lock().add_task(render_entry, 15);
 
-    // Halt loop (The scheduler will hijack execution on the next timer tick)
+    // PHASE 8: Main Event Loop
     loop {
         crate::userspace::gui::update();
         check_watchdog();
@@ -328,6 +414,10 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {    
+    // Ensure panic messages bypass the buffer and go straight to hardware
+    crate::drivers::serial::SERIAL_TASK_ACTIVE.store(false, Ordering::SeqCst);
+    crate::drivers::framebuffer::RENDER_TASK_ACTIVE.store(false, Ordering::SeqCst);
+
     // Disable interrupts to prevent further issues during panic
     unsafe { core::arch::asm!("cli") };
 

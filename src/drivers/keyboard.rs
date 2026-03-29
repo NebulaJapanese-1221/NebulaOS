@@ -2,48 +2,68 @@ use super::ps2;
 use crate::kernel::interrupts::InterruptStackFrame;
 use crate::kernel::io;
 use crate::kernel::process::IrqSafeMutex; // Use IrqSafeMutex
+use core::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 
-/// A simple ring buffer for buffering key presses.
+const BUFFER_SIZE: usize = 256;
+
+/// A lock-free ring buffer for buffering key presses.
 pub struct KeyBuffer {
-    keys: [char; 256],
-    head: usize,
-    tail: usize,
-    modifiers: Modifiers,
+    keys: [u32; BUFFER_SIZE],
+    ready: [AtomicBool; BUFFER_SIZE],
+    head: AtomicUsize,
+    tail: AtomicUsize,
 }
 
 impl KeyBuffer {
     pub const fn new() -> Self {
+        const DEFAULT_READY: AtomicBool = AtomicBool::new(false);
         Self {
-            keys: ['\0'; 256],
-            head: 0,
-            tail: 0,
-            modifiers: Modifiers {
-                lshift: false,
-                rshift: false,
-                ctrl: false,
-                alt: false,
-                capslock: false,
-                win: false,
-                last_scancode: 0,
-                repeat_count: 0,
-            },
+            keys: [0; BUFFER_SIZE],
+            ready: [DEFAULT_READY; BUFFER_SIZE],
+            head: AtomicUsize::new(0),
+            tail: AtomicUsize::new(0),
         }
     }
 
-    pub fn push(&mut self, c: char) {
-        if (self.tail + 1) % 256 != self.head {
-            self.keys[self.tail] = c;
-            self.tail = (self.tail + 1) % 256;
+    pub fn push(&self, c: char) {
+        let val = c as u32;
+        loop {
+            let head = self.head.load(Ordering::Relaxed);
+            let tail = self.tail.load(Ordering::Acquire);
+            let next = (head + 1) % BUFFER_SIZE;
+
+            if next == tail { return; } // Buffer full
+
+            if self.head.compare_exchange_weak(head, next, Ordering::SeqCst, Ordering::Relaxed).is_ok() {
+                // SAFETY: We have atomically reserved this slot.
+                unsafe {
+                    let ptr = self.keys.as_ptr() as *mut u32;
+                    core::ptr::write_volatile(ptr.add(head), val);
+                }
+                self.ready[head].store(true, Ordering::Release);
+                break;
+            }
+            core::hint::spin_loop();
         }
     }
 
-    pub fn pop(&mut self) -> Option<char> {
-        if self.head == self.tail {
-            None
+    pub fn pop(&self) -> Option<char> {
+        let tail = self.tail.load(Ordering::Relaxed);
+        let head = self.head.load(Ordering::Acquire);
+
+        if tail == head { return None; }
+
+        if self.ready[tail].load(Ordering::Acquire) {
+            // SAFETY: The ready flag ensures the producer is done.
+            let val = unsafe {
+                core::ptr::read_volatile(self.keys.as_ptr().add(tail))
+            };
+            self.ready[tail].store(false, Ordering::Release);
+            self.tail.store((tail + 1) % BUFFER_SIZE, Ordering::Release);
+            
+            core::char::from_u32(val)
         } else {
-            let c = self.keys[self.head];
-            self.head = (self.head + 1) % 256;
-            Some(c)
+            None
         }
     }
 }
@@ -62,7 +82,7 @@ pub fn handle_interrupt() {
             update_modifiers(scancode);
             if scancode < 0x80 {
                 if let Some(c) = scancode_to_char(scancode) {
-                    KEY_BUFFER.lock().push(c);
+                    KEY_BUFFER.push(c);
                 }
             }
         }
@@ -88,41 +108,49 @@ pub struct Modifiers {
 }
 
 /// The global keyboard buffer.
-pub static KEY_BUFFER: IrqSafeMutex<KeyBuffer> = IrqSafeMutex::new(KeyBuffer::new());
+pub static KEY_BUFFER: KeyBuffer = KeyBuffer::new();
+/// The global modifier state, protected by Mutex as it is updated less frequently.
+pub static MODIFIERS: IrqSafeMutex<Modifiers> = IrqSafeMutex::new(Modifiers {
+    lshift: false,
+    rshift: false,
+    ctrl: false,
+    alt: false,
+    capslock: false,
+    win: false,
+    last_scancode: 0,
+    repeat_count: 0,
+});
 
 /// Retreives the next char from the buffer, if any.
 pub fn get_char() -> Option<char> {
-    let mut kb = KEY_BUFFER.lock(); 
-    let c = kb.pop();
-    drop(kb); // Release lock before re-enabling interrupts
-    c
+    KEY_BUFFER.pop()
 }
 
 /// Updates modifier state based on scancode.
 pub fn update_modifiers(scancode: u8) {
-    let mut kb = KEY_BUFFER.lock();
-    if scancode == kb.modifiers.last_scancode {
-        kb.modifiers.repeat_count += 1;
+    let mut mods = MODIFIERS.lock();
+    if scancode == mods.last_scancode {
+        mods.repeat_count += 1;
     } else {
-        kb.modifiers.last_scancode = scancode;
-        kb.modifiers.repeat_count = 0;
+        mods.last_scancode = scancode;
+        mods.repeat_count = 0;
     }
     match scancode {
-        0x2A => kb.modifiers.lshift = true,   // Left Shift Press
-        0xAA => kb.modifiers.lshift = false,  // Left Shift Release
-        0x36 => kb.modifiers.rshift = true,   // Right Shift Press
-        0xB6 => kb.modifiers.rshift = false,  // Right Shift Release
-        0x1D => kb.modifiers.ctrl = true,      // Ctrl Press
-        0x9D => kb.modifiers.ctrl = false,     // Ctrl Release
-        0x38 => kb.modifiers.alt = true,       // Alt Press
-        0xB8 => kb.modifiers.alt = false,      // Alt Release
-        0x5B => kb.modifiers.win = true,       // Left Win Press
-        0xDB => kb.modifiers.win = false,      // Left Win Release
-        0x5C => kb.modifiers.win = true,       // Right Win Press
-        0xDC => kb.modifiers.win = false,      // Right Win Release
+        0x2A => mods.lshift = true,   // Left Shift Press
+        0xAA => mods.lshift = false,  // Left Shift Release
+        0x36 => mods.rshift = true,   // Right Shift Press
+        0xB6 => mods.rshift = false,  // Right Shift Release
+        0x1D => mods.ctrl = true,      // Ctrl Press
+        0x9D => mods.ctrl = false,     // Ctrl Release
+        0x38 => mods.alt = true,       // Alt Press
+        0xB8 => mods.alt = false,      // Alt Release
+        0x5B => mods.win = true,       // Left Win Press
+        0xDB => mods.win = false,      // Left Win Release
+        0x5C => mods.win = true,       // Right Win Press
+        0xDC => mods.win = false,      // Right Win Release
         0x3A => {                              // Capslock Press (toggle)
             if scancode < 0x80 {
-                kb.modifiers.capslock = !kb.modifiers.capslock;
+                mods.capslock = !mods.capslock;
             }
         }
         _ => {}
@@ -130,28 +158,28 @@ pub fn update_modifiers(scancode: u8) {
 }
 
 pub fn is_shift_pressed() -> bool {
-    let kb = KEY_BUFFER.lock();
-    kb.modifiers.lshift || kb.modifiers.rshift
+    let mods = MODIFIERS.lock();
+    mods.lshift || mods.rshift
 }
 
 pub fn is_capslock_enabled() -> bool {
-    let kb = KEY_BUFFER.lock();
-    kb.modifiers.capslock
+    let mods = MODIFIERS.lock();
+    mods.capslock
 }
 
 pub fn is_alt_pressed() -> bool {
-    let kb = KEY_BUFFER.lock();
-    kb.modifiers.alt
+    let mods = MODIFIERS.lock();
+    mods.alt
 }
 
 pub fn is_ctrl_pressed() -> bool {
-    let kb = KEY_BUFFER.lock();
-    kb.modifiers.ctrl
+    let mods = MODIFIERS.lock();
+    mods.ctrl
 }
 
 pub fn is_win_pressed() -> bool {
-    let kb = KEY_BUFFER.lock();
-    kb.modifiers.win
+    let mods = MODIFIERS.lock();
+    mods.win
 }
 
 #[derive(Clone, Copy)]
@@ -203,13 +231,13 @@ static SCANCODE_TABLE: [ScancodeEntry; 128] = [
 ];
 
 /// Internal version for use in interrupt handlers to avoid deadlock
-fn scancode_to_char_internal(kb: &KeyBuffer, scancode: u8) -> Option<char> {
+fn scancode_to_char_internal(mods: &Modifiers, scancode: u8) -> Option<char> {
     let idx = scancode as usize;
     if idx >= SCANCODE_TABLE.len() { return None; }
 
     let entry = &SCANCODE_TABLE[idx];
-    let shift = kb.modifiers.lshift || kb.modifiers.rshift;
-    let capslock = kb.modifiers.capslock;
+    let shift = mods.lshift || mods.rshift;
+    let capslock = mods.capslock;
     
     // Determine if we should use the shifted character table.
     // For alpha keys, Shift and CapsLock toggle each other. 
@@ -261,7 +289,7 @@ pub fn init() -> Result<(), &'static str> {
 /// Converts a PS/2 scancode (Set 1) to a character.
 /// Handles a basic QWERTY layout.
 pub fn scancode_to_char(scancode: u8) -> Option<char> {
-    let kb = KEY_BUFFER.lock();
-    let res = scancode_to_char_internal(&kb, scancode);
+    let mods = MODIFIERS.lock();
+    let res = scancode_to_char_internal(&mods, scancode);
     res
 }
