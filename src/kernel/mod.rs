@@ -56,8 +56,10 @@ fn check_watchdog() {
             state.2 += 1;
             if state.2 <= 3 {
                 crate::serial_println!("[WATCHDOG] Heartbeat frozen. Attempting soft recovery {}/3...", state.2);
-                // Attempt to re-initialize PIT frequency
-                crate::drivers::pit::set_frequency(1000);
+                // Handle the PIT Result to ensure hardware reset was successful
+                if let Err(e) = crate::drivers::pit::set_frequency(1000) {
+                    crate::serial_println!("[WATCHDOG] Critical Error: PIT Recovery failed: {}", e);
+                }
                 // Reset TSC anchor to give the new configuration a window to work
                 state.1 = current_tsc;
             } else {
@@ -137,12 +139,14 @@ fn draw_boot_screen() {
             fb.present_rect(min_x, y_title, max_w, 40);
         }
 
-        // Wait for next frame (1000ms / 60fps = ~16ms)
+        // Dynamic wait: Base 8ms + measured VRAM latency
         let frame_timeout_tsc = crate::kernel::cpu::read_tsc().wrapping_add(10_000_000);
-        while TICKS.load(Ordering::Relaxed).wrapping_sub(start_tick) < 8 { 
+        let latency_ms = crate::drivers::framebuffer::BLIT_LATENCY.load(Ordering::Relaxed) / 2_000_000;
+        let wait_ticks = (8 + latency_ms).min(32);
+
+        while TICKS.load(Ordering::Relaxed).wrapping_sub(start_tick) < wait_ticks { 
             unsafe { asm!("pause"); }
             check_watchdog();
-            // Soft timeout: If 8ms of ticks don't pass but 10M cycles do, the PIT is likely stuck
             if crate::kernel::cpu::read_tsc() > frame_timeout_tsc { break; }
         }
     }
@@ -176,6 +180,7 @@ fn show_boot_error(message: &str) -> ! {
     crate::drivers::framebuffer::RENDER_TASK_ACTIVE.store(false, Ordering::SeqCst);
 
     crate::serial_println!("\nBOOT ERROR: {}", message);
+    process::print_kernel_trace();
     
     // Force flush the serial queue directly to hardware since the background task is likely not running
     while let Some(b) = crate::drivers::serial::SERIAL_OUT_QUEUE.pop_byte() {
@@ -187,20 +192,22 @@ fn show_boot_error(message: &str) -> ! {
     unsafe { FRAMEBUFFER.force_unlock(); }
     let mut fb_lock = FRAMEBUFFER.lock();
     if fb_lock.info.is_some() && fb_lock.draw_buffer.is_some() {
-        fb_lock.clear(0x00_880000); // Dark red background
+        fb_lock.clear(0x00_CC0000); 
         
-        font::draw_string(&mut fb_lock, 30, 30, "!! BOOT ERROR !!", 0xFFFFFFFF, None);
-        font::draw_string(&mut fb_lock, 30, 60, "NebulaOS failed to initialize during boot.", 0xFFFFFFFF, None);
+        font::draw_string(&mut fb_lock, 30, 30, "BOOT_INITIALIZATION_FAILURE", 0xFFFFFFFF, None);
+        font::draw_string(&mut fb_lock, 30, 60, "The kernel failed to stabilize essential drivers.", 0xFFDDDDDD, None);
         
         let mut y = 100;
-        font::draw_string(&mut fb_lock, 30, y, "Reason:", 0x00_CCCCCC, None);
+        font::draw_string(&mut fb_lock, 30, y, "REASON:", 0xFFFFFFFF, None);
         y += 20;
         font::draw_string(&mut fb_lock, 30, y, message, 0xFFFFFFFF, None);
         
         y += 40;
-        font::draw_string(&mut fb_lock, 30, y, "The system has been halted to prevent damage.", 0x00_CCCCCC, None);
-        font::draw_string(&mut fb_lock, 30, y + 20, "Please check the serial log for more details.", 0x00_CCCCCC, None);
+        font::draw_string(&mut fb_lock, 30, y, "Check serial logs for TRACE and STACK_DUMP.", 0xFFDDDDDD, None);
         
+        let mut writer = exceptions::PanicWriter::new(&mut fb_lock, 30, y + 40);
+        unsafe { exceptions::dump_stack_memory(&mut writer); }
+
         fb_lock.present();
     }
     
@@ -354,21 +361,21 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     
     // Start critical background services before showing the logo.
     // This ensures that VRAM blitting and serial logging are non-blocking.
-    crate::kernel::process::SCHEDULER.lock().add_task(framebuffer_blit_task as usize, 20); // High priority
-    crate::kernel::process::SCHEDULER.lock().add_task(serial_output_task as usize, 5);
+    crate::kernel::process::SCHEDULER.lock().add_task(framebuffer_blit_task as *const () as usize, 20); // High priority
+    crate::kernel::process::SCHEDULER.lock().add_task(serial_output_task as *const () as usize, 5);
 
     // Enable interrupts: Background tasks and PIT heartbeat (TICKS) start now.
     interrupts::enable_interrupts();
     add_boot_status(BootMilestone::Interrupts); 
 
     // PHASE 3.5: Initialize Idle Task
-    let idle_entry = crate::kernel::process::idle_task as usize;
+    let idle_entry = crate::kernel::process::idle_task as *const () as usize;
     crate::kernel::process::SCHEDULER.lock().add_task(idle_entry, 0);
 
     // PHASE 4: Visual Startup
     draw_boot_screen();
     BOOT_ANIMATION_RUNNING.store(true, Ordering::Relaxed);
-    crate::kernel::process::SCHEDULER.lock().add_task(boot_animation_task as usize, 15);
+    crate::kernel::process::SCHEDULER.lock().add_task(boot_animation_task as *const () as usize, 15);
 
     // PHASE 5: Peripheral Drivers
     if let Err(e) = crate::drivers::mouse::initialize() { show_boot_error(e); }
@@ -388,13 +395,19 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
 
     add_boot_status(BootMilestone::Gui);
     crate::userspace::localisation::init();
+
+    // Access localization via CURRENT_LOCALE lock
+    let locale_guard = crate::userspace::localisation::CURRENT_LOCALE.lock();
+    let loc = locale_guard.as_ref().unwrap();
+    crate::serial_println!("[LOCAL] {}: NebulaOS {}", loc.info_kernel(), VERSION);
+    crate::serial_println!("[LOCAL] {}: i386-unknown-none", loc.info_target());
     
     // PHASE 7: Desktop Transition
     BOOT_ANIMATION_RUNNING.store(false, Ordering::Relaxed);
     fade_out_boot_screen();
     crate::userspace::gui::init();
     
-    let render_entry = crate::userspace::gui::window_manager::WindowManager::render_loop as usize;
+    let render_entry = crate::userspace::gui::window_manager::WindowManager::render_loop as *const () as usize;
     crate::kernel::process::SCHEDULER.lock().add_task(render_entry, 15);
 
     // PHASE 8: Main Event Loop
@@ -423,22 +436,24 @@ fn panic(info: &PanicInfo) -> ! {
 
     crate::serial_println!("\nKERNEL PANIC\n{}", info);
     unsafe { exceptions::print_stack_trace(); }
+    process::print_kernel_trace();
 
     // Draw to screen
     // Force unlock the framebuffer to prevent deadlock if the panic happened while drawing
     unsafe { FRAMEBUFFER.force_unlock(); }
     let mut fb = FRAMEBUFFER.lock();
-    fb.clear(0x00_CC0000); // Red (RSOD)
+    fb.clear(0x00_CC0000); 
     
-    font::draw_string(&mut fb, 30, 30, ":(", 0xFFFFFFFF, None);
-    font::draw_string(&mut fb, 30, 60, "NebulaOS ran into a problem and needs to restart.", 0xFFFFFFFF, None);
+    font::draw_string(&mut fb, 30, 30, "KERNEL_PANIC_DETECTED", 0xFFFFFFFF, None);
+    font::draw_string(&mut fb, 30, 60, "An unhandled exception has forced a system halt.", 0xFFDDDDDD, None);
 
     let mut writer = exceptions::PanicWriter::new(&mut fb, 30, 90);
     use core::fmt::Write;
-    let _ = writeln!(writer, "Stop Code: KERNEL_PANIC");
-    let _ = writeln!(writer, "Details: {}", info);
-    let _ = writeln!(writer, "\nTechnical Information:\n----------------------");
+    let _ = writeln!(writer, "FAULT_ID: KERNEL_PANIC");
+    let _ = writeln!(writer, "ENTROPY: {}", info);
+    let _ = writeln!(writer, "\nTRACING_FAILURE:\n----------------");
     unsafe { exceptions::print_stack_trace_to(&mut writer); }
+    unsafe { exceptions::dump_stack_memory(&mut writer); }
     
     fb.present();
 

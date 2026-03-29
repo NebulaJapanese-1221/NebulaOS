@@ -32,6 +32,9 @@ impl Terminal {
 
         match parts[0] {
             "help" => {
+                let locale_guard = crate::userspace::localisation::CURRENT_LOCALE.lock();
+                let loc = locale_guard.as_ref().unwrap();
+                self.history.push(format!("--- {} ---", loc.ctx_new_terminal()));
                 self.history.push("Available commands:".to_string());
                 self.history.push("  help      - Show this help message".to_string());
                 self.history.push("  uname     - Show system information".to_string());
@@ -40,7 +43,13 @@ impl Terminal {
                 self.history.push("  ls        - List files (ATA Driver Test)".to_string());
             }
             "uname" => {
-                self.history.push(format!("NebulaOS {}", crate::kernel::VERSION));
+                let locale_guard = crate::userspace::localisation::CURRENT_LOCALE.lock();
+                let loc = locale_guard.as_ref().unwrap();
+                self.history.push(format!("{}: NebulaOS {}", loc.info_kernel(), crate::kernel::VERSION));
+                self.history.push(format!("{}: i386-unknown-none", loc.info_target()));
+                if let Some(brand) = crate::kernel::cpu::CPU_BRAND.lock().as_ref() {
+                    self.history.push(format!("CPU: {}", brand));
+                }
             }
             "uptime" => {
                  let total_seconds = crate::kernel::process::TICKS.load(Ordering::Relaxed) / 1000;

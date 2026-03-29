@@ -79,6 +79,11 @@ pub fn handle_interrupt() {
 
         // Only process if it IS NOT from the mouse (Bit 5 clear)
         if (status & ps2::STATUS_MOUSE_DATA) == 0 {
+            // Use modifiers to implement the 'Three-Finger Salute' (Ctrl+Alt+Del)
+            if scancode == 0x53 && is_ctrl_pressed() && is_alt_pressed() {
+                crate::kernel::power::reboot();
+            }
+
             update_modifiers(scancode);
             if scancode < 0x80 {
                 if let Some(c) = scancode_to_char(scancode) {
@@ -129,6 +134,8 @@ pub fn get_char() -> Option<char> {
 /// Updates modifier state based on scancode.
 pub fn update_modifiers(scancode: u8) {
     let mut mods = MODIFIERS.lock();
+    let old_caps = mods.capslock;
+
     if scancode == mods.last_scancode {
         mods.repeat_count += 1;
     } else {
@@ -154,6 +161,11 @@ pub fn update_modifiers(scancode: u8) {
             }
         }
         _ => {}
+    }
+
+    // Use the capslock state to provide diagnostic feedback
+    if mods.capslock != old_caps {
+        crate::serial_println!("[KBD] CapsLock toggled: {}", if mods.capslock { "ON" } else { "OFF" });
     }
 }
 

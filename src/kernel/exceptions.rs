@@ -26,7 +26,8 @@ impl<'a> fmt::Write for PanicWriter<'a> {
                 self.y += 16;
                 self.x = self.start_x;
             } else {
-                font::draw_char(self.fb, self.x, self.y, c, 0xFFFFFFFF, None);
+                let color = 0xFF_FFFFFF; // Solid White
+                font::draw_char(self.fb, self.x, self.y, c, color, None);
                 self.x += 8;
             }
         }
@@ -93,6 +94,25 @@ pub unsafe fn print_stack_trace_to<W: fmt::Write>(writer: &mut W) {
     }
 }
 
+/// Prints a hexadecimal dump of the memory around the stack pointer.
+pub unsafe fn dump_stack_memory<W: fmt::Write>(writer: &mut W) {
+    let esp: u32;
+    asm!("mov {}, esp", out(reg) esp, options(nomem, nostack));
+    
+    let _ = writeln!(writer, "\nMEMORY_DUMP (ESP: {:#x}):", esp);
+    let start_addr = (esp & !0xF).saturating_sub(32);
+    
+    for i in 0..6 {
+        let addr = start_addr + (i * 16);
+        let _ = write!(writer, "{:08x}: ", addr);
+        for j in 0..4 {
+            let val = *( (addr + j*4) as *const u32);
+            let _ = write!(writer, "{:08x} ", val);
+        }
+        let _ = writeln!(writer, "");
+    }
+}
+
 pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code: Option<u32>) -> ! {
     unsafe { asm!("cli", options(nomem, nostack)); }
 
@@ -105,24 +125,27 @@ pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code
     
     crate::serial_println!("Stack Frame:\n{:#?}", frame);
     unsafe { print_stack_trace(); }
+    crate::kernel::process::print_kernel_trace();
 
     // Force unlock the framebuffer to prevent deadlock if the exception happened while drawing
     unsafe { FRAMEBUFFER.force_unlock(); }
     let mut fb = FRAMEBUFFER.lock();
-    fb.clear(0x00_CC0000); // Red background (RSOD)
+    fb.clear(0x00_CC0000); // Standard Panic Red
 
-    font::draw_string(&mut fb, 30, 30, ":(", 0xFFFFFFFF, None);
-    font::draw_string(&mut fb, 30, 60, "NebulaOS ran into a problem and needs to restart.", 0xFFFFFFFF, None);
+    font::draw_string(&mut fb, 30, 30, "!! CRITICAL SYSTEM ERROR !!", 0xFFFFFFFF, None);
+    font::draw_string(&mut fb, 30, 60, "NebulaOS has encountered an unrecoverable logic fault.", 0xFFDDDDDD, None);
+    font::draw_string(&mut fb, 30, 75, "The system has been halted to preserve data integrity.", 0xFFDDDDDD, None);
 
     let mut writer = PanicWriter::new(&mut fb, 30, 90);
     
     use core::fmt::Write;
-    let _ = writeln!(writer, "Stop Code: {}", name);
+    let _ = writeln!(writer, "VOID_CODE: {}", name);
     if let Some(code) = error_code {
-        let _ = writeln!(writer, "Error Code: {:#x}", code);
+        let _ = writeln!(writer, "ENTROPY_ID: {:#x}", code);
     }
-    let _ = writeln!(writer, "\nTechnical Information:\n----------------------\nIP: {:#010x}  CS: {:#06x}  FLAGS: {:#010x}", frame.instruction_pointer, frame.code_segment, frame.cpu_flags);
+    let _ = writeln!(writer, "\nMANIFEST_ERROR:\n---------------\nIP: {:#010x}  CS: {:#06x}", frame.instruction_pointer, frame.code_segment);
     unsafe { print_stack_trace_to(&mut writer); }
+    unsafe { dump_stack_memory(&mut writer); }
     
     fb.present();
 

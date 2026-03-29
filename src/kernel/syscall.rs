@@ -101,6 +101,8 @@ pub extern "C" fn syscall_dispatcher(
 core::arch::global_asm!(
     ".global syscall_handler",
     "syscall_handler:",
+    // 1. Save dummy error code to match timer/exception frame layout
+    "push 0",
     // Save Segment Registers
     "push ds",
     "push es",
@@ -114,6 +116,8 @@ core::arch::global_asm!(
     "mov ax, 0x10",
     "mov ds, ax",
     "mov es, ax",
+    "mov fs, ax",
+    "mov gs, ax",
 
     // 4. Prepare arguments for syscall_dispatcher(eax, ebx, ecx, edx)
     // After `pusha`, ESP points to the saved registers. We use it as a base.
@@ -130,7 +134,7 @@ core::arch::global_asm!(
     // 5. Call the dispatcher
     "call syscall_dispatcher",
 
-    // 6. Cleanup arguments (5 * 4 bytes)
+    // 6. Cleanup arguments (5 arguments * 4 bytes = 20)
     "add esp, 20",
 
     // 7. Switch stack to the returned ESP (allows yielding to new tasks)
@@ -142,6 +146,7 @@ core::arch::global_asm!(
     "pop fs",
     "pop es",
     "pop ds",
+    "add esp, 4",       // Pop dummy error code
     "iretd"
 );
 

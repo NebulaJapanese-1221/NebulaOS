@@ -65,6 +65,53 @@ pub enum TaskState {
     Blocked,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct TraceEntry {
+    pub task_id: usize,
+    pub eip: usize,
+}
+
+pub struct TraceBuffer {
+    pub entries: [TraceEntry; 10],
+    pub index: usize,
+}
+
+impl TraceBuffer {
+    pub const fn new() -> Self {
+        Self {
+            entries: [TraceEntry { task_id: 0, eip: 0 }; 10],
+            index: 0,
+        }
+    }
+
+    pub fn record(&mut self, task_id: usize, eip: usize) {
+        self.entries[self.index] = TraceEntry { task_id, eip };
+        self.index = (self.index + 1) % 10;
+    }
+}
+
+pub static KERNEL_TRACE: IrqSafeMutex<TraceBuffer> = IrqSafeMutex::new(TraceBuffer::new());
+
+pub fn record_context_switch(task_id: usize, esp: usize) {
+    // Offset 52 is EIP in our common interrupt/syscall/task stack frame
+    let eip = unsafe { *((esp + 52) as *const usize) };
+    KERNEL_TRACE.lock().record(task_id, eip);
+}
+
+pub fn print_kernel_trace() {
+    let trace = KERNEL_TRACE.lock();
+    crate::serial_println!("\n[TRACE] Last 10 Context Switches (Oldest to Newest):");
+    for i in 0..10 {
+        let idx = (trace.index + i) % 10;
+        let entry = &trace.entries[idx];
+        if entry.eip != 0 {
+            crate::serial_println!("  #{:02} -> Task {}: EIP 0x{:08x}", i, entry.task_id, entry.eip);
+        }
+    }
+}
+
+#[repr(C)]
 pub struct Task {
     pub id: usize,
     pub kernel_stack: Vec<u8>,
@@ -92,11 +139,12 @@ impl Scheduler {
     }
 
     /// Creates a new task jumping to the given entry point.
+    /// The entry_point function will be called by a wrapper that handles task exit.
     pub fn add_task(&mut self, entry_point: usize, priority: usize) {
         let id = self.tasks.len();
         
         // Allocate a kernel stack for this task
-        let stack_size = 8192;
+        let stack_size = 16384;
         let mut stack = Vec::with_capacity(stack_size);
         stack.resize(stack_size, 0);
         
@@ -105,35 +153,29 @@ impl Scheduler {
         let mut sp = stack_top;
 
         unsafe {
-            // Push the task_exit_handler address as the return address.
-            // When the entry_point function returns, it will jump here.
-            sp -= 4;
-            *(sp as *mut usize) = task_exit_handler as usize;
-
             // Helper to push a value onto the stack
-            let mut push = |val: usize| {
-                sp -= 4;
-                *(sp as *mut usize) = val;
+            let mut push = |val: usize, sp_ptr: &mut usize| {
+                *sp_ptr -= 4;
+                *(*sp_ptr as *mut usize) = val;
             };
 
-            // Setup stack frame to match `timer_handler` expectations (iret context)
             // 1. IRET Frame
-            push(0x202);      // EFLAGS (Interrupts Enabled)
-            push(0x08);       // CS (Kernel Code Segment)
-            push(entry_point);// EIP
+            push(0x202, &mut sp);      // EFLAGS (Interrupts Enabled)
+            push(0x08, &mut sp);       // CS (Kernel Code Segment)
+            push(task_entry_wrapper as *const () as usize, &mut sp); 
 
             // 2. Error Code / Dummy
-            push(0);
+            push(0, &mut sp);
 
             // 3. Segment Registers
-            push(0x10); // GS
-            push(0x10); // FS
-            push(0x10); // ES
-            push(0x10); // DS
+            push(0x10, &mut sp); // DS
+            push(0x10, &mut sp); // ES
+            push(0x10, &mut sp); // FS
+            push(0x10, &mut sp); // GS (Lowest address)
 
             // 4. General Purpose Registers (pusha)
-            // EDI, ESI, EBP, ESP, EBX, EDX, ECX, EAX
-            for _ in 0..8 { push(0); }
+            push(entry_point, &mut sp); // EAX (Entry point for wrapper)
+            for _ in 0..7 { push(0, &mut sp); } // ECX, EDX, EBX, ESP, EBP, ESI, EDI
         }
 
         self.tasks.push(Task {
@@ -226,6 +268,18 @@ impl Scheduler {
 pub static SCHEDULER: IrqSafeMutex<Scheduler> = IrqSafeMutex::new(Scheduler::new());
 pub static TICKS: AtomicUsize = AtomicUsize::new(0);
 
+/// Wrapper that executes the task and handles cleanup on return.
+#[no_mangle]
+pub extern "C" fn task_entry_wrapper() {
+    let entry_point: usize;
+    unsafe {
+        asm!("mov {}, eax", out(reg) entry_point);
+        let func: extern "C" fn() = core::mem::transmute(entry_point);
+        func();
+    }
+    task_exit_handler();
+}
+
 /// Handler called when a task's entry point returns.
 /// Marks the task as exited and yields forever until reaped.
 pub extern "C" fn task_exit_handler() {
@@ -243,7 +297,6 @@ pub extern "C" fn idle_task() {
     loop {
         crate::kernel::cpu::IS_IDLE.store(true, Ordering::Relaxed);
         unsafe { asm!("hlt", options(nomem, nostack)); }
-        // The CPU wakes up here after an interrupt
         crate::kernel::cpu::IS_IDLE.store(false, Ordering::Relaxed);
     }
 }
@@ -251,13 +304,11 @@ pub extern "C" fn idle_task() {
 /// Voluntary task yield. Saves current state and switches to the next task.
 pub fn yield_now(current_esp: usize) -> usize {
     let mut scheduler = SCHEDULER.lock();
-    let total_tasks = scheduler.tasks.len();
-    if total_tasks == 0 { return current_esp; }
+    if scheduler.tasks.is_empty() { return current_esp; }
 
-    // Save result 0 for the yielding task so the syscall returns 0 from its perspective upon resume
+    // Save result 0 for the yielding task (EAX slot in pusha frame)
     unsafe { *((current_esp + 28) as *mut usize) = 0; }
 
-    // Update CPU usage tracking
     let now = crate::kernel::cpu::read_tsc();
     if scheduler.last_tsc > 0 && now > scheduler.last_tsc {
         let delta = now - scheduler.last_tsc;
@@ -266,16 +317,18 @@ pub fn yield_now(current_esp: usize) -> usize {
     }
     scheduler.last_tsc = now;
 
-    // Save current ESP
     let current_idx = scheduler.current_index;
     scheduler.tasks[current_idx].kernel_esp = current_esp;
 
     scheduler.pick_next();
 
-    // Switch to new stack
     let next_task = &scheduler.tasks[scheduler.current_index];
-    let kstack_top = next_task.kernel_stack.as_ptr() as usize + next_task.kernel_stack.len();
-    crate::kernel::gdt::set_interrupt_stack(kstack_top as u32);
+    record_context_switch(next_task.id, next_task.kernel_esp);
+
+    if !next_task.kernel_stack.is_empty() {
+        let kstack_top = next_task.kernel_stack.as_ptr() as usize + next_task.kernel_stack.len();
+        crate::kernel::gdt::set_interrupt_stack(kstack_top as u32);
+    }
     next_task.kernel_esp
 }
 
@@ -291,11 +344,10 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
     rtc::handle_timer_tick();
 
     let mut scheduler = SCHEDULER.lock();
-    let total_user_tasks = scheduler.tasks.len();
 
     if !scheduler.initialized {
         // 1. Promote the existing kernel execution to Task 0
-        let main_id = total_user_tasks;
+        let main_id = scheduler.tasks.len();
         scheduler.tasks.push(Task {
             id: main_id,
             kernel_stack: Vec::new(), // The bootloader/kernel stack is managed externally
@@ -311,12 +363,18 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
     }
 
     let current_ticks = TICKS.load(Ordering::Relaxed);
-    let total_tasks = scheduler.tasks.len();
 
     // 1.2 Reap exited tasks
     let mut i = 0;
+    let current_running_id = if scheduler.current_index < scheduler.tasks.len() {
+        Some(scheduler.tasks[scheduler.current_index].id) 
+    } else { None };
+
     while i < scheduler.tasks.len() {
-        if scheduler.tasks[i].state == TaskState::Exited && i != scheduler.current_index {
+        // Protection: Never reap Task 0 (Kernel) or the task currently being processed.
+        let is_protected = scheduler.tasks[i].id == 0 || Some(scheduler.tasks[i].id) == current_running_id;
+        
+        if scheduler.tasks[i].state == TaskState::Exited && !is_protected {
             scheduler.tasks.remove(i);
             if i < scheduler.current_index {
                 scheduler.current_index -= 1;
@@ -348,7 +406,8 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
     scheduler.last_tsc = now;
 
     // 2. Save ESP of the task we are switching FROM
-    if scheduler.current_index < total_tasks {
+    let task_count = scheduler.tasks.len();
+    if scheduler.current_index < task_count {
         let current_idx = scheduler.current_index;
         scheduler.tasks[current_idx].kernel_esp = current_esp;
     }
@@ -359,6 +418,8 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
     // 4. Get ESP of the task we are switching TO
     let next_task = &scheduler.tasks[scheduler.current_index];
     
+    record_context_switch(next_task.id, next_task.kernel_esp);
+
     // Update TSS only if the task has a managed stack (User/New Kernel tasks)
     if !next_task.kernel_stack.is_empty() {
         let kstack_top = next_task.kernel_stack.as_ptr() as usize + next_task.kernel_stack.len();
