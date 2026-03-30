@@ -95,17 +95,19 @@ impl App for TaskManager {
         }
 
         // Draw bars
-        let total_mem = crate::kernel::TOTAL_MEMORY.load(Ordering::Relaxed) / 1024 / 1024;
+        let total_mem = crate::kernel::CONFIG.total_memory.load(Ordering::Relaxed) / 1024 / 1024;
         let mem_scale_max = if total_mem > 0 { total_mem } else { 128 };
+
+        // Destructure state to allow simultaneous borrows of disjoint fields
+        let TaskManagerState { ref mem_history, ref cpu_history, ref mut graph_buffer, .. } = *state;
 
         // Resize and clear local buffer
         let buf_size = graph_width * graph_height;
-        if state.graph_buffer.len() != buf_size {
-            state.graph_buffer.resize(buf_size, 0);
+        if graph_buffer.len() != buf_size {
+            graph_buffer.resize(buf_size, 0);
         }
-        state.graph_buffer.fill(0xFF_20_20_20); // Opaque dark gray background
+        graph_buffer.fill(0xFF_20_20_20); // Opaque dark gray background
 
-        let mem_history = state.mem_history.clone();
         for (i, &val) in mem_history.iter().enumerate() { 
             let bar_h = (val * graph_height) / mem_scale_max;
             let bar_x = i * 4;
@@ -114,15 +116,15 @@ impl App for TaskManager {
                 let start_y = graph_height.saturating_sub(bar_h);
                 for by in start_y..graph_height {
                     for bx in 0..3 {
-                        state.graph_buffer[by * graph_width + (bar_x + bx)] = 0xFF_00_AA_00;
+                        graph_buffer[by * graph_width + (bar_x + bx)] = 0xFF_00_AA_00;
                     }
                 }
             }
         }
         // Blit memory graph
-        fb.draw_bitmap(x as usize, y as usize, graph_width, graph_height, &state.graph_buffer);
+        fb.draw_bitmap(x as usize, y as usize, graph_width, graph_height, graph_buffer.as_slice());
 
-        let last_mem = state.mem_history.last().copied().unwrap_or(0);
+        let last_mem = mem_history.last().copied().unwrap_or(0);
         font::draw_string(fb, x + 5, y + 5, &format!("{} / {} MB", last_mem, mem_scale_max), 0x00_FFFFFF, None);
 
         // --- Draw CPU Graph ---
@@ -132,9 +134,8 @@ impl App for TaskManager {
             y += font_height as isize + 2;
 
             // Reuse buffer for CPU graph
-            state.graph_buffer.fill(0xFF_20_20_20);
+            graph_buffer.fill(0xFF_20_20_20);
 
-            let cpu_history = state.cpu_history.clone();
             for (i, &val) in cpu_history.iter().enumerate() {
                 // Clamp to 100%
                 let safe_val = if val > 100 { 100 } else { val };
@@ -150,16 +151,16 @@ impl App for TaskManager {
                     let start_y = graph_height.saturating_sub(bar_h);
                     for by in start_y..graph_height {
                         for bx in 0..3 {
-                            state.graph_buffer[by * graph_width + (bar_x + bx)] = color;
+                            graph_buffer[by * graph_width + (bar_x + bx)] = color;
                         }
                     }
                 }
             }
             
             // Blit CPU graph
-            fb.draw_bitmap(x as usize, y as usize, graph_width, graph_height, &state.graph_buffer);
+            fb.draw_bitmap(x as usize, y as usize, graph_width, graph_height, graph_buffer.as_slice());
 
-            let last_cpu = state.cpu_history.last().copied().unwrap_or(0);
+            let last_cpu = cpu_history.last().copied().unwrap_or(0);
             font::draw_string(fb, x + 5, y + 5, &format!("{} %", last_cpu), 0x00_FFFFFF, None);
         }
     }

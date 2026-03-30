@@ -4,7 +4,7 @@ use core::arch::asm;
 use crate::drivers::framebuffer::FRAMEBUFFER;
 use crate::userspace::fonts::font;
 use crate::userspace::gui::{self, Rect};
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicUsize, AtomicU32, Ordering};
 use crate::kernel::process::TICKS;
 use spin::Mutex;
 pub mod io;
@@ -19,11 +19,40 @@ pub mod syscall;
 pub mod process;
 pub mod cpu;
 pub mod elf;
+pub mod symbols;
 
 pub const VERSION: &str = "0.0.3-dev2";
 
-pub static TOTAL_MEMORY: AtomicUsize = AtomicUsize::new(0);
-pub static CPU_CORES: AtomicUsize = AtomicUsize::new(1);
+// CPU Feature Flags
+pub const FEATURE_SSE: u32 = 1 << 0;
+pub const FEATURE_SSE2: u32 = 1 << 1;
+pub const FEATURE_SSE3: u32 = 1 << 2;
+pub const FEATURE_SSSE3: u32 = 1 << 3;
+pub const FEATURE_SSE4_1: u32 = 1 << 4;
+pub const FEATURE_SSE4_2: u32 = 1 << 5;
+pub const FEATURE_AVX: u32 = 1 << 6;
+pub const FEATURE_FPU: u32 = 1 << 7;
+
+pub struct KernelConfig {
+    pub tsc_frequency: AtomicU32,
+    pub total_memory: AtomicUsize,
+    pub cpu_cores: AtomicUsize,
+    pub features: AtomicU32,
+}
+
+impl KernelConfig {
+    pub fn has_feature(&self, feature: u32) -> bool {
+        (self.features.load(Ordering::Relaxed) & feature) != 0
+    }
+}
+
+pub static CONFIG: KernelConfig = KernelConfig {
+    tsc_frequency: AtomicU32::new(2_000_000_000), // Default 2GHz
+    total_memory: AtomicUsize::new(0),
+    cpu_cores: AtomicUsize::new(1),
+    features: AtomicU32::new(0),
+};
+
 static BOOT_ANIMATION_RUNNING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static BOOT_STATUS_LINE: AtomicUsize = AtomicUsize::new(2);
 /// (last_tick, last_tick_tsc, pit_retries, last_gpu_val, last_gpu_tsc)
@@ -35,7 +64,7 @@ fn check_watchdog() {
     let current_tick = TICKS.load(Ordering::Relaxed);
     let current_gpu = crate::drivers::framebuffer::GPU_HEARTBEAT.load(Ordering::Relaxed);
     let current_tsc = crate::kernel::cpu::read_tsc();
-    let tsc_freq = crate::kernel::cpu::TSC_FREQUENCY.load(Ordering::Relaxed);
+    let tsc_freq = CONFIG.tsc_frequency.load(Ordering::Relaxed) as u64;
     
     let mut state = WATCHDOG_STATE.lock();
     
@@ -141,7 +170,7 @@ fn draw_boot_screen() {
         }
 
         // Dynamic wait: Base 8ms + measured VRAM latency
-        let frame_timeout_tsc = crate::kernel::cpu::read_tsc().wrapping_add(crate::kernel::cpu::TSC_FREQUENCY.load(Ordering::Relaxed) / 100);
+        let frame_timeout_tsc = crate::kernel::cpu::read_tsc().wrapping_add(CONFIG.tsc_frequency.load(Ordering::Relaxed) as u64 / 100);
         let latency_ms = crate::drivers::framebuffer::BLIT_LATENCY.load(Ordering::Relaxed) / 2_000_000;
         let wait_ticks = (8 + latency_ms).min(32);
 
@@ -166,7 +195,7 @@ fn add_boot_status(milestone: BootMilestone) {
 
     // Intentional delay to make the log readable (10ms per entry) 
     let start_wait = TICKS.load(Ordering::Relaxed);
-    let wait_timeout_tsc = crate::kernel::cpu::read_tsc().wrapping_add(crate::kernel::cpu::TSC_FREQUENCY.load(Ordering::Relaxed) / 50);
+    let wait_timeout_tsc = crate::kernel::cpu::read_tsc().wrapping_add(CONFIG.tsc_frequency.load(Ordering::Relaxed) as u64 / 50);
     while TICKS.load(Ordering::Relaxed).wrapping_sub(start_wait) < 10 { 
         unsafe { asm!("pause"); }
         check_watchdog();
@@ -267,14 +296,14 @@ pub extern "C" fn framebuffer_blit_task() {
 
             // Performance Watchdog: Detect Graphics Bus Stalls
             // If a single blit takes > 1 second, the VRAM is unresponsive.
-            if latency as u64 > crate::kernel::cpu::TSC_FREQUENCY.load(Ordering::Relaxed) {
+            if latency as u64 > CONFIG.tsc_frequency.load(Ordering::Relaxed) as u64 {
                 show_boot_error("VRAM Unresponsive: Hardware bus timeout detected during VRAM blit operation.");
             }
         }
 
         let now = crate::kernel::cpu::read_tsc();
         // Update FPS counter every ~1 second
-        if now.wrapping_sub(last_fps_check) >= crate::kernel::cpu::TSC_FREQUENCY.load(Ordering::Relaxed) {
+        if now.wrapping_sub(last_fps_check) >= CONFIG.tsc_frequency.load(Ordering::Relaxed) as u64 {
             crate::drivers::framebuffer::FPS.store(frame_count, Ordering::Relaxed);
             frame_count = 0;
             last_fps_check = now;
@@ -319,7 +348,7 @@ pub extern "C" fn boot_animation_task() {
 
         // Adjust spin speed based on measured frequency
         let latency_cycles = crate::drivers::framebuffer::BLIT_LATENCY.load(Ordering::Relaxed);
-        let freq = crate::kernel::cpu::TSC_FREQUENCY.load(Ordering::Relaxed) as usize;
+        let freq = CONFIG.tsc_frequency.load(Ordering::Relaxed) as usize;
         let latency_ms = if freq > 0 { latency_cycles / (freq / 1000) } else { 0 };
 
         // Target 30 FPS (33ms) + current hardware overhead. Cap at 200ms (5 FPS).
@@ -342,7 +371,7 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
 
     if let Some((heap_start, heap_size)) = heap_region {
         unsafe { allocator::ALLOCATOR.lock().init(heap_start as *mut u8, heap_size); }
-        TOTAL_MEMORY.store(heap_size, Ordering::Relaxed);
+        CONFIG.total_memory.store(heap_size, Ordering::Relaxed);
     } else { show_boot_error("Could not find a suitable heap region!"); }
 
     if let Some(fb_info) = fb_info_opt {

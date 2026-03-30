@@ -83,7 +83,7 @@ impl Settings {
                 // CPU Info
                 let brand_guard = CPU_BRAND.lock();
                 let cpu_name = brand_guard.as_deref().unwrap_or("Unknown CPU");
-                let cores = crate::kernel::CPU_CORES.load(Ordering::Relaxed);
+                let cores = crate::kernel::CONFIG.cpu_cores.load(Ordering::Relaxed);
                 let core_str = if cores == 1 { "Core" } else { "Cores" };
                 
                 // Truncate CPU string if too long for display
@@ -101,7 +101,7 @@ impl Settings {
                 font::draw_string(fb, content_x, content_y + (font_height as isize + 4) * 4, res_str.as_str(), 0x00_CC_CC_CC, None);
 
                 // Memory
-                let mem_bytes = crate::kernel::TOTAL_MEMORY.load(Ordering::Relaxed);
+                let mem_bytes = crate::kernel::CONFIG.total_memory.load(Ordering::Relaxed);
                 let mem_mb = mem_bytes / 1024 / 1024;
                 let mem_str = format!("{} {} MB", locale.info_memory(), mem_mb);
                 font::draw_string(fb, content_x, content_y + (font_height as isize + 4) * 5, mem_str.as_str(), 0x00_CC_CC_CC, None);

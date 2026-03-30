@@ -222,7 +222,7 @@ fn parse_madt(madt_ptr: *const SdtHeader) {
     }
 
     if cores > 0 {
-        crate::kernel::CPU_CORES.store(cores, Ordering::Relaxed);
+        crate::kernel::CONFIG.cpu_cores.store(cores, Ordering::Relaxed);
     }
 }
 

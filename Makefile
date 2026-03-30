@@ -29,5 +29,5 @@ run: iso
 
 clean:
 	cargo clean
-	rm -f nebula_os.iso
+	rm -f nebula_os.iso kernel.sym
 .PHONY: all build iso run clean

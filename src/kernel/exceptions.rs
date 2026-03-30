@@ -38,7 +38,11 @@ impl<'a> fmt::Write for PanicWriter<'a> {
 struct SerialWriter;
 impl fmt::Write for SerialWriter {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        crate::serial_print!("{}", s);
+        // Access the hardware directly to bypass LogLevel filtering and prefixes
+        let mut port = crate::drivers::serial::SERIAL1.lock();
+        for byte in s.bytes() {
+            port.write_byte(byte);
+        }
         Ok(())
     }
 }
@@ -46,56 +50,37 @@ impl fmt::Write for SerialWriter {
 /// Walks the stack and prints a stack trace to the serial port.
 /// This function is unsafe because it reads from arbitrary memory locations by following the base pointer.
 pub unsafe fn print_stack_trace() {
-    let mut rbp: u32;
-    asm!("mov {}, ebp", out(reg) rbp, options(nomem, nostack));
-
-    crate::serial_println!("\nStack Trace (current RBP: 0x{:08x}):", rbp);
-
-    if rbp == 0 {
-        return;
-    }
-
-    // Basic alignment check to avoid immediate faults on garbage
-    if rbp & 3 != 0 {
-        crate::serial_println!("  <RBP unaligned, stopping trace>");
-        return;
-    }
-
-    let mut i = 0;
-    // Limit to 20 frames to prevent infinite loops in case of stack corruption.
-    while rbp != 0 && i < 20 {
-        // The return address is stored on the stack just above the saved RBP.
-        let return_address = *(rbp as *const u32).add(1);
-
-        if let Some((name, offset)) = crate::kernel::symbols::resolve(return_address as usize) {
-            crate::serial_println!("  Frame {:02}: 0x{:08x} <{}+{:#x}>", i, return_address, name, offset);
-        } else {
-            crate::serial_println!("  Frame {:02}: 0x{:08x} <unknown>", i, return_address);
-        }
-
-        // The next RBP is the value pointed to by the current RBP.
-        let next_rbp = *(rbp as *const u32);
-        
-        // Basic sanity check: Stack usually grows down, so previous frame RBP should be > current RBP
-        if next_rbp <= rbp && next_rbp != 0 {
-             crate::serial_println!("  <Stack Corruption or End detected>");
-             break;
-        }
-        rbp = next_rbp;
-        i += 1;
-    }
+    let mut writer = SerialWriter;
+    unsafe { print_stack_trace_to(&mut writer); }
 }
 
 /// Walks the stack and prints a stack trace to the provided writer.
 /// This function is unsafe because it reads from arbitrary memory locations by following the base pointer.
 pub unsafe fn print_stack_trace_to<W: fmt::Write>(writer: &mut W) {
-    let mut rbp: u32;
-    asm!("mov {}, ebp", out(reg) rbp, options(nomem, nostack));
+    let rbp: u32;
+    unsafe {
+        asm!("mov {}, ebp", out(reg) rbp, options(nomem, nostack));
+    }
 
-    let _ = writeln!(writer, "\nStack Trace (RBP: {:#x}):", rbp);
+    let _ = writeln!(writer, "\nStack Trace (current RBP: 0x{:08x}):", rbp);
+
+    if rbp == 0 { return; }
+
+    // Sanity check: Ensure RBP is not in null-page or clearly out of physical bounds (assuming max 128MB)
+    if rbp < 0x1000 || rbp > 0x08000000 { 
+        let _ = writeln!(writer, "  <RBP invalid, stopping trace>");
+        return;
+    }
+
+    let mut current_rbp = rbp;
     let mut i = 0;
-    while rbp != 0 && i < 20 {
-        let return_address = *(rbp as *const u32).add(1);
+
+    // Limit to 20 frames to prevent infinite loops in case of stack corruption.
+    while current_rbp != 0 && i < 20 {
+        // Safety: Verify pointer before dereferencing to prevent recursive panics
+        if current_rbp < 0x1000 || current_rbp > 0x07FFFFFC { break; }
+
+        let return_address = unsafe { *(current_rbp as *const u32).add(1) };
 
         if let Some((name, offset)) = crate::kernel::symbols::resolve(return_address as usize) {
             let _ = writeln!(writer, "  Frame {:02}: 0x{:08x} <{}+{:#x}>", i, return_address, name, offset);
@@ -103,38 +88,52 @@ pub unsafe fn print_stack_trace_to<W: fmt::Write>(writer: &mut W) {
             let _ = writeln!(writer, "  Frame {:02}: 0x{:08x} <unknown>", i, return_address);
         }
         
-        let next_rbp = *(rbp as *const u32);
-        if next_rbp <= rbp && next_rbp != 0 {
+        // The next RBP is the value pointed to by the current RBP.
+        let next_rbp = unsafe { *(current_rbp as *const u32) };
+        
+        // Basic sanity check: Stack usually grows down, so previous frame RBP should be > current RBP
+        if next_rbp <= current_rbp && next_rbp != 0 {
              let _ = writeln!(writer, "  <Stack End or Corruption>");
              break;
         }
-        rbp = next_rbp;
+        current_rbp = next_rbp;
         i += 1;
     }
 }
 
 /// Prints a hexadecimal dump of the memory around the stack pointer.
-pub unsafe fn dump_stack_memory<W: fmt::Write>(writer: &mut W) {
-    let esp: u32;
-    let ebp: u32;
-    asm!("mov {}, esp", out(reg) esp, options(nomem, nostack));
-    asm!("mov {}, ebp", out(reg) ebp, options(nomem, nostack));
-    
+pub fn dump_stack_memory<W: fmt::Write>(writer: &mut W, esp: u32, ebp: u32) {
     // In standard x86 stack frames, EBP points to the saved EBP,
     // and EBP + 4 points to the return address.
     let return_addr_ptr = ebp + 4;
     
     let _ = writeln!(writer, "\nMEMORY_DUMP (ESP: {:#x}):", esp);
-    let start_addr = (esp & !0xF).saturating_sub(32);
+    
+    // Sanity check: If ESP is null or near-zero, we cannot dump memory safely.
+    if esp < 0x1000 {
+        let _ = writeln!(writer, "  <Invalid ESP: Memory dump aborted to prevent recursive fault>");
+        return;
+    }
+
+    let start_addr = (esp & !0xF).saturating_sub(64);
     
     for i in 0..10 {
         let addr = start_addr + (i * 16);
+        if addr > 0x07FFFFF0 { break; } // Bound check for 128MB RAM systems
+
         let _ = write!(writer, "{:08x}: ", addr);
         
         // Hex values (grouped as u32)
         for j in 0..4 {
             let current_ptr = addr + (j * 4);
-            let val = *(current_ptr as *const u32);
+            
+            // Safe dereference check
+            let val = if current_ptr >= 0x1000 {
+                unsafe { *(current_ptr as *const u32) }
+            } else {
+                0x00000000
+            };
+
             if current_ptr == return_addr_ptr {
                 let _ = write!(writer, "[{:08x}]", val);
             } else {
@@ -145,7 +144,13 @@ pub unsafe fn dump_stack_memory<W: fmt::Write>(writer: &mut W) {
         // ASCII representation
         let _ = write!(writer, " |");
         for j in 0..16 {
-            let byte = *((addr + j) as *const u8);
+            let current_ptr = addr + j;
+            let byte = if current_ptr >= 0x1000 {
+                unsafe { *(current_ptr as *const u8) }
+            } else {
+                0
+            };
+
             if byte >= 32 && byte <= 126 {
                 let _ = write!(writer, "{}", byte as char);
             } else {
@@ -160,8 +165,16 @@ pub unsafe fn dump_stack_memory<W: fmt::Write>(writer: &mut W) {
 pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code: Option<u32>) -> ! {
     unsafe { asm!("cli", options(nomem, nostack)); }
 
+    // Calculate the ESP at the time of the fault. 
+    // In Ring 0, the CPU pushes EFLAGS, CS, and EIP (12 bytes).
+    // If an error code exists, it pushes that first (total 16 bytes).
+    let faulting_esp = match error_code {
+        Some(_) => (frame as *const _ as u32) + 16,
+        None => (frame as *const _ as u32) + 12,
+    };
+
     // Capture CPU state immediately
-    let (eax, ebx, ecx, edx, esi, edi): (u32, u32, u32, u32, u32, u32);
+    let (eax, ebx, ecx, edx, esi, edi, ebp): (u32, u32, u32, u32, u32, u32, u32);
     let (cr0, cr2, cr3, cr4): (u32, u32, u32, u32);
     unsafe {
         asm!("mov {0}, eax", out(reg) eax);
@@ -170,6 +183,7 @@ pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code
         asm!("mov {0}, edx", out(reg) edx);
         asm!("mov {0}, esi", out(reg) esi);
         asm!("mov {0}, edi", out(reg) edi);
+        asm!("mov {0}, ebp", out(reg) ebp);
         asm!("mov {0}, cr0", out(reg) cr0);
         asm!("mov {0}, cr2", out(reg) cr2);
         asm!("mov {0}, cr3", out(reg) cr3);
@@ -183,12 +197,11 @@ pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code
     }
     crate::serial_println!("CONTEXT: IP={:#010x} CS={:#06x} FLAGS={:#010x}", frame.instruction_pointer, frame.code_segment, frame.cpu_flags);
     crate::serial_println!("GPR: EAX={:#x} EBX={:#x} ECX={:#x} EDX={:#x}", eax, ebx, ecx, edx);
-    crate::serial_println!("GPR: ESI={:#x} EDI={:#x}", esi, edi);
+    crate::serial_println!("GPR: ESI={:#x} EDI={:#x} EBP={:#x}", esi, edi, ebp);
     crate::serial_println!("CRs: CR0={:#x} CR2={:#x} CR3={:#x} CR4={:#x}", cr0, cr2, cr3, cr4);
 
     crate::serial_println!("Stack Frame:\n{:#?}", frame);
     unsafe { print_stack_trace(); }
-    unsafe { dump_stack_memory(&mut SerialWriter); }
     crate::kernel::process::print_kernel_trace();
 
     // Force unlock the framebuffer to prevent deadlock if the exception happened while drawing
@@ -210,7 +223,7 @@ pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code
     let _ = writeln!(writer, "\nTechnical Information:\n----------------------\nIP: {:#010x}  CS: {:#06x}  FLAGS: {:#010x}", 
         frame.instruction_pointer, frame.code_segment, frame.cpu_flags);
     unsafe { print_stack_trace_to(&mut writer); }
-    unsafe { dump_stack_memory(&mut writer); }
+    unsafe { dump_stack_memory(&mut writer, faulting_esp, ebp); }
     
     fb.present();
 
