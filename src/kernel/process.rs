@@ -131,6 +131,7 @@ pub struct Scheduler {
     pub current_index: usize,
     last_tsc: u64,
     initialized: bool,
+    pub current_task_start_tick: usize,
 }
 
 impl Scheduler {
@@ -140,6 +141,7 @@ impl Scheduler {
             current_index: 0, // This will be updated on first schedule
             last_tsc: 0,
             initialized: false,
+            current_task_start_tick: 0,
         }
     }
 
@@ -154,8 +156,8 @@ impl Scheduler {
         stack.resize(stack_size, 0);
         
         // Calculate the top of the stack (high address)
-        // Ensure 16-byte alignment for real hardware (SSE/Alignment safety)
-        let stack_top = (stack.as_ptr() as usize + stack_size) & !0xF;
+        // Ensure 16-byte alignment and leave 64 bytes of "slack" for function prologues
+        let stack_top = ((stack.as_ptr() as usize + stack_size) - 64) & !0xF;
         let mut sp = stack_top;
 
         unsafe {
@@ -328,14 +330,20 @@ pub fn yield_now(current_esp: usize) -> usize {
 
     scheduler.pick_next();
 
-    let next_task = &scheduler.tasks[scheduler.current_index];
-    record_context_switch(next_task.id, next_task.kernel_esp);
+    // Restore Next Task (Copy values out to avoid references into a potentially shifting Vec)
+    let (next_esp, next_id, stack_ptr, stack_len) = {
+        let t = &scheduler.tasks[scheduler.current_index];
+        (t.kernel_esp, t.id, t.kernel_stack.as_ptr() as usize, t.kernel_stack.len())
+    };
 
-    if !next_task.kernel_stack.is_empty() {
-        let kstack_top = next_task.kernel_stack.as_ptr() as usize + next_task.kernel_stack.len();
+    scheduler.current_task_start_tick = TICKS.load(Ordering::Relaxed);
+    record_context_switch(next_id, next_esp);
+
+    if stack_len > 0 {
+        let kstack_top = stack_ptr + stack_len;
         crate::kernel::gdt::set_interrupt_stack(kstack_top as u32);
     }
-    next_task.kernel_esp
+    next_esp
 }
 
 /// Called by the assembly timer handler. 
@@ -351,6 +359,23 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
 
     let mut scheduler = SCHEDULER.lock();
 
+    let current_ticks = TICKS.load(Ordering::Relaxed);
+    let task_count = scheduler.tasks.len();
+
+    // 0.5 Task Watchdog: Detect CPU Hogs
+    if scheduler.initialized && scheduler.current_index < task_count {
+        let task_id = scheduler.tasks[scheduler.current_index].id;
+        // We ignore Task 0 (Boot) and Task 1 (Idle). 
+        // If a user/background task exceeds 500ms without a context switch, it's a hang.
+        if task_id > 1 && current_ticks.wrapping_sub(scheduler.current_task_start_tick) > 500 {
+            let frame_ptr = (current_esp + 52) as *const crate::kernel::interrupts::InterruptStackFrame;
+            let frame = unsafe { &*frame_ptr };
+            // Release lock before divergent crash call
+            drop(scheduler);
+            crate::kernel::exceptions::show_exception_screen("TASK_CPU_HOG_WATCHDOG", frame, Some(task_id as u32));
+        }
+    }
+
     // 1. Promote/Initialize Kernel Task if needed
     if !scheduler.initialized {
         let main_id = scheduler.tasks.len();
@@ -365,6 +390,7 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
 
         scheduler.current_index = main_id;
         scheduler.initialized = true;
+        scheduler.current_task_start_tick = current_ticks;
         scheduler.last_tsc = crate::kernel::cpu::read_tsc();
     }
 
@@ -375,8 +401,6 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
         let current_idx = scheduler.current_index;
         scheduler.tasks[current_idx].kernel_esp = current_esp;
     }
-
-    let current_ticks = TICKS.load(Ordering::Relaxed);
 
     // 3. Reap inactive exited tasks
     let mut i = 0;
@@ -415,9 +439,15 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
     scheduler.last_tsc = now;
 
     // 5. Select Next Task
+    let old_idx = scheduler.current_index;
     scheduler.pick_next();
 
-    // 6. Restore Next Task (Copy values out to avoid dangling references if Vec reallocates)
+    // Reset the watchdog timer if we actually switched to a different task
+    if old_idx != scheduler.current_index {
+        scheduler.current_task_start_tick = current_ticks;
+    }
+
+    // 6. Restore Next Task (Copy values out to avoid references into a potentially shifting Vec)
     let (next_esp, next_id, stack_ptr, stack_len) = {
         let t = &scheduler.tasks[scheduler.current_index];
         (t.kernel_esp, t.id, t.kernel_stack.as_ptr() as usize, t.kernel_stack.len())

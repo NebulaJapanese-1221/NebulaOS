@@ -35,6 +35,7 @@ fn check_watchdog() {
     let current_tick = TICKS.load(Ordering::Relaxed);
     let current_gpu = crate::drivers::framebuffer::GPU_HEARTBEAT.load(Ordering::Relaxed);
     let current_tsc = crate::kernel::cpu::read_tsc();
+    let tsc_freq = crate::kernel::cpu::TSC_FREQUENCY.load(Ordering::Relaxed);
     
     let mut state = WATCHDOG_STATE.lock();
     
@@ -51,14 +52,14 @@ fn check_watchdog() {
         state.1 = current_tsc;
         state.2 = 0; // Reset retry count
     } else {
-        // TICKS is frozen. Check TSC delta (assuming ~2GHz, 5 billion cycles is ~2.5 seconds)
-        if current_tsc > state.1.wrapping_add(2_000_000_000) {
+        // TICKS is frozen. Check TSC delta (1 second threshold)
+        if current_tsc > state.1.wrapping_add(tsc_freq) {
             state.2 += 1;
             if state.2 <= 3 {
-                crate::serial_println!("[WATCHDOG] Heartbeat frozen. Attempting soft recovery {}/3...", state.2);
+                crate::log_warn!("Watchdog: Heartbeat frozen. Attempting soft recovery {}/3...", state.2);
                 // Handle the PIT Result to ensure hardware reset was successful
                 if let Err(e) = crate::drivers::pit::set_frequency(1000) {
-                    crate::serial_println!("[WATCHDOG] Critical Error: PIT Recovery failed: {}", e);
+                    crate::log_error!("Watchdog: Critical Error: PIT Recovery failed: {}", e);
                 }
                 // Reset TSC anchor to give the new configuration a window to work
                 state.1 = current_tsc;
@@ -78,7 +79,7 @@ fn check_watchdog() {
         } else if current_gpu != state.3 {
             state.3 = current_gpu;
             state.4 = current_tsc;
-        } else if current_tsc > state.4.wrapping_add(2_000_000_000) {
+        } else if current_tsc > state.4.wrapping_add(tsc_freq) {
             // RSOD if GPU task hasn't checked in for ~1 second while marked active
             drop(state);
             show_boot_error("GPU Watchdog: The background rendering task has stopped responding (Heartbeat Timeout).");
@@ -140,7 +141,7 @@ fn draw_boot_screen() {
         }
 
         // Dynamic wait: Base 8ms + measured VRAM latency
-        let frame_timeout_tsc = crate::kernel::cpu::read_tsc().wrapping_add(10_000_000);
+        let frame_timeout_tsc = crate::kernel::cpu::read_tsc().wrapping_add(crate::kernel::cpu::TSC_FREQUENCY.load(Ordering::Relaxed) / 100);
         let latency_ms = crate::drivers::framebuffer::BLIT_LATENCY.load(Ordering::Relaxed) / 2_000_000;
         let wait_ticks = (8 + latency_ms).min(32);
 
@@ -153,7 +154,7 @@ fn draw_boot_screen() {
 }
 
 fn add_boot_status(milestone: BootMilestone) {
-    crate::serial_println!("[BOOT] {}", milestone.message());
+    crate::log_info!("Boot Status: {}", milestone.message());
     let line = BOOT_STATUS_LINE.fetch_add(1, Ordering::Relaxed);
     let mut fb = FRAMEBUFFER.lock();
     let x = 20;
@@ -165,7 +166,7 @@ fn add_boot_status(milestone: BootMilestone) {
 
     // Intentional delay to make the log readable (10ms per entry) 
     let start_wait = TICKS.load(Ordering::Relaxed);
-    let wait_timeout_tsc = crate::kernel::cpu::read_tsc().wrapping_add(20_000_000);
+    let wait_timeout_tsc = crate::kernel::cpu::read_tsc().wrapping_add(crate::kernel::cpu::TSC_FREQUENCY.load(Ordering::Relaxed) / 50);
     while TICKS.load(Ordering::Relaxed).wrapping_sub(start_wait) < 10 { 
         unsafe { asm!("pause"); }
         check_watchdog();
@@ -179,7 +180,7 @@ fn show_boot_error(message: &str) -> ! {
     crate::drivers::serial::SERIAL_TASK_ACTIVE.store(false, Ordering::SeqCst);
     crate::drivers::framebuffer::RENDER_TASK_ACTIVE.store(false, Ordering::SeqCst);
 
-    crate::serial_println!("\nBOOT ERROR: {}", message);
+    crate::log_error!("BOOT ERROR: {}", message);
     process::print_kernel_trace();
     
     // Force flush the serial queue directly to hardware since the background task is likely not running
@@ -265,15 +266,15 @@ pub extern "C" fn framebuffer_blit_task() {
             crate::drivers::framebuffer::BLIT_LATENCY.store(latency, Ordering::Relaxed);
 
             // Performance Watchdog: Detect Graphics Bus Stalls
-            // If a single blit takes > 1 second (approx 2 billion cycles at 2GHz), the VRAM is unresponsive.
-            if latency > 2_000_000_000 {
+            // If a single blit takes > 1 second, the VRAM is unresponsive.
+            if latency as u64 > crate::kernel::cpu::TSC_FREQUENCY.load(Ordering::Relaxed) {
                 show_boot_error("VRAM Unresponsive: Hardware bus timeout detected during VRAM blit operation.");
             }
         }
 
         let now = crate::kernel::cpu::read_tsc();
-        // Update FPS counter every ~1 second (assuming ~2GHz CPU clock)
-        if now.wrapping_sub(last_fps_check) >= 2_000_000_000 {
+        // Update FPS counter every ~1 second
+        if now.wrapping_sub(last_fps_check) >= crate::kernel::cpu::TSC_FREQUENCY.load(Ordering::Relaxed) {
             crate::drivers::framebuffer::FPS.store(frame_count, Ordering::Relaxed);
             frame_count = 0;
             last_fps_check = now;
@@ -316,10 +317,10 @@ pub extern "C" fn boot_animation_task() {
             }
         }
 
-        // Adjust spin speed based on blit latency to reflect system pressure.
-        // We assume ~2,000,000 cycles per ms (for a ~2GHz CPU).
+        // Adjust spin speed based on measured frequency
         let latency_cycles = crate::drivers::framebuffer::BLIT_LATENCY.load(Ordering::Relaxed);
-        let latency_ms = latency_cycles / 2_000_000;
+        let freq = crate::kernel::cpu::TSC_FREQUENCY.load(Ordering::Relaxed) as usize;
+        let latency_ms = if freq > 0 { latency_cycles / (freq / 1000) } else { 0 };
 
         // Target 30 FPS (33ms) + current hardware overhead. Cap at 200ms (5 FPS).
         let dynamic_sleep = (33 + latency_ms).min(200);
@@ -364,6 +365,7 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
 
     // Enable interrupts: Background tasks and PIT heartbeat (TICKS) start now.
     interrupts::enable_interrupts();
+    cpu::calibrate_tsc();
     add_boot_status(BootMilestone::Interrupts); 
 
     // PHASE 3.5: Initialize Idle Task
@@ -397,8 +399,8 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     // Access localization via CURRENT_LOCALE lock
     let locale_guard = crate::userspace::localisation::CURRENT_LOCALE.lock();
     let loc = locale_guard.as_ref().unwrap();
-    crate::serial_println!("[LOCAL] {}: NebulaOS {}", loc.info_kernel(), VERSION);
-    crate::serial_println!("[LOCAL] {}: i386-unknown-none", loc.info_target());
+    crate::log_info!("Localisation: {}: NebulaOS {}", loc.info_kernel(), VERSION);
+    crate::log_info!("Localisation: {}: i386-unknown-none", loc.info_target());
     
     // PHASE 7: Desktop Transition
     BOOT_ANIMATION_RUNNING.store(false, Ordering::Relaxed);
@@ -432,7 +434,7 @@ fn panic(info: &PanicInfo) -> ! {
     // Disable interrupts to prevent further issues during panic
     unsafe { core::arch::asm!("cli") };
 
-    crate::serial_println!("\nKERNEL PANIC\n{}", info);
+    crate::log_error!("KERNEL PANIC: {}", info);
     unsafe { exceptions::print_stack_trace(); }
     process::print_kernel_trace();
 

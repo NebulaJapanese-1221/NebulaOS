@@ -19,7 +19,7 @@ TBD = To Be Defined
 - Fixed alignment issues for filesystem structures on 32-bit targets.
 - Major stability fixes
 - Major GUI fixes and improvements
-- Many other improvements
+- Many other improvements and made the kernel far more advanced
 
 ## v0.0.3-dev (03-22-2026)
 - Added proper System Information detection (CPUID for Brand String).

@@ -50,6 +50,21 @@ impl fmt::Write for SerialPort {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum LogLevel {
+    Debug = 0,
+    Info = 1,
+    Warn = 2,
+    Error = 3,
+}
+
+pub static SYSTEM_LOG_LEVEL: AtomicU8 = AtomicU8::new(LogLevel::Info as u8);
+
+pub fn set_log_level(level: LogLevel) {
+    SYSTEM_LOG_LEVEL.store(level as u8, Ordering::SeqCst);
+}
+
 const SERIAL_BUF_SIZE: usize = 16384;
 
 pub struct SerialQueue {
@@ -117,8 +132,18 @@ pub static SERIAL_TASK_ACTIVE: AtomicBool = AtomicBool::new(false);
 pub static SERIAL_OUT_QUEUE: SerialQueue = SerialQueue::new();
 
 #[doc(hidden)]
-pub fn _print(args: fmt::Arguments) {
+pub fn _print(level: LogLevel, args: fmt::Arguments) {
+    if (level as u8) < SYSTEM_LOG_LEVEL.load(Ordering::Relaxed) {
+        return;
+    }
+
     use core::fmt::Write;
+    let prefix = match level {
+        LogLevel::Debug => "[DEBUG] ",
+        LogLevel::Info =>  "[INFO]  ",
+        LogLevel::Warn =>  "[WARN]  ",
+        LogLevel::Error => "[ERROR] ",
+    };
 
     if SERIAL_TASK_ACTIVE.load(Ordering::Relaxed) {
         struct AtomicWriteProxy;
@@ -130,19 +155,31 @@ pub fn _print(args: fmt::Arguments) {
                 Ok(())
             }
         }
-        let _ = AtomicWriteProxy.write_fmt(args);
+        let mut proxy = AtomicWriteProxy;
+        let _ = proxy.write_str(prefix);
+        let _ = proxy.write_fmt(args);
     } else {
-        // Fallback to direct hardware write if the background task is not active
-        let _ = SERIAL1.lock().write_fmt(args);
+        let mut port = SERIAL1.lock();
+        let _ = port.write_str(prefix);
+        let _ = port.write_fmt(args);
     }
 }
 
 #[macro_export]
 macro_rules! serial_print {
     ($($arg:tt)*) => {
-        $crate::drivers::serial::_print(format_args!($($arg)*));
+        $crate::drivers::serial::_print($crate::drivers::serial::LogLevel::Info, format_args!($($arg)*));
     };
 }
+
+#[macro_export]
+macro_rules! log_debug { ($($arg:tt)*) => { $crate::drivers::serial::_print($crate::drivers::serial::LogLevel::Debug, format_args!($($arg)*)); }; }
+#[macro_export]
+macro_rules! log_info { ($($arg:tt)*) => { $crate::drivers::serial::_print($crate::drivers::serial::LogLevel::Info, format_args!($($arg)*)); }; }
+#[macro_export]
+macro_rules! log_warn { ($($arg:tt)*) => { $crate::drivers::serial::_print($crate::drivers::serial::LogLevel::Warn, format_args!($($arg)*)); }; }
+#[macro_export]
+macro_rules! log_error { ($($arg:tt)*) => { $crate::drivers::serial::_print($crate::drivers::serial::LogLevel::Error, format_args!($($arg)*)); }; }
 
 #[macro_export]
 macro_rules! serial_println {

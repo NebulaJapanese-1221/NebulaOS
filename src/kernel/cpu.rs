@@ -1,12 +1,14 @@
 use alloc::string::String;
 use core::arch::asm;
 use spin::Mutex;
-use core::sync::atomic::{AtomicUsize, AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicUsize, AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 pub static CPU_BRAND: Mutex<Option<String>> = Mutex::new(None);
 // Global atomic to store current CPU usage percentage (0-100).
 pub static CPU_USAGE: AtomicUsize = AtomicUsize::new(0);
 pub static IS_IDLE: AtomicBool = AtomicBool::new(false);
+/// Measured TSC cycles per second. Defaults to 2GHz until calibrated.
+pub static TSC_FREQUENCY: AtomicU64 = AtomicU64::new(2_000_000_000);
 
 static IDLE_CYCLES: AtomicU32 = AtomicU32::new(0);
 static TOTAL_CYCLES: AtomicU32 = AtomicU32::new(0);
@@ -49,6 +51,26 @@ pub fn init() {
     init_fpu();
 }
 
+/// Calibrates the TSC frequency using the PIT (assumed to be 1000Hz).
+pub fn calibrate_tsc() {
+    // Wait for a baseline tick
+    let start_ticks = crate::kernel::process::TICKS.load(Ordering::SeqCst);
+    while crate::kernel::process::TICKS.load(Ordering::SeqCst) == start_ticks {
+        core::hint::spin_loop();
+    }
+
+    let start_tsc = read_tsc();
+    // Measure over 10ms (10 ticks)
+    let target_ticks = crate::kernel::process::TICKS.load(Ordering::SeqCst) + 10;
+    while crate::kernel::process::TICKS.load(Ordering::SeqCst) < target_ticks {
+        core::hint::spin_loop();
+    }
+    let end_tsc = read_tsc();
+
+    let freq = (end_tsc - start_tsc) * 100; // (cycles / 10ms) * 100 = cycles / 1s
+    TSC_FREQUENCY.store(freq, Ordering::SeqCst);
+}
+
 pub fn read_tsc() -> u64 {
     let mut low: u32;
     let mut high: u32;
@@ -67,9 +89,10 @@ pub fn accumulate_usage(cycles: u64, is_idle: bool) {
     }
 
     // Calculate usage periodically (every ~100M cycles is fine, or based on total accumulation)
-    // Assuming ~2GHz CPU, 200,000,000 cycles is roughly 100ms.
+    // Calculate every 100ms based on measured frequency.
+    let threshold = (TSC_FREQUENCY.load(Ordering::Relaxed) / 10) as u32;
     let total = TOTAL_CYCLES.load(Ordering::Relaxed);
-    if total > 200_000_000 {
+    if total > threshold {
         let idle = IDLE_CYCLES.swap(0, Ordering::Relaxed);
         TOTAL_CYCLES.store(0, Ordering::Relaxed);
 
