@@ -202,8 +202,22 @@ pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code
         }
     }
 
+    // Check if this is a hardware Stack Guard violation
+    let mut is_stack_overflow = false;
+    if name == "PAGE FAULT" {
+        let scheduler = crate::kernel::process::SCHEDULER.lock();
+        if let Some(task) = scheduler.tasks[scheduler.current_index].as_ref() {
+            if cr2 >= task.guard_page as u32 && cr2 < (task.guard_page + 4096) as u32 {
+                is_stack_overflow = true;
+            }
+        }
+    }
+
     // Print details to serial port immediately, as drawing to screen might fail or deadlock
-    let display_name = if is_guard_violation { "HEAP_GUARD_VIOLATION" } else { name };
+    let display_name = if is_stack_overflow { "STACK_OVERFLOW_GUARD_FAULT" } 
+                      else if is_guard_violation { "HEAP_GUARD_VIOLATION" } 
+                      else { name };
+
     crate::serial_println!("\nCRITICAL SYSTEM ERROR: {}", display_name);
     
     if let Some(code) = error_code {

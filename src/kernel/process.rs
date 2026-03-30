@@ -125,6 +125,7 @@ pub struct Task {
     pub sleep_until: Option<usize>,
     pub state: TaskState,
     pub age: usize,
+    pub guard_page: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,6 +171,7 @@ impl Scheduler {
             state: TaskState::Ready,
             sleep_until: None,
             age: 0,
+            guard_page: 0,
         });
         self.current_index = 0;
         self.initialized = true;
@@ -191,17 +193,21 @@ impl Scheduler {
         let id = idx; // Use slot index as ID for stable mapping
         
         // Allocate a kernel stack for this task
-        let stack_size = 32768; // Increased to 32KB to prevent smashing during complex GUI draws
-        let mut stack = Vec::with_capacity(stack_size);
-        stack.resize(stack_size, 0);
+        let stack_size = 65536; 
+        // Allocate extra space to ensure we can align and have a guard page
+        let mut stack = Vec::with_capacity(stack_size + 8192);
+        stack.resize(stack_size + 8192, 0);
         
-        // 0. Set Stack Canary at the bottom of the stack (index 0-3)
-        // This helps detect overflows before the task returns and crashes.
-        stack[0..4].copy_from_slice(&0xDEADBEEFu32.to_le_bytes());
+        let raw_ptr = stack.as_ptr() as usize;
+        // Align stack top to 4KB and calculate the guard page (bottom of the used area)
+        let guard_page = (raw_ptr + 4095) & !4095;
+        let usable_stack_bottom = guard_page + 4096;
+        
+        // Hardware Guard: Unmap the page immediately before the usable stack
+        crate::kernel::paging::unmap_page(guard_page);
 
         // Calculate the top of the stack (high address)
-        // Ensure 16-byte alignment and leave 64 bytes of "slack" for function prologues
-        let stack_top = ((stack.as_ptr() as usize + stack_size) - 64) & !0xF;
+        let stack_top = (usable_stack_bottom + stack_size - 64) & !0xF;
         let mut sp = stack_top;
 
         unsafe {
@@ -238,6 +244,7 @@ impl Scheduler {
             state: TaskState::Ready,
             sleep_until: None,
             age: 0,
+            guard_page,
         });
     }
 
@@ -306,8 +313,8 @@ impl Scheduler {
         for slot in &self.tasks {
             if let Some(task) = slot {
                 if task.state == TaskState::Ready {
-                    // During boot, ignore non-system tasks (Priority < 20)
-                    if self.mode == SchedulerMode::Booting && task.priority < 20 {
+                    // During boot, only allow system tasks (>=20) and the Idle task (0)
+                    if self.mode == SchedulerMode::Booting && task.priority > 0 && task.priority < 20 {
                         continue;
                     }
 
@@ -326,7 +333,7 @@ impl Scheduler {
         for i in 0..MAX_TASKS {
             let idx = (start_search + i) % MAX_TASKS;
             if let Some(task) = &mut self.tasks[idx] {
-                if self.mode == SchedulerMode::Booting && task.priority < 20 {
+                if self.mode == SchedulerMode::Booting && task.priority > 0 && task.priority < 20 {
                     continue;
                 }
 
@@ -462,6 +469,10 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
         if let Some(task) = &scheduler.tasks[i] {
             let is_current = i == scheduler.current_index;
             if task.state == TaskState::Exited && task.id != 0 && !is_current {
+                // Restore the guard page so the allocator doesn't fault when freeing the Vec
+                if task.guard_page != 0 {
+                    crate::kernel::paging::map_page(task.guard_page);
+                }
                 scheduler.tasks[i] = None;
             }
         }

@@ -20,6 +20,7 @@ pub mod process;
 pub mod cpu;
 pub mod elf;
 pub mod symbols;
+pub mod paging;
 
 pub const VERSION: &str = "0.0.3-dev2";
 
@@ -374,6 +375,9 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
         unsafe { allocator::ALLOCATOR.lock().init(heap_start as *mut u8, heap_size); }
         CONFIG.total_memory.store(heap_size, Ordering::Relaxed);
         
+        // Initialize Paging after the heap is ready
+        paging::init();
+
         // Register the current execution as the Boot Task before adding others
         let current_esp: usize;
         unsafe { core::arch::asm!("mov {}, esp", out(reg) current_esp); }
