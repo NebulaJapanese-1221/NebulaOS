@@ -2,11 +2,21 @@
 
 use super::multiboot::{self, MultibootMemoryMapEntry};
 use linked_list_allocator::LockedHeap;
+use spin::Mutex;
 
 extern "C" {
     // Symbol defined in the linker script.
     static _end: u8;
 }
+
+/// Represents a region of memory intentionally left unmapped to catch overflows.
+pub struct GuardZone {
+    pub start: usize,
+    pub end: usize,
+}
+
+/// Global list of guard zones for the exception handler to reference.
+pub static HEAP_GUARDS: Mutex<[Option<GuardZone>; 8]> = Mutex::new([None; 8]);
 
 /// Finds a suitable region of memory for the heap from the multiboot memory map.
 ///
@@ -43,11 +53,29 @@ pub fn find_heap_region(multiboot_info_ptr: usize) -> Option<(usize, usize)> {
 
             // Check if this region is after the kernel and has a usable size.
             if region_end > kernel_end_aligned {
-                let heap_start = region_start.max(kernel_end_aligned);
+                let mut heap_start = region_start.max(kernel_end_aligned);
                 let heap_size = region_end - heap_start;
 
-                if heap_size > best_region.map_or(0, |r| r.1) { // Finding the largest available region
-                    best_region = Some((heap_start, heap_size));
+                // If the region is large enough (e.g., > 1MB), we split it to insert a guard page.
+                // This places a 4KB "Unmapped" gap right at the start of the heap to catch
+                // negative offsets, and another after the first 512KB.
+                if heap_size > 1024 * 1024 {
+                    // We use a fixed array to avoid heap allocations before the allocator is initialized.
+                    let mut g_lock = HEAP_GUARDS.lock();
+                    g_lock[0] = Some(GuardZone { start: heap_start, end: heap_start + 4096 });
+                    
+                    let adjusted_start = heap_start + 4096;
+                    let heap_end = region_end - 4096;
+                    g_lock[1] = Some(GuardZone { start: heap_end, end: region_end });
+                    drop(g_lock);
+
+                    let usable_size = heap_end - adjusted_start;
+
+                    if usable_size > best_region.map_or(0, |r| r.1) {
+                        best_region = Some((adjusted_start, usable_size));
+                    }
+                } else if heap_size > best_region.map_or(0, |r| r.1) {
+                     best_region = Some((heap_start, heap_size));
                 }
             }
         }

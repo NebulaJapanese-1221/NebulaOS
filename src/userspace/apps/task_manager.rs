@@ -26,10 +26,10 @@ impl TaskManager {
     pub fn new() -> Self {
         Self {
             state: Arc::new(Mutex::new(TaskManagerState {
-                mem_history: Vec::new(),
-                cpu_history: Vec::new(),
+                mem_history: Vec::with_capacity(256),
+                cpu_history: Vec::with_capacity(256),
                 last_tick: 0,
-                graph_buffer: Vec::new(),
+                graph_buffer: Vec::with_capacity(800 * 100),
             })),
         }
     }
@@ -53,12 +53,14 @@ impl App for TaskManager {
         y += 5;
 
         let scheduler = SCHEDULER.lock();
-        for (i, task) in scheduler.tasks.iter().enumerate() {
+        for (i, task_opt) in scheduler.tasks.iter().enumerate() {
+            if let Some(task) = task_opt {
             // Simple state visualization
             let state = if i == scheduler.current_index { "Running" } else { "Ready" };
             let line = format!("{:<4} {}", task.id, state);
             font::draw_string(fb, x, y, &line, 0x00_CC_CC_CC, None);
             y += font_height as isize + 2;
+        }
         }
 
         // --- Draw Memory Graph ---
@@ -85,12 +87,14 @@ impl App for TaskManager {
             state.cpu_history.push(cpu_usage as usize);
 
             // Limit history size to fit graph (4px per bar)
-            let max_points = graph_width / 4;
+            let max_points = (graph_width / 4) as usize;
             if state.mem_history.len() > max_points {
-                state.mem_history.remove(0);
+                let drain_count = state.mem_history.len() - max_points;
+                state.mem_history.drain(0..drain_count);
             }
             if state.cpu_history.len() > max_points {
-                state.cpu_history.remove(0);
+                let drain_count = state.cpu_history.len() - max_points;
+                state.cpu_history.drain(0..drain_count);
             }
         }
 

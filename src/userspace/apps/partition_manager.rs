@@ -21,7 +21,7 @@ struct PartitionEntry {
 
 #[derive(Clone)]
 pub struct PartitionManager {
-    partitions: Vec<PartitionEntry>,
+    partitions: [Option<PartitionEntry>; 4],
     drive_status: String,
     fs_type: String,
     files: Vec<String>,
@@ -31,8 +31,9 @@ pub struct PartitionManager {
 
 impl PartitionManager {
     pub fn new() -> Self {
+        const EMPTY_PART: Option<PartitionEntry> = None;
         let mut pm = Self {
-            partitions: Vec::new(),
+            partitions: [EMPTY_PART; 4],
             drive_status: String::from("Reading Primary Master..."),
             fs_type: String::from("Unknown"),
             files: Vec::new(),
@@ -44,7 +45,7 @@ impl PartitionManager {
     }
 
     fn refresh(&mut self) {
-        self.partitions.clear();
+        self.partitions = [None; 4];
         self.files.clear();
         let drive = Arc::new(AtaDrive::new(true, true)); // Primary Master
         // Read MBR (LBA 0)
@@ -89,7 +90,7 @@ impl PartitionManager {
             if sector_count > 0 {
                 let fs_type = self.detect_fs(drive.as_ref(), lba_start, type_code);
                 
-                self.partitions.push(PartitionEntry {
+                self.partitions[i] = Some(PartitionEntry {
                     id: i + 1,
                     status,
                     fs_type,
@@ -99,7 +100,7 @@ impl PartitionManager {
             }
         }
         
-        if self.partitions.is_empty() {
+        if self.partitions.iter().all(|p| p.is_none()) {
              self.drive_status = String::from("Disk is empty (No partitions found).");
         }
 

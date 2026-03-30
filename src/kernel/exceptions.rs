@@ -39,7 +39,7 @@ struct SerialWriter;
 impl fmt::Write for SerialWriter {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         // Access the hardware directly to bypass LogLevel filtering and prefixes
-        let mut port = crate::drivers::serial::SERIAL1.lock();
+        let port = crate::drivers::serial::SERIAL1.lock();
         for byte in s.bytes() {
             port.write_byte(byte);
         }
@@ -51,7 +51,7 @@ impl fmt::Write for SerialWriter {
 /// This function is unsafe because it reads from arbitrary memory locations by following the base pointer.
 pub unsafe fn print_stack_trace() {
     let mut writer = SerialWriter;
-    unsafe { print_stack_trace_to(&mut writer); }
+    print_stack_trace_to(&mut writer);
 }
 
 /// Walks the stack and prints a stack trace to the provided writer.
@@ -190,8 +190,22 @@ pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code
         asm!("mov {0}, cr4", out(reg) cr4);
     }
 
+    // Check if this fault occurred in a registered Heap Guard zone
+    let mut is_guard_violation = false;
+    let guards = crate::kernel::allocator::HEAP_GUARDS.lock();
+    for guard_opt in guards.iter() {
+        if let Some(guard) = guard_opt {
+            if cr2 >= guard.start as u32 && cr2 < guard.end as u32 {
+                is_guard_violation = true;
+                break;
+            }
+        }
+    }
+
     // Print details to serial port immediately, as drawing to screen might fail or deadlock
-    crate::serial_println!("\nCRITICAL SYSTEM ERROR: {}", name);
+    let display_name = if is_guard_violation { "HEAP_GUARD_VIOLATION" } else { name };
+    crate::serial_println!("\nCRITICAL SYSTEM ERROR: {}", display_name);
+    
     if let Some(code) = error_code {
         crate::serial_println!("Error Code: {:#x}", code);
     }
@@ -216,14 +230,18 @@ pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code
     let mut writer = PanicWriter::new(&mut fb, 30, 90);
     
     use core::fmt::Write;
-    let _ = writeln!(writer, "Stop Code: {}", name);
+    let _ = writeln!(writer, "Stop Code: {}", display_name);
+    if is_guard_violation {
+        let _ = writeln!(writer, "Violation at: {:#010x} (Unmapped Guard Page)", cr2);
+    }
+    
     if let Some(code) = error_code {
         let _ = writeln!(writer, "Error Code: {:#x}", code);
     }
     let _ = writeln!(writer, "\nTechnical Information:\n----------------------\nIP: {:#010x}  CS: {:#06x}  FLAGS: {:#010x}", 
         frame.instruction_pointer, frame.code_segment, frame.cpu_flags);
     unsafe { print_stack_trace_to(&mut writer); }
-    unsafe { dump_stack_memory(&mut writer, faulting_esp, ebp); }
+    dump_stack_memory(&mut writer, faulting_esp, ebp);
     
     fb.present();
 
@@ -238,9 +256,7 @@ pub extern "x86-interrupt" fn divide_by_zero_handler(frame: &mut InterruptStackF
 }
 
 pub extern "x86-interrupt" fn debug_handler(frame: &mut InterruptStackFrame) {
-    crate::serial_println!("EXCEPTION: DEBUG");
-    // Debug exceptions (like single-step) generally resume, but for now we dump info
-    crate::serial_println!("{:#?}", frame);
+    show_exception_screen("DEBUG EXCEPTION (INT1/SINGLE STEP)", frame, None);
 }
 
 pub extern "x86-interrupt" fn non_maskable_interrupt_handler(frame: &mut InterruptStackFrame) {
