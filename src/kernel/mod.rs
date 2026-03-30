@@ -175,7 +175,7 @@ fn draw_boot_screen() {
         let wait_ticks = (8 + latency_ms).min(32);
 
         while TICKS.load(Ordering::Relaxed).wrapping_sub(start_tick) < wait_ticks { 
-            unsafe { asm!("pause"); }
+            unsafe { asm!("int 0x80", in("eax") 0usize); } // Yield to allow blit task to run
             check_watchdog();
             if crate::kernel::cpu::read_tsc() > frame_timeout_tsc { break; }
         }
@@ -197,7 +197,7 @@ fn add_boot_status(milestone: BootMilestone) {
     let start_wait = TICKS.load(Ordering::Relaxed);
     let wait_timeout_tsc = crate::kernel::cpu::read_tsc().wrapping_add(CONFIG.tsc_frequency.load(Ordering::Relaxed) as u64 / 50);
     while TICKS.load(Ordering::Relaxed).wrapping_sub(start_wait) < 10 { 
-        unsafe { asm!("pause"); }
+        unsafe { asm!("int 0x80", in("eax") 0usize); } // Yield
         check_watchdog();
         if crate::kernel::cpu::read_tsc() > wait_timeout_tsc { break; }
     }
@@ -254,7 +254,8 @@ fn fade_out_boot_screen() {
         }
         let timeout = crate::kernel::cpu::read_tsc().wrapping_add(10_000_000);
         while TICKS.load(Ordering::Relaxed).wrapping_sub(start_tick) < 16 { 
-            unsafe { asm!("pause"); } 
+            // Yield to allow the blit task (Task 1) to actually perform the fade
+            unsafe { asm!("int 0x80", in("eax") 0usize); } 
             if crate::kernel::cpu::read_tsc() > timeout { break; }
         }
     }
@@ -372,6 +373,11 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     if let Some((heap_start, heap_size)) = heap_region {
         unsafe { allocator::ALLOCATOR.lock().init(heap_start as *mut u8, heap_size); }
         CONFIG.total_memory.store(heap_size, Ordering::Relaxed);
+        
+        // Register the current execution as the Boot Task before adding others
+        let current_esp: usize;
+        unsafe { core::arch::asm!("mov {}, esp", out(reg) current_esp); }
+        process::SCHEDULER.lock().init_boot_task(current_esp);
     } else { show_boot_error("Could not find a suitable heap region!"); }
 
     if let Some(fb_info) = fb_info_opt {
@@ -390,7 +396,7 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     // Start critical background services before showing the logo.
     // This ensures that VRAM blitting and serial logging are non-blocking.
     crate::kernel::process::SCHEDULER.lock().add_task(framebuffer_blit_task as *const () as usize, 20); // High priority
-    crate::kernel::process::SCHEDULER.lock().add_task(serial_output_task as *const () as usize, 5);
+    crate::kernel::process::SCHEDULER.lock().add_task(serial_output_task as *const () as usize, 20); // Boosted for boot
 
     // Enable interrupts: Background tasks and PIT heartbeat (TICKS) start now.
     interrupts::enable_interrupts();
@@ -404,7 +410,7 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     // PHASE 4: Visual Startup
     draw_boot_screen();
     BOOT_ANIMATION_RUNNING.store(true, Ordering::Relaxed);
-    crate::kernel::process::SCHEDULER.lock().add_task(boot_animation_task as *const () as usize, 15);
+    crate::kernel::process::SCHEDULER.lock().add_task(boot_animation_task as *const () as usize, 20);
 
     // PHASE 5: Peripheral Drivers
     if let Err(e) = crate::drivers::mouse::initialize() { show_boot_error(e); }
@@ -434,6 +440,13 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     // PHASE 7: Desktop Transition
     BOOT_ANIMATION_RUNNING.store(false, Ordering::Relaxed);
     fade_out_boot_screen();
+
+    // Transition scheduler to allow User-level tasks (Priority < 20) to run
+    process::SCHEDULER.lock().mode = process::SchedulerMode::Running;
+
+    // Lower boot task priority now that background services are stable
+    process::SCHEDULER.lock().set_task_priority(0, 10);
+
     crate::userspace::gui::init();
     
     let render_entry = crate::userspace::gui::window_manager::WindowManager::render_loop as *const () as usize;

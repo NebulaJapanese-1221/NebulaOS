@@ -10,6 +10,7 @@ extern "C" {
 }
 
 /// Represents a region of memory intentionally left unmapped to catch overflows.
+#[derive(Debug, Clone, Copy)]
 pub struct GuardZone {
     pub start: usize,
     pub end: usize,
@@ -53,7 +54,7 @@ pub fn find_heap_region(multiboot_info_ptr: usize) -> Option<(usize, usize)> {
 
             // Check if this region is after the kernel and has a usable size.
             if region_end > kernel_end_aligned {
-                let mut heap_start = region_start.max(kernel_end_aligned);
+                let heap_start = region_start.max(kernel_end_aligned);
                 let heap_size = region_end - heap_start;
 
                 // If the region is large enough (e.g., > 1MB), we split it to insert a guard page.

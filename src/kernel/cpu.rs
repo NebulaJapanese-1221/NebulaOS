@@ -76,14 +76,14 @@ fn measure_tsc_delta(ms: usize) -> u64 {
     // Wait for a fresh tick boundary to ensure we measure a full duration
     let start_ticks = crate::kernel::process::TICKS.load(Ordering::SeqCst);
     while crate::kernel::process::TICKS.load(Ordering::SeqCst) == start_ticks {
-        core::hint::spin_loop();
+        unsafe { asm!("int 0x80", in("eax") 0usize); } // Yield while waiting for PIT
     }
 
     let start_tsc = read_tsc();
     let target_ticks = crate::kernel::process::TICKS.load(Ordering::SeqCst) + ms;
     
     while crate::kernel::process::TICKS.load(Ordering::SeqCst) < target_ticks {
-        core::hint::spin_loop();
+        unsafe { asm!("int 0x80", in("eax") 0usize); } // Yield
     }
     let end_tsc = read_tsc();
     end_tsc.saturating_sub(start_tsc)

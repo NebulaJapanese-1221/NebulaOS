@@ -95,7 +95,7 @@ pub static KERNEL_TRACE: IrqSafeMutex<TraceBuffer> = IrqSafeMutex::new(TraceBuff
 
 pub fn record_context_switch(task_id: usize, esp: usize) {
     // Safety: Verify ESP is within a reasonable kernel memory range to prevent recursive faults
-    if esp < 0x100000 || esp > 0xFFFFFFF0 { return; }
+    if esp < 0x1000 || esp > 0xFFFFFFC0 { return; }
 
     // Offset 52 is EIP in our common interrupt/syscall/task stack frame
     unsafe {
@@ -124,6 +124,13 @@ pub struct Task {
     pub priority: usize,
     pub sleep_until: Option<usize>,
     pub state: TaskState,
+    pub age: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchedulerMode {
+    Booting,
+    Running,
 }
 
 const MAX_TASKS: usize = 32;
@@ -131,6 +138,7 @@ const MAX_TASKS: usize = 32;
 pub struct Scheduler {
     pub tasks: [Option<Task>; MAX_TASKS],
     pub current_index: usize,
+    pub mode: SchedulerMode,
     last_tsc: u64,
     initialized: bool,
     pub current_task_start_tick: usize,
@@ -142,10 +150,29 @@ impl Scheduler {
         Self {
             tasks: [EMPTY_TASK; MAX_TASKS],
             current_index: 0, // This will be updated on first schedule
+            mode: SchedulerMode::Booting,
             last_tsc: 0,
             initialized: false,
             current_task_start_tick: 0,
         }
+    }
+
+    /// Initializes the current execution context as the "Boot" task (Task 0).
+    /// This must be called after the heap is ready but before interrupts are enabled.
+    pub fn init_boot_task(&mut self, current_esp: usize) {
+        if self.initialized { return; }
+
+        self.tasks[0] = Some(Task {
+            id: 0,
+            kernel_stack: Vec::new(),
+            kernel_esp: current_esp,
+            priority: 20, // Equal to system tasks to allow co-operative boot
+            state: TaskState::Ready,
+            sleep_until: None,
+            age: 0,
+        });
+        self.current_index = 0;
+        self.initialized = true;
     }
 
     /// Creates a new task jumping to the given entry point.
@@ -164,7 +191,7 @@ impl Scheduler {
         let id = idx; // Use slot index as ID for stable mapping
         
         // Allocate a kernel stack for this task
-        let stack_size = 16384;
+        let stack_size = 32768; // Increased to 32KB to prevent smashing during complex GUI draws
         let mut stack = Vec::with_capacity(stack_size);
         stack.resize(stack_size, 0);
         
@@ -210,6 +237,7 @@ impl Scheduler {
             priority,
             state: TaskState::Ready,
             sleep_until: None,
+            age: 0,
         });
     }
 
@@ -239,7 +267,8 @@ impl Scheduler {
 
     /// Puts the current task to sleep for the specified milliseconds.
     pub fn sleep_current_task(&mut self, ms: usize) {
-        if let Some(task) = &mut self.tasks[self.current_index] {
+        let idx = self.current_index;
+        if let Some(task) = &mut self.tasks[idx] {
             let until = TICKS.load(Ordering::Relaxed) + ms;
             task.sleep_until = Some(until);
             task.state = TaskState::Sleeping;
@@ -249,7 +278,8 @@ impl Scheduler {
     /// Marks the current task as blocked (waiting for I/O).
     #[allow(dead_code)]
     pub fn block_current_task(&mut self) {
-        if let Some(task) = &mut self.tasks[self.current_index] {
+        let idx = self.current_index;
+        if let Some(task) = &mut self.tasks[idx] {
             task.state = TaskState::Blocked;
         }
     }
@@ -263,24 +293,46 @@ impl Scheduler {
 
     /// Picks the next task to run based on priority and state.
     fn pick_next(&mut self) {
-        // Find the maximum priority level among all ready tasks
-        let mut max_priority = 0;
+        // 1. Aging: Increment the age of all tasks that are ready to run but waiting.
+        for task in self.tasks.iter_mut().flatten() {
+            if task.state == TaskState::Ready {
+                task.age = task.age.saturating_add(1);
+            }
+        }
+
+        // 2. Calculate the maximum effective priority level (base priority + age) 
+        // among all ready tasks.
+        let mut max_effective_priority = 0;
         for slot in &self.tasks {
             if let Some(task) = slot {
-                if task.state == TaskState::Ready && task.priority > max_priority {
-                    max_priority = task.priority;
+                if task.state == TaskState::Ready {
+                    // During boot, ignore non-system tasks (Priority < 20)
+                    if self.mode == SchedulerMode::Booting && task.priority < 20 {
+                        continue;
+                    }
+
+                    let effective = task.priority.saturating_add(task.age);
+                    if effective > max_effective_priority {
+                        max_effective_priority = effective;
+                    }
                 }
             }
         }
 
-        if max_priority == 0 { return; }
+        if max_effective_priority == 0 { return; }
 
-        // Round-robin selection among tasks with max_priority
+        // 3. Round-robin selection among tasks that match the highest effective priority.
         let start_search = (self.current_index + 1) % MAX_TASKS;
         for i in 0..MAX_TASKS {
             let idx = (start_search + i) % MAX_TASKS;
-            if let Some(task) = &self.tasks[idx] {
-                if task.state == TaskState::Ready && task.priority == max_priority {
+            if let Some(task) = &mut self.tasks[idx] {
+                if self.mode == SchedulerMode::Booting && task.priority < 20 {
+                    continue;
+                }
+
+                let effective = task.priority.saturating_add(task.age);
+                if task.state == TaskState::Ready && effective == max_effective_priority {
+                    task.age = 0; // Reset age for the selected task
                     self.current_index = idx;
                     return;
                 }
@@ -308,7 +360,8 @@ pub extern "C" fn task_entry_wrapper() {
 /// Marks the task as exited and yields forever until reaped.
 pub extern "C" fn task_exit_handler() {
     let mut scheduler = SCHEDULER.lock();
-    if let Some(task) = &mut scheduler.tasks[scheduler.current_index] {
+    let idx = scheduler.current_index;
+    if let Some(task) = &mut scheduler.tasks[idx] {
         task.state = TaskState::Exited;
     }
     drop(scheduler);
@@ -327,8 +380,9 @@ pub extern "C" fn idle_task() {
 /// Voluntary task yield. Saves current state and switches to the next task.
 pub fn yield_now(current_esp: usize) -> usize {
     let mut scheduler = SCHEDULER.lock();
+    let current_idx = scheduler.current_index;
 
-    if let Some(task) = &mut scheduler.tasks[scheduler.current_index] {
+    if let Some(task) = &mut scheduler.tasks[current_idx] {
         // Save result 0 for the yielding task (EAX slot in pusha frame)
         unsafe { *((current_esp + 28) as *mut usize) = 0; }
         task.kernel_esp = current_esp;
@@ -385,7 +439,8 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
 
     // 0.5 Task Watchdog: Detect CPU Hogs
     if scheduler.initialized {
-        if let Some(task) = &scheduler.tasks[scheduler.current_index] {
+        let current_idx = scheduler.current_index;
+        if let Some(task) = &scheduler.tasks[current_idx] {
             if task.id > 1 && current_ticks.wrapping_sub(scheduler.current_task_start_tick) > 500 {
                 let task_id = task.id;
                 let frame_ptr = (current_esp + 52) as *const crate::kernel::interrupts::InterruptStackFrame;
@@ -396,24 +451,9 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
         }
     }
 
-    // 1. Promote/Initialize Kernel Task if needed
-    if !scheduler.initialized {
-        scheduler.tasks[0] = Some(Task {
-            id: 0,
-            kernel_stack: Vec::new(), // The bootloader/kernel stack is managed externally
-            kernel_esp: current_esp,
-            priority: 10,
-            state: TaskState::Ready,
-            sleep_until: None,
-        });
-        scheduler.current_index = 0;
-        scheduler.initialized = true;
-        scheduler.current_task_start_tick = current_ticks;
-        scheduler.last_tsc = crate::kernel::cpu::read_tsc();
-    }
-
     // 2. Save ESP of the task we are switching FROM immediately
-    if let Some(task) = &mut scheduler.tasks[scheduler.current_index] {
+    let current_idx = scheduler.current_index;
+    if let Some(task) = &mut scheduler.tasks[current_idx] {
         task.kernel_esp = current_esp;
     }
 
@@ -459,7 +499,8 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
 
     // 6. Restore Next Task (Copy values out to avoid references into a potentially shifting Vec)
     let (next_esp, next_id, stack_ptr, stack_len) = {
-        let t = scheduler.tasks[scheduler.current_index].as_ref().expect("Scheduler error: Restoring None task");
+        let next_idx = scheduler.current_index;
+        let t = scheduler.tasks[next_idx].as_ref().expect("Scheduler error: Restoring None task");
         (t.kernel_esp, t.id, t.kernel_stack.as_ptr() as usize, t.kernel_stack.len())
     };
 

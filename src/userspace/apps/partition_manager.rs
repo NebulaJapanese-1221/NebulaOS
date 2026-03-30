@@ -45,7 +45,8 @@ impl PartitionManager {
     }
 
     fn refresh(&mut self) {
-        self.partitions = [None; 4];
+        const EMPTY_PART: Option<PartitionEntry> = None;
+        self.partitions = [EMPTY_PART; 4];
         self.files.clear();
         let drive = Arc::new(AtaDrive::new(true, true)); // Primary Master
         // Read MBR (LBA 0)
@@ -183,19 +184,21 @@ impl App for PartitionManager {
         y += 5;
 
         // Entries
-        for part in &self.partitions {
-            let row_color = 0x00_CC_CC_CC;
-            let boot_flag = if part.status == 0x80 { "*" } else { "" };
-            // Size in MB = sectors * 512 / 1024 / 1024 = sectors / 2048
-            let size_mb = part.sector_count / 2048;
+        for part_opt in &self.partitions {
+            if let Some(part) = part_opt {
+                let row_color = 0x00_CC_CC_CC;
+                let boot_flag = if part.status == 0x80 { "*" } else { "" };
+                // Size in MB = sectors * 512 / 1024 / 1024 = sectors / 2048
+                let size_mb = part.sector_count / 2048;
 
-            font::draw_string(fb, x, y, format!("{}", part.id).as_str(), row_color, None);
-            font::draw_string(fb, x + 30, y, boot_flag, 0x00_00_FF_00, None);
-            font::draw_string(fb, x + 80, y, part.fs_type.as_str(), row_color, None);
-            font::draw_string(fb, x + 130 + 50, y, format!("{}", part.lba_start).as_str(), row_color, None);
-            font::draw_string(fb, x + 230 + 50, y, format!("{} MB", size_mb).as_str(), row_color, None);
+                font::draw_string(fb, x, y, format!("{}", part.id).as_str(), row_color, None);
+                font::draw_string(fb, x + 30, y, boot_flag, 0x00_00_FF_00, None);
+                font::draw_string(fb, x + 80, y, part.fs_type.as_str(), row_color, None);
+                font::draw_string(fb, x + 130 + 50, y, format!("{}", part.lba_start).as_str(), row_color, None);
+                font::draw_string(fb, x + 230 + 50, y, format!("{} MB", size_mb).as_str(), row_color, None);
 
-            y += font_height as isize + 5;
+                y += font_height as isize + 5;
+            }
         }
 
         // File Browser Section
