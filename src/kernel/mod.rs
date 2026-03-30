@@ -399,8 +399,8 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     
     // Start critical background services before showing the logo.
     // This ensures that VRAM blitting and serial logging are non-blocking.
-    crate::kernel::process::SCHEDULER.lock().add_task(framebuffer_blit_task as *const () as usize, 20); // High priority
-    crate::kernel::process::SCHEDULER.lock().add_task(serial_output_task as *const () as usize, 20); // Boosted for boot
+    crate::kernel::process::SCHEDULER.lock().add_task(framebuffer_blit_task as *const () as usize, 20, None); // High priority
+    crate::kernel::process::SCHEDULER.lock().add_task(serial_output_task as *const () as usize, 20, None); // Boosted for boot
 
     // Enable interrupts: Background tasks and PIT heartbeat (TICKS) start now.
     interrupts::enable_interrupts();
@@ -409,12 +409,12 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
 
     // PHASE 3.5: Initialize Idle Task
     let idle_entry = crate::kernel::process::idle_task as *const () as usize;
-    crate::kernel::process::SCHEDULER.lock().add_task(idle_entry, 0);
+    crate::kernel::process::SCHEDULER.lock().add_task(idle_entry, 0, None);
 
     // PHASE 4: Visual Startup
     draw_boot_screen();
     BOOT_ANIMATION_RUNNING.store(true, Ordering::Relaxed);
-    crate::kernel::process::SCHEDULER.lock().add_task(boot_animation_task as *const () as usize, 20);
+    crate::kernel::process::SCHEDULER.lock().add_task(boot_animation_task as *const () as usize, 20, None);
 
     // PHASE 5: Peripheral Drivers
     if let Err(e) = crate::drivers::mouse::initialize() { show_boot_error(e); }
@@ -454,7 +454,7 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     crate::userspace::gui::init();
     
     let render_entry = crate::userspace::gui::window_manager::WindowManager::render_loop as *const () as usize;
-    crate::kernel::process::SCHEDULER.lock().add_task(render_entry, 15);
+    crate::kernel::process::SCHEDULER.lock().add_task(render_entry, 15, None);
 
     // PHASE 8: Main Event Loop
     loop {

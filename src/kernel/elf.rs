@@ -1,4 +1,5 @@
 use core::mem::size_of;
+use crate::kernel::paging::{VirtualAddressSpace, FLAG_PRESENT, FLAG_COW, FLAG_USER};
 
 pub const ELF_MAGIC: [u8; 4] = [0x7F, b'E', b'L', b'F'];
 pub const PT_LOAD: u32 = 1;
@@ -57,62 +58,36 @@ pub fn load_and_run(data: &[u8]) -> bool {
     let ph_offset = header.phoff as usize;
     let ph_count = header.phnum as usize;
     let ph_size = header.phentsize as usize;
-    let mut max_vaddr = 0;
 
-    for i in 0..ph_count {
-        let offset = ph_offset + i * ph_size;
-        if offset + size_of::<ProgramHeader>() > data.len() { continue; }
-        let ph = unsafe { &*(data.as_ptr().add(offset) as *const ProgramHeader) };
-        if ph.type_ == PT_LOAD {
-            let end = ph.vaddr + ph.memsz;
-            if end > max_vaddr { max_vaddr = end; }
-        }
-    }
-
-    if max_vaddr == 0 { return false; }
-
-    // 2. Allocate memory (Simulating a process address space by leaking a Vec)
-    // We allocate a bit extra for safety/alignment
-    let mut memory = alloc::vec![0u8; max_vaddr as usize + 4096];
-    let base_addr = memory.as_ptr() as usize;
-
-    // 3. Load Segments
+    let address_space = match VirtualAddressSpace::new_user() {
+        Some(as_space) => as_space,
+        None => return false,
+    };
+    
+    // 2. Map Segments using CoW
     for i in 0..ph_count {
         let offset = ph_offset + i * ph_size;
         let ph = unsafe { &*(data.as_ptr().add(offset) as *const ProgramHeader) };
+        
         if ph.type_ == PT_LOAD {
-            let segment_end = ph.vaddr as usize + ph.memsz as usize;
-            if segment_end <= memory.len() && (ph.offset as usize + ph.filesz as usize) <= data.len() {
-                unsafe {
-                    let dest_ptr = memory.as_mut_ptr().add(ph.vaddr as usize);
-                    let src_ptr = data.as_ptr().add(ph.offset as usize);
-                    
-                    core::ptr::copy_nonoverlapping(src_ptr, dest_ptr, ph.filesz as usize);
-                    
-                    if ph.memsz > ph.filesz {
-                        core::ptr::write_bytes(dest_ptr.add(ph.filesz as usize), 0, (ph.memsz - ph.filesz) as usize);
-                    }
-                }
-            }
+            // Physical address is just the offset into the provided data slice
+            let phys_addr = unsafe { data.as_ptr().add(ph.offset as usize) as usize };
+            
+            // We map the segment as Read-Only + CoW + User.
+            // The Copy-on-Write mechanism in the page fault handler will handle writes.
+            address_space.map_region(
+                ph.vaddr as usize,
+                phys_addr,
+                ph.memsz as usize,
+                FLAG_PRESENT | FLAG_COW | FLAG_USER
+            );
         }
     }
 
-    // Validate entry point is within allocated memory
-    if header.entry as usize >= memory.len() {
-        return false;
-    }
-
-    // 4. Calculate Entry Point and Spawn
-    // Assuming the ELF is linked to 0 or is Position Independent, we add base_addr.
-    // If it's statically linked to a specific high address, this loader would fail without paging,
-    // but for "apps created externally" in this context, we assume they are compatible.
-    let entry = base_addr.checked_add(header.entry as usize);
-    if entry.is_none() { return false; }
-    let entry_addr = entry.unwrap();
-
-    // Prevent the memory from being freed when `memory` goes out of scope
-    core::mem::forget(memory);
-
-    crate::kernel::process::SCHEDULER.lock().add_task(entry_addr, 10);
+    // 3. Spawn Task
+    // We map the entry point directly. Note: We no longer need to "leak" memory
+    // here because the address space handles the mapping to the 'data' buffer.
+    // In a production kernel, 'data' should be backed by a persistent Page Cache.
+    crate::kernel::process::SCHEDULER.lock().add_task(header.entry as usize, 10, Some(address_space));
     true
 }

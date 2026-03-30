@@ -3,6 +3,7 @@ use core::fmt;
 use crate::drivers::framebuffer::{self, FRAMEBUFFER};
 use crate::userspace::fonts::font;
 use super::interrupts::InterruptStackFrame;
+use super::paging::{FLAG_COW, FLAG_WRITABLE, FLAG_PRESENT};
 
 // --- Panic/Exception Screen Implementation ---
 
@@ -205,10 +206,12 @@ pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code
     // Check if this is a hardware Stack Guard violation
     let mut is_stack_overflow = false;
     if name == "PAGE FAULT" {
-        let scheduler = crate::kernel::process::SCHEDULER.lock();
-        if let Some(task) = scheduler.tasks[scheduler.current_index].as_ref() {
-            if cr2 >= task.guard_page as u32 && cr2 < (task.guard_page + 4096) as u32 {
-                is_stack_overflow = true;
+        // Use try_lock to avoid deadlocks if the fault happened inside the scheduler
+        if let Some(scheduler) = crate::kernel::process::SCHEDULER.try_lock() {
+            if let Some(task) = scheduler.tasks[scheduler.current_index].as_ref() {
+                if cr2 >= task.guard_page as u32 && cr2 < (task.guard_page + 4096) as u32 {
+                    is_stack_overflow = true;
+                }
             }
         }
     }
@@ -314,6 +317,45 @@ pub extern "x86-interrupt" fn gpf_handler(frame: &mut InterruptStackFrame, error
 }
 
 pub extern "x86-interrupt" fn page_fault_handler(frame: &mut InterruptStackFrame, error_code: u32) {
+    let cr2: usize;
+    unsafe { asm!("mov {}, cr2", out(reg) cr2); }
+
+    // If CR2 is within a very low range, it's a null pointer dereference, not CoW.
+    if cr2 < 0x1000 {
+        show_exception_screen("PAGE FAULT (NULL DEREF)", frame, Some(error_code));
+    }
+
+    // Bit 1 of error_code is set if the fault was caused by a write
+    let is_write = (error_code & 0x02) != 0;
+
+    if is_write {
+        // Safe acquisition of the address space for CoW handling
+        if let Some(scheduler) = crate::kernel::process::SCHEDULER.try_lock() {
+            let vas = scheduler.tasks[scheduler.current_index].as_ref().and_then(|t| t.address_space.as_ref());
+            if let Some(vas) = vas {
+                if let Some(entry) = vas.get_page_entry(cr2) {
+                    if (entry & FLAG_COW) != 0 {
+                        // Handle Copy-on-Write
+                        use core::alloc::Layout;
+                        use alloc::alloc::alloc;
+                        unsafe {
+                        let layout = Layout::from_size_align(4096, 4096).unwrap();
+                        let new_page = alloc(layout);
+                        
+                        // Copy data from the original (now shared) physical page
+                        let old_page_ptr = (cr2 & !0xFFF) as *const u8;
+                        core::ptr::copy_nonoverlapping(old_page_ptr, new_page, 4096);
+
+                        // Remap the virtual address to the new private page
+                        vas.map_page(cr2, new_page as usize, FLAG_PRESENT | FLAG_WRITABLE);
+                    }
+                        return; // Successfully handled CoW, resume execution
+                    }
+                }
+            }
+        }
+    }
+
     show_exception_screen("PAGE FAULT", frame, Some(error_code));
 }
 

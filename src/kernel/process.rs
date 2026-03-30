@@ -4,6 +4,7 @@ use crate::kernel::io;
 use crate::drivers::rtc;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::arch::asm;
+use crate::kernel::paging::VirtualAddressSpace;
 
 /// A Mutex wrapper that disables interrupts while the lock is held.
 /// This prevents deadlocks when a lock is shared between a kernel task and an interrupt handler.
@@ -31,6 +32,17 @@ impl<T> IrqSafeMutex<T> {
             guard: self.inner.lock(),
             interrupts_enabled,
         }
+    }
+
+    pub fn try_lock(&self) -> Option<IrqSafeGuard<'_, T>> {
+        let flags: u32;
+        unsafe { asm!("pushfd; pop {0}", out(reg) flags, options(nomem, nostack)); }
+        let interrupts_enabled = (flags & 0x200) != 0;
+
+        self.inner.try_lock().map(|guard| {
+            unsafe { asm!("cli", options(nomem, nostack)); }
+            IrqSafeGuard { guard, interrupts_enabled }
+        })
     }
 }
 
@@ -126,6 +138,7 @@ pub struct Task {
     pub state: TaskState,
     pub age: usize,
     pub guard_page: usize,
+    pub address_space: Option<VirtualAddressSpace>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,6 +185,7 @@ impl Scheduler {
             sleep_until: None,
             age: 0,
             guard_page: 0,
+            address_space: None,
         });
         self.current_index = 0;
         self.initialized = true;
@@ -179,7 +193,7 @@ impl Scheduler {
 
     /// Creates a new task jumping to the given entry point.
     /// The entry_point function will be called by a wrapper that handles task exit.
-    pub fn add_task(&mut self, entry_point: usize, priority: usize) {
+    pub fn add_task(&mut self, entry_point: usize, priority: usize, address_space: Option<VirtualAddressSpace>) {
         // Find an available slot in the fixed-size array
         let mut slot_idx = None;
         for i in 0..MAX_TASKS {
@@ -204,7 +218,7 @@ impl Scheduler {
         let usable_stack_bottom = guard_page + 4096;
         
         // Hardware Guard: Unmap the page immediately before the usable stack
-        crate::kernel::paging::unmap_page(guard_page);
+        VirtualAddressSpace { directory: crate::kernel::paging::get_kernel_pd_ptr() as *mut [u32; 1024] }.unmap_page(guard_page);
 
         // Calculate the top of the stack (high address)
         let stack_top = (usable_stack_bottom + stack_size - 64) & !0xF;
@@ -245,6 +259,7 @@ impl Scheduler {
             sleep_until: None,
             age: 0,
             guard_page,
+            address_space,
         });
     }
 
@@ -405,6 +420,14 @@ pub fn yield_now(current_esp: usize) -> usize {
 
     scheduler.pick_next();
 
+    // Switch Address Space
+    if let Some(task) = &scheduler.tasks[scheduler.current_index] {
+        match &task.address_space {
+            Some(vas) => unsafe { vas.switch(); },
+            None => unsafe { asm!("mov cr3, {}", in(reg) crate::kernel::paging::get_kernel_pd_ptr()); }
+        }
+    }
+
     // Restore Next Task (Copy values out to avoid references into a potentially shifting Vec)
     let (next_esp, next_id, stack_ptr, stack_len, stack_raw_ptr) = {
         let t = scheduler.tasks[scheduler.current_index].as_ref().expect("Scheduler error: Picked None task");
@@ -471,7 +494,7 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
             if task.state == TaskState::Exited && task.id != 0 && !is_current {
                 // Restore the guard page so the allocator doesn't fault when freeing the Vec
                 if task.guard_page != 0 {
-                    crate::kernel::paging::map_page(task.guard_page);
+                    VirtualAddressSpace { directory: crate::kernel::paging::get_kernel_pd_ptr() as *mut [u32; 1024] }.map_page(task.guard_page, task.guard_page, 0x03);
                 }
                 scheduler.tasks[i] = None;
             }
@@ -506,6 +529,14 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
     // Reset the watchdog timer if we actually switched to a different task
     if old_idx != scheduler.current_index {
         scheduler.current_task_start_tick = current_ticks;
+    }
+
+    // Switch Address Space
+    if let Some(task) = &scheduler.tasks[scheduler.current_index] {
+        match &task.address_space {
+            Some(vas) => unsafe { vas.switch(); },
+            None => unsafe { asm!("mov cr3, {}", in(reg) crate::kernel::paging::get_kernel_pd_ptr()); }
+        }
     }
 
     // 6. Restore Next Task (Copy values out to avoid references into a potentially shifting Vec)
