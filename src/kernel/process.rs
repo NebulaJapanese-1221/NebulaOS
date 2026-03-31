@@ -218,7 +218,7 @@ impl Scheduler {
         let usable_stack_bottom = guard_page + 4096;
         
         // Hardware Guard: Unmap the page immediately before the usable stack
-        VirtualAddressSpace { directory: crate::kernel::paging::get_kernel_pd_ptr() as *mut [u32; 1024] }.unmap_page(guard_page);
+        VirtualAddressSpace::kernel().unmap_page(guard_page);
 
         // Calculate the top of the stack (high address)
         let stack_top = (usable_stack_bottom + stack_size - 64) & !0xF;
@@ -494,7 +494,7 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
             if task.state == TaskState::Exited && task.id != 0 && !is_current {
                 // Restore the guard page so the allocator doesn't fault when freeing the Vec
                 if task.guard_page != 0 {
-                    VirtualAddressSpace { directory: crate::kernel::paging::get_kernel_pd_ptr() as *mut [u32; 1024] }.map_page(task.guard_page, task.guard_page, 0x03);
+                    VirtualAddressSpace::kernel().map_page(task.guard_page, task.guard_page, 0x03);
                 }
                 scheduler.tasks[i] = None;
             }

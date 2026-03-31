@@ -174,6 +174,7 @@ pub fn is_shift_pressed() -> bool {
     mods.lshift || mods.rshift
 }
 
+#[allow(dead_code)]
 pub fn is_capslock_enabled() -> bool {
     let mods = MODIFIERS.lock();
     mods.capslock

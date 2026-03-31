@@ -81,6 +81,7 @@ pub struct WindowManager {
     pub task_switcher_index: usize,
     pub last_cursor_x: isize,
     pub last_cursor_y: isize,
+    #[allow(dead_code)]
     pub cursor_save_buffer: Vec<u32>,
     pub ready_buffer: Vec<u32>,
     pub last_cursor_rect: Rect,
@@ -706,12 +707,14 @@ impl WindowManager {
         }
     }
 
+    #[allow(dead_code)]
     fn restore_hardware_cursor(&self) {
         let fb = FRAMEBUFFER.lock();
         self.restore_vram_cursor(&fb);
     }
 
     /// Internal version of restore that uses an already-locked framebuffer to avoid deadlocks.
+    #[allow(dead_code)]
     fn restore_vram_cursor(&self, fb: &framebuffer::Framebuffer) {
         let (width, height, addr, pitch) = if let Some(info) = fb.info.as_ref() {
             (info.width as isize, info.height as isize, info.address, info.pitch)
@@ -742,6 +745,7 @@ impl WindowManager {
         }
     }
 
+    #[allow(dead_code)]
     fn refresh_hardware_cursor(&mut self) {
         let fb = FRAMEBUFFER.lock();
         let (width, height, addr, pitch) = if let Some(info) = fb.info.as_ref() {

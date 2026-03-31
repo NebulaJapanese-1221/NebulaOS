@@ -53,6 +53,7 @@ impl fmt::Write for SerialPort {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum LogLevel {
+    #[allow(dead_code)]
     Debug = 0,
     Info = 1,
     Warn = 2,
@@ -61,6 +62,7 @@ pub enum LogLevel {
 
 pub static SYSTEM_LOG_LEVEL: AtomicU8 = AtomicU8::new(LogLevel::Info as u8);
 
+#[allow(dead_code)]
 pub fn set_log_level(level: LogLevel) {
     SYSTEM_LOG_LEVEL.store(level as u8, Ordering::SeqCst);
 }

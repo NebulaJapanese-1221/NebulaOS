@@ -2,6 +2,7 @@ use core::arch::{asm, naked_asm};
 use core::fmt;
 use crate::drivers::framebuffer::{self, FRAMEBUFFER};
 use crate::userspace::fonts::font;
+use core::sync::atomic::Ordering;
 use super::interrupts::InterruptStackFrame;
 use super::paging::{FLAG_COW, FLAG_WRITABLE, FLAG_PRESENT};
 
@@ -221,6 +222,24 @@ pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code
                       else if is_guard_violation { "HEAP_GUARD_VIOLATION" } 
                       else { name };
 
+    // --- Page Fault Debugger ---
+    if name.starts_with("PAGE FAULT") {
+        crate::serial_println!("\n--- PAGE FAULT DIAGNOSTICS ---");
+        crate::serial_println!("Faulting Virtual Address: {:#010x}", cr2);
+        crate::serial_println!("Instruction Pointer (EIP): {:#010x}", frame.instruction_pointer);
+        
+        if let Some(code) = error_code {
+            let p  = if code & (1 << 0) != 0 { "Protection Violation" } else { "Page Not Present (Unmapped)" };
+            let rw = if code & (1 << 1) != 0 { "Write" } else { "Read" };
+            let us = if code & (1 << 2) != 0 { "User Mode" } else { "Kernel Mode" };
+            let rs = if code & (1 << 3) != 0 { " [RSVD Violation]" } else { "" };
+            let id = if code & (1 << 4) != 0 { "Instruction Fetch" } else { "Data Access" };
+            
+            crate::serial_println!("Cause: {} during {} in {} ({}){}", p, rw, us, id, rs);
+        }
+        crate::serial_println!("------------------------------\n");
+    }
+
     crate::serial_println!("\nCRITICAL SYSTEM ERROR: {}", display_name);
     
     if let Some(code) = error_code {
@@ -248,6 +267,18 @@ pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code
     
     use core::fmt::Write;
     let _ = writeln!(writer, "Stop Code: {}", display_name);
+
+    if name.starts_with("PAGE FAULT") {
+        let _ = writeln!(writer, "Address: {:#010x}", cr2);
+        if let Some(code) = error_code {
+            let p = if code & 1 != 0 { "Prot" } else { "NP" };
+            let rw = if code & 2 != 0 { "W" } else { "R" };
+            let us = if code & 4 != 0 { "U" } else { "K" };
+            let id = if code & 16 != 0 { "IF" } else { "DA" };
+            let _ = writeln!(writer, "Flags: {} {} {} {}", p, rw, us, id);
+        }
+    }
+
     if is_guard_violation {
         let _ = writeln!(writer, "Violation at: {:#010x} (Unmapped Guard Page)", cr2);
     }
@@ -320,15 +351,33 @@ pub extern "x86-interrupt" fn page_fault_handler(frame: &mut InterruptStackFrame
     let cr2: usize;
     unsafe { asm!("mov {}, cr2", out(reg) cr2); }
 
-    // If CR2 is within a very low range, it's a null pointer dereference, not CoW.
+    // Bit 0 of error_code: 0 if page not present, 1 if protection violation
+    let present = (error_code & 0x01) != 0;
+    // Bit 1: 1 if write, 0 if read
+    let is_write = (error_code & 0x02) != 0;
+
+    // --- 1. Null Pointer Dereference ---
     if cr2 < 0x1000 {
         show_exception_screen("PAGE FAULT (NULL DEREF)", frame, Some(error_code));
     }
 
-    // Bit 1 of error_code is set if the fault was caused by a write
-    let is_write = (error_code & 0x02) != 0;
+    // --- 2. Demand Paging / Auto-map Kernel Memory ---
+    if !present {
+        let total_mem = crate::kernel::CONFIG.total_memory.load(Ordering::Relaxed);
+        if cr2 < total_mem {
+            // Demand Paging: Allocate a brand new physical frame from our pool
+            // and map it to the faulting virtual address.
+            if let Some(new_frame) = crate::kernel::paging::allocate_frame() {
+                let vas = crate::kernel::paging::VirtualAddressSpace::kernel();
+                vas.map_page(cr2, new_frame as usize, FLAG_PRESENT | FLAG_WRITABLE);
+                return; // Retry the instruction
+            }
+            // If allocation fails, fall through to the panic screen
+        }
+    }
 
-    if is_write {
+    // --- 3. Copy-on-Write Handling ---
+    if present && is_write {
         // Safe acquisition of the address space for CoW handling
         if let Some(scheduler) = crate::kernel::process::SCHEDULER.try_lock() {
             let vas = scheduler.tasks[scheduler.current_index].as_ref().and_then(|t| t.address_space.as_ref());

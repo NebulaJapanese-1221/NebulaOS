@@ -366,6 +366,11 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     // PHASE 1: Minimal Environment
     unsafe { asm!("cli", options(nomem, nostack)); }
     crate::drivers::serial::SERIAL1.lock().init(); 
+    crate::serial_println!("\n[INFO] NebulaOS {} Starting...", VERSION);
+    
+    // Load System Tables immediately to provide a safety net for Phase 2/3
+    gdt::init();
+    if let Err(e) = interrupts::init() { show_boot_error(e); }
 
     // PHASE 2: Core Memory & Graphics
     let heap_region = allocator::find_heap_region(multiboot_info_ptr);
@@ -375,8 +380,8 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
         unsafe { allocator::ALLOCATOR.lock().init(heap_start as *mut u8, heap_size); }
         CONFIG.total_memory.store(heap_size, Ordering::Relaxed);
         
-        // Initialize Paging after the heap is ready
-        paging::init();
+        // Initialize Paging using discovered memory and framebuffer info
+        paging::init(fb_info_opt);
 
         // Register the current execution as the Boot Task before adding others
         let current_esp: usize;
@@ -392,10 +397,6 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     } else {
         show_boot_error("No framebuffer information found!");
     }
-    
-    // PHASE 3: System Tables & Interrupts
-    gdt::init();
-    if let Err(e) = interrupts::init() { show_boot_error(e); }
     
     // Start critical background services before showing the logo.
     // This ensures that VRAM blitting and serial logging are non-blocking.

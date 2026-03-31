@@ -1,8 +1,8 @@
 use core::arch::asm;
 extern crate alloc;
-use core::alloc::Layout;
 use core::sync::atomic::Ordering;
-use alloc::alloc::{alloc_zeroed, dealloc};
+use core::ptr::addr_of_mut;
+use spin::Mutex;
 
 // Paging Flags
 pub const FLAG_PRESENT: u32 = 1 << 0;
@@ -23,10 +23,68 @@ struct PageTables([[u32; 1024]; 64]);
 
 static mut PAGE_TABLES: PageTables = PageTables([[0; 1024]; 64]);
 
+/// A dedicated memory pool for paging structures (Directories and Tables)
+#[repr(align(4096))]
+struct FramePool([u8; 512 * 4096]); // 2MB reserved pool (512 frames)
+
+static mut FRAME_POOL: FramePool = FramePool([0; 512 * 4096]);
+
+/// Bitmap to track frame allocation (1 bit = 1 frame). 512 frames / 8 = 64 bytes.
+static FRAME_BITMAP: Mutex<[u8; 64]> = Mutex::new([0; 64]);
+
+/// Returns true if the address resides within the managed system frame pool.
+pub fn is_in_pool(addr: usize) -> bool {
+    let pool_start = core::ptr::addr_of!(FRAME_POOL) as usize;
+    addr >= pool_start && addr < pool_start + (512 * 4096)
+}
+
+/// Allocates a zeroed 4KB frame from the system frame pool.
+pub fn allocate_frame() -> Option<*mut [u32; 1024]> {
+    let mut bitmap = FRAME_BITMAP.lock();
+    for i in 0..64 {
+        if bitmap[i] != 0xFF {
+            for bit in 0..8 {
+                if (bitmap[i] & (1 << bit)) == 0 {
+                    bitmap[i] |= 1 << bit;
+                    let idx = i * 8 + bit;
+                    unsafe {
+                        let ptr = (addr_of_mut!(FRAME_POOL) as *mut u8).add(idx * 4096) as *mut [u32; 1024];
+                        core::ptr::write_bytes(ptr, 0, 1);
+                        return Some(ptr);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Returns a frame to the system frame pool.
+pub fn free_frame(ptr: *mut [u32; 1024]) {
+    unsafe {
+        let addr = ptr as usize;
+        let pool_start = addr_of_mut!(FRAME_POOL) as usize;
+        if addr < pool_start || addr >= pool_start + (512 * 4096) {
+            return; // Not in pool
+        }
+
+        let idx = (addr - pool_start) / 4096;
+        let byte_idx = idx / 8;
+        let bit_idx = idx % 8;
+
+        let mut bitmap = FRAME_BITMAP.lock();
+        bitmap[byte_idx] &= !(1 << bit_idx);
+        // Clear memory to prevent data leakage between processes
+        core::ptr::write_bytes(ptr, 0, 1);
+    }
+}
+
 /// Represents a virtual address space (a Page Directory).
 pub struct VirtualAddressSpace {
     /// Pointer to the 4KB-aligned Page Directory.
     pub directory: *mut [u32; 1024],
+    /// If true, this VAS owns its directory and should return it to the pool (if we had a free list).
+    owned: bool,
 }
 
 unsafe impl Send for VirtualAddressSpace {}
@@ -34,29 +92,46 @@ unsafe impl Sync for VirtualAddressSpace {}
 
 impl Drop for VirtualAddressSpace {
     fn drop(&mut self) {
-        // Do not deallocate the static kernel directory
-        unsafe {
-            if self.directory as u32 != core::ptr::addr_of_mut!(PAGE_DIRECTORY).cast::<u32>() as u32 {
-                let layout = Layout::from_size_align(4096, 4096).unwrap();
-                dealloc(self.directory as *mut u8, layout);
+        if self.owned {
+            unsafe {
+                // 1. Free all dynamically allocated page tables in this directory
+                for i in 0..1024 {
+                    let entry = (*self.directory)[i];
+                    if (entry & FLAG_PRESENT) != 0 && (entry & FLAG_HUGE) == 0 {
+                        let table_ptr = (entry & !0xFFF) as *mut [u32; 1024];
+                        if is_in_pool(table_ptr as usize) {
+                            free_frame(table_ptr);
+                        }
+                    }
+                }
+                // 2. Free the directory itself
+                free_frame(self.directory);
             }
         }
     }
 }
 
 impl VirtualAddressSpace {
+    /// Returns a wrapper for the master kernel address space.
+    pub fn kernel() -> Self {
+        unsafe {
+            Self {
+                directory: addr_of_mut!(PAGE_DIRECTORY) as *mut [u32; 1024],
+                owned: false,
+            }
+        }
+    }
+
     /// Creates a new address space by cloning the kernel's page directory.
     /// This ensures that the kernel memory remains mapped in the new space.
     pub fn new_user() -> Option<Self> {
         unsafe {
-            let layout = Layout::from_size_align(4096, 4096).ok()?;
-            let ptr = alloc_zeroed(layout) as *mut [u32; 1024];
-            if ptr.is_null() { return None; }
+            let ptr = allocate_frame()?;
 
             // Clone the current kernel page directory to share kernel-space mappings
             core::ptr::copy_nonoverlapping((*core::ptr::addr_of!(PAGE_DIRECTORY)).0.as_ptr(), ptr as *mut u32, 1024);
             
-            Some(Self { directory: ptr })
+            Some(Self { directory: ptr, owned: true })
         }
     }
 
@@ -70,7 +145,26 @@ impl VirtualAddressSpace {
         unsafe {
             let entry = (*self.directory)[pd_idx];
             if (entry & FLAG_PRESENT) != 0 {
-                if (entry & FLAG_HUGE) != 0 { return None; }
+                // If this is a Huge Page, we must "split" it into 4KB pages to allow
+                // granular operations like unmapping a Stack Guard page.
+                if (entry & FLAG_HUGE) != 0 {
+                    let new_table = allocate_frame()?;
+                    let base_phys = entry & 0xFFC00000;
+                    let flags = entry & 0xFFF & !FLAG_HUGE;
+
+                    // Populate the new table with 1024 identity mappings for the 4MB range
+                    for i in 0..1024 {
+                        (*new_table)[i] = base_phys + (i as u32 * 4096) | flags;
+                    }
+
+                    // Replace the Huge Page entry with the new Page Table
+                    (*self.directory)[pd_idx] = (new_table as u32) | FLAG_PRESENT | FLAG_WRITABLE;
+                    
+                    // Flush TLB for the entire 4MB region
+                    asm!("invlpg [{}]", in(reg) base_phys);
+                    
+                    return Some(new_table);
+                }
                 return Some((entry & !0xFFF) as *mut [u32; 1024]);
             }
 
@@ -78,10 +172,7 @@ impl VirtualAddressSpace {
             let ptr = if pd_idx < 64 {
                 (*core::ptr::addr_of_mut!(PAGE_TABLES)).0.as_mut_ptr().add(pd_idx)
             } else {
-                let layout = Layout::from_size_align(4096, 4096).ok()?;
-                let p = alloc_zeroed(layout) as *mut [u32; 1024];
-                if p.is_null() { return None; }
-                p
+                allocate_frame()?
             };
 
             (*self.directory)[pd_idx] = (ptr as u32) | FLAG_PRESENT | FLAG_WRITABLE;
@@ -135,7 +226,13 @@ impl VirtualAddressSpace {
             if let Some(pt_ptr) = self.get_or_create_table(pd_idx) {
                 let pt_entry = (*pt_ptr).as_mut_ptr().add(pt_idx);
                 *pt_entry = (paddr as u32) | flags | FLAG_PRESENT;
-                asm!("invlpg [{}]", in(reg) vaddr);
+                
+                // Only invalidate TLB if paging is already active
+                let cr0: u32;
+                asm!("mov {}, cr0", out(reg) cr0, options(nomem, nostack));
+                if (cr0 & 0x80000000) != 0 {
+                    asm!("invlpg [{}]", in(reg) vaddr);
+                }
             }
         }
     }
@@ -145,14 +242,12 @@ impl VirtualAddressSpace {
         let pd_idx = vaddr >> 22;
         let pt_idx = (vaddr >> 12) & 0x3FF;
 
-        unsafe {
-            let entry = (*self.directory)[pd_idx];
-            // Check if present and NOT a 4MB huge page (which has no page table)
-            if (entry & FLAG_PRESENT) == 0 || (entry & FLAG_HUGE) != 0 { return None; }
-            
-            let pt_ptr = (entry & !0xFFF) as *const [u32; 1024];
-            Some((*pt_ptr)[pt_idx])
-        }
+        let entry = unsafe { (*self.directory)[pd_idx] };
+        // Check if present and NOT a 4MB huge page (which has no page table)
+        if (entry & FLAG_PRESENT) == 0 || (entry & FLAG_HUGE) != 0 { return None; }
+        
+        let pt_ptr = (entry & !0xFFF) as *const [u32; 1024];
+        Some(unsafe { (*pt_ptr)[pt_idx] })
     }
 }
 
@@ -161,38 +256,55 @@ pub fn get_kernel_pd_ptr() -> u32 {
     unsafe { &raw mut PAGE_DIRECTORY.0 as u32 }
 }
 
-pub fn init() {
+pub fn init(fb_info: Option<(usize, usize, usize, usize, u8)>) {
     unsafe {
-        let kernel_vas = VirtualAddressSpace { directory: core::ptr::addr_of_mut!(PAGE_DIRECTORY) as *mut [u32; 1024] };
+        crate::serial_println!("[INFO] Paging: Building Identity Map...");
+        let kernel_vas = VirtualAddressSpace::kernel();
 
-        // Enable Page Size Extensions (PSE) in CR4
+        // 1. Enable Page Size Extensions (PSE) in CR4 to support 4MB pages
         let mut cr4: u32;
         asm!("mov {}, cr4", out(reg) cr4);
         cr4 |= 0x00000010; // Bit 4: PSE
-        asm!("mov cr4, {}", in(reg) cr4);
+        asm!("mov cr4, {}", in(reg) cr4, options(nomem, nostack));
 
-        // 1. Identity map the kernel and RAM using 4MB Huge Pages.
+        // 2. Identity map the first 1GB of the address space.
+        // This covers the kernel, the stack, and the entire usable heap.
+        // Using 4MB Huge Pages makes this initialization extremely fast (only 256 writes).
         let mem_limit = crate::kernel::CONFIG.total_memory.load(Ordering::Relaxed);
-        
-        // Map at least 128MB for the kernel/drivers, up to 256MB for basic BSS compatibility
-        let map_size = (mem_limit + 0x2000000).max(128 * 1024 * 1024).min(256 * 1024 * 1024);
-        
+        let map_size = (mem_limit + 0x4000000).max(1024 * 1024 * 1024); // RAM + 64MB margin, min 1GB
         kernel_vas.map_region(0, 0, map_size, FLAG_PRESENT | FLAG_WRITABLE | FLAG_HUGE);
 
-        // 2. Identity map the Framebuffer using 4MB pages (if detected)
-        let fb_info = crate::drivers::framebuffer::FRAMEBUFFER.lock().info;
-        if let Some(info) = fb_info {
-            let fb_addr = info.address as u32;
-            let fb_size = (info.width * info.height * (info.bpp as usize / 8)) as u32;
+        // 3. Identity map the Framebuffer (if detected)
+        if let Some((addr, _w, _h, pitch, _bpp)) = fb_info {
+            let fb_addr = addr as u32;
+            // Use height * pitch for the full buffer size
+            let fb_size = (pitch * 1024) as u32; // Overestimate to cover common resolutions
             kernel_vas.map_region(fb_addr as usize, fb_addr as usize, fb_size as usize, FLAG_PRESENT | FLAG_WRITABLE | FLAG_HUGE);
         }
 
-        // 3. Load Page Directory into CR3 and Enable Paging
+        crate::serial_println!("[INFO] Paging: Enabling MMU...");
+
+        // 4. Load Page Directory into CR3 (Physical Address)
         kernel_vas.switch();
 
+        // 5. Enable Paging by setting the PG bit (31) in CR0.
+        // We perform a pipeline flush jump immediately after to ensure synchronization.
         let mut cr0: u32;
-        asm!("mov {}, cr0", out(reg) cr0);
-        cr0 |= 0x80000000; // Bit 31: PG
-        asm!("mov cr0, {}", in(reg) cr0);
+        asm!("mov {0}, cr0", out(reg) cr0, options(nomem, nostack));
+        cr0 |= 0x80000000; // Bit 31: PG (Paging)
+        
+        asm!(
+            "mov cr0, {0}",
+            "jmp 2f",
+            "2:",
+            in(reg) cr0,
+            options(nostack, nomem)
+        );
+
+        // 6. Now that Paging is stable, enable the WP bit (16) to enforce Read-Only pages
+        cr0 |= 0x00010000; // Bit 16: WP (Write Protect)
+        asm!("mov cr0, {0}", in(reg) cr0, options(nomem, nostack));
+        
+        crate::serial_println!("[INFO] Paging: System Active.");
     }
 }
