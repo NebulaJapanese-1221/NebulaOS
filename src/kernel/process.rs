@@ -236,22 +236,35 @@ impl Scheduler {
                 *(*sp_ptr as *mut usize) = val;
             };
 
-            // 1. IRET Frame
-            push(0x202, &mut sp);      // EFLAGS (Interrupts Enabled)
-            push(0x08, &mut sp);       // CS (Kernel Code Segment)
-            push(task_entry_wrapper as *const () as usize, &mut sp); 
+            if address_space.is_some() {
+                // User task: Set up for user mode execution
+                // EFLAGS: IOPL=3 (bits 12,13), IF=1 (bit 9), always 2 (bit 1)
+                push(0x3202, &mut sp);      // EFLAGS
+                push(0x1B, &mut sp);       // CS (User Code Segment + RPL 3)
+                push(entry_point, &mut sp); // EIP (User task entry point)
+            } else {
+                // Kernel task: Set up for kernel mode execution
+                push(0x202, &mut sp);      // EFLAGS (Interrupts Enabled)
+                push(0x08, &mut sp);       // CS (Kernel Code Segment)
+                push(task_entry_wrapper as *const () as usize, &mut sp); 
+            }
 
             // 2. Error Code / Dummy
             push(0, &mut sp);
 
             // 3. Segment Registers
-            push(0x10, &mut sp); // DS
-            push(0x10, &mut sp); // ES
-            push(0x10, &mut sp); // FS
-            push(0x10, &mut sp); // GS (Lowest address)
+            let data_segment = if address_space.is_some() { 0x23 } else { 0x10 }; // User Data Segment + RPL 3 or Kernel Data Segment
+            push(data_segment, &mut sp); // DS
+            push(data_segment, &mut sp); // ES
+            push(data_segment, &mut sp); // FS
+            push(data_segment, &mut sp); // GS (Lowest address)
 
             // 4. General Purpose Registers (pusha)
-            push(entry_point, &mut sp); // EAX (Entry point for wrapper)
+            if address_space.is_some() {
+                push(0, &mut sp); // EAX (User task entry point is now EIP)
+            } else {
+                push(entry_point, &mut sp); // EAX (Entry point for wrapper)
+            }
             for _ in 0..7 { push(0, &mut sp); } // ECX, EDX, EBX, ESP, EBP, ESI, EDI
         }
 
@@ -469,10 +482,6 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
     // Update RTC/System time after EOI to prevent hardware bus stalls
     rtc::handle_timer_tick();
 
-    // Switch to kernel directory immediately to safely reap and schedule.
-    // This prevents a race where we drop the address space currently in CR3.
-    unsafe { asm!("mov cr3, {}", in(reg) crate::kernel::paging::get_kernel_pd_ptr()); }
-
     let mut scheduler = SCHEDULER.lock();
     let current_ticks = TICKS.load(Ordering::Relaxed);
 
@@ -559,7 +568,7 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
     if stack_len > 0 {
         let canary = unsafe { core::ptr::read_unaligned(stack_raw_ptr as *const u32) };
         if canary != 0xDEADBEEF {
-            drop(scheduler);
+            // Use try_lock if available or force release to avoid deadlock during panic print
             panic!("STACK_CORRUPTION_DETECTED: Task {} canary is {:#x} (expected 0xDEADBEEF)", next_id, canary);
         }
     };

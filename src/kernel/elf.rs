@@ -1,5 +1,5 @@
 use core::mem::size_of;
-use crate::kernel::paging::{VirtualAddressSpace, FLAG_PRESENT, FLAG_COW, FLAG_USER};
+use crate::kernel::paging::{VirtualAddressSpace, FLAG_PRESENT, FLAG_WRITABLE, FLAG_COW, FLAG_USER, allocate_frame};
 
 pub const ELF_MAGIC: [u8; 4] = [0x7F, b'E', b'L', b'F'];
 pub const PT_LOAD: u32 = 1;
@@ -63,6 +63,8 @@ pub fn load_and_run(data: &[u8]) -> bool {
         Some(as_space) => as_space,
         None => return false,
     };
+
+    let mut image_end = 0;
     
     // 2. Map Segments using CoW
     for i in 0..ph_count {
@@ -72,6 +74,11 @@ pub fn load_and_run(data: &[u8]) -> bool {
         if ph.type_ == PT_LOAD {
             // Physical address is just the offset into the provided data slice
             let phys_addr = unsafe { data.as_ptr().add(ph.offset as usize) as usize };
+
+            let end = (ph.vaddr + ph.memsz) as usize;
+            if end > image_end {
+                image_end = end;
+            }
             
             // We map the segment as Read-Only + CoW + User.
             // The Copy-on-Write mechanism in the page fault handler will handle writes.
@@ -84,7 +91,22 @@ pub fn load_and_run(data: &[u8]) -> bool {
         }
     }
 
-    // 3. Spawn Task
+    // 3. Allocate and map User Heap
+    // We place the heap right after the program segments, aligned to a page boundary.
+    let heap_start = (image_end + 4095) & !4095;
+    let initial_heap_pages = 16; // 64 KB initial heap
+
+    for i in 0..initial_heap_pages {
+        if let Some(frame) = allocate_frame() {
+            address_space.map_page(
+                heap_start + (i * 4096),
+                frame as usize,
+                FLAG_PRESENT | FLAG_WRITABLE | FLAG_USER
+            );
+        }
+    }
+
+    // 4. Spawn Task
     // We map the entry point directly. Note: We no longer need to "leak" memory
     // here because the address space handles the mapping to the 'data' buffer.
     // In a production kernel, 'data' should be backed by a persistent Page Cache.

@@ -203,17 +203,34 @@ impl Framebuffer {
     fn blit_rect_to_vram(&self, x: usize, y: usize, width: usize, height: usize, from_ready: bool) {
         let source = if from_ready { &self.ready_buffer } else { &self.draw_buffer };
         if let (Some(ref info), Some(ref buffer)) = (&self.info, source) {
-            if info.bpp != 32 { return; }
             let vram_ptr = info.address as *mut u8;
-            let src_ptr = buffer.as_ptr() as *const u8;
-            let row_len_bytes = width * 4;
 
-            for i in 0..height {
-                let cy = y + i;
-                let src_offset = (cy * info.width + x) * 4;
-                let dst_offset = cy * info.pitch + x * 4;
-                unsafe {
-                    ptr::copy_nonoverlapping(src_ptr.add(src_offset), vram_ptr.add(dst_offset), row_len_bytes);
+            if info.bpp == 32 {
+                let src_ptr = buffer.as_ptr() as *const u8;
+                let row_len_bytes = width * 4;
+                for i in 0..height {
+                    let cy = y + i;
+                    let src_offset = (cy * info.width + x) * 4;
+                    let dst_offset = cy * info.pitch + x * 4;
+                    unsafe {
+                        ptr::copy_nonoverlapping(src_ptr.add(src_offset), vram_ptr.add(dst_offset), row_len_bytes);
+                    }
+                }
+            } else if info.bpp == 24 {
+                for i in 0..height {
+                    let cy = y + i;
+                    let src_row_base = cy * info.width + x;
+                    let dst_row_base = cy * info.pitch + x * 3;
+                    for j in 0..width {
+                        let pixel = buffer[src_row_base + j];
+                        unsafe {
+                            let p_ptr = vram_ptr.add(dst_row_base + j * 3);
+                            // Standard 24-bit is BGR
+                            *p_ptr = (pixel & 0xFF) as u8;           // Blue
+                            *p_ptr.add(1) = ((pixel >> 8) & 0xFF) as u8;  // Green
+                            *p_ptr.add(2) = ((pixel >> 16) & 0xFF) as u8; // Red
+                        }
+                    }
                 }
             }
         }
