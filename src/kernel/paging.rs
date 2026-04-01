@@ -96,6 +96,10 @@ impl Drop for VirtualAddressSpace {
             unsafe {
                 // 1. Free all dynamically allocated page tables in this directory
                 for i in 0..1024 {
+                    // Only free tables in the "user" range (e.g., above 1GB) to avoid
+                    // accidentally freeing shared kernel page tables cloned during new_user().
+                    if i < 256 { continue; }
+
                     let entry = (*self.directory)[i];
                     if (entry & FLAG_PRESENT) != 0 && (entry & FLAG_HUGE) == 0 {
                         let table_ptr = (entry & !0xFFF) as *mut [u32; 1024];
@@ -175,7 +179,8 @@ impl VirtualAddressSpace {
                 allocate_frame()?
             };
 
-            (*self.directory)[pd_idx] = (ptr as u32) | FLAG_PRESENT | FLAG_WRITABLE;
+            // Always set USER on the Directory Entry to allow PTEs to control access.
+            (*self.directory)[pd_idx] = (ptr as u32) | FLAG_PRESENT | FLAG_WRITABLE | FLAG_USER;
             Some(ptr)
         }
     }
