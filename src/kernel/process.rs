@@ -207,14 +207,19 @@ impl Scheduler {
         let id = idx; // Use slot index as ID for stable mapping
         
         // Allocate a kernel stack for this task
-        let stack_size = 65536; 
-        // Allocate extra space to ensure we can align and have a guard page
-        let mut stack = Vec::with_capacity(stack_size + 8192);
-        stack.resize(stack_size + 8192, 0);
+        let stack_size = 65536;
+        // Allocate extra space (3 pages) for: 1 page for Canary, 1 page for Guard, 1 page for Alignment Slop
+        let mut stack = Vec::with_capacity(stack_size + 12288);
+        stack.resize(stack_size + 12288, 0);
         
         let raw_ptr = stack.as_ptr() as usize;
-        // Align stack top to 4KB and calculate the guard page (bottom of the used area)
-        let guard_page = (raw_ptr + 4095) & !4095;
+
+        // 1. Initialize Stack Canary at the very base of the allocation
+        unsafe { core::ptr::write_unaligned(raw_ptr as *mut u32, 0xDEADBEEF); }
+
+        // 2. Align guard page. We ensure it's at least 4KB away from raw_ptr 
+        // so that the canary at raw_ptr isn't unmapped if raw_ptr is page-aligned.
+        let guard_page = (raw_ptr + 4096) & !4095;
         let usable_stack_bottom = guard_page + 4096;
         
         // Hardware Guard: Unmap the page immediately before the usable stack
@@ -476,7 +481,7 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
                 let frame_ptr = (current_esp + 52) as *const crate::kernel::interrupts::InterruptStackFrame;
                 let frame = unsafe { &*frame_ptr };
                 drop(scheduler);
-                crate::kernel::exceptions::show_exception_screen("TASK_CPU_HOG_WATCHDOG", frame, Some(task_id as u32));
+                crate::kernel::exceptions::show_exception_screen("TASK_CPU_HOG_WATCHDOG", frame, Some(task_id as u32), None);
             }
         }
     }
@@ -540,10 +545,19 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
     }
 
     // 6. Restore Next Task (Copy values out to avoid references into a potentially shifting Vec)
-    let (next_esp, next_id, stack_ptr, stack_len) = {
+    let (next_esp, next_id, stack_ptr, stack_len, stack_raw_ptr) = {
         let next_idx = scheduler.current_index;
         let t = scheduler.tasks[next_idx].as_ref().expect("Scheduler error: Restoring None task");
-        (t.kernel_esp, t.id, t.kernel_stack.as_ptr() as usize, t.kernel_stack.len())
+        (t.kernel_esp, t.id, t.kernel_stack.as_ptr() as usize, t.kernel_stack.len(), t.kernel_stack.as_ptr())
+    };
+
+    // 6.5 Verify Stack Canary
+    if stack_len > 0 {
+        let canary = unsafe { core::ptr::read_unaligned(stack_raw_ptr as *const u32) };
+        if canary != 0xDEADBEEF {
+            drop(scheduler);
+            panic!("STACK_CORRUPTION_DETECTED: Task {} canary is {:#x} (expected 0xDEADBEEF)", next_id, canary);
+        }
     };
 
     record_context_switch(next_id, next_esp);

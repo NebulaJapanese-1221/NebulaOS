@@ -54,6 +54,7 @@ pub static CONFIG: KernelConfig = KernelConfig {
     features: AtomicU32::new(0),
 };
 
+pub static PANICKING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static BOOT_ANIMATION_RUNNING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static BOOT_STATUS_LINE: AtomicUsize = AtomicUsize::new(2);
 /// (last_tick, last_tick_tsc, pit_retries, last_gpu_val, last_gpu_tsc)
@@ -474,12 +475,17 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {    
+    // Disable interrupts immediately to stabilize the CPU state
+    unsafe { core::arch::asm!("cli") };
+
+    // Re-entrancy guard: If we panic while already panicking, just halt.
+    if PANICKING.swap(true, Ordering::SeqCst) {
+        loop { unsafe { asm!("hlt"); } }
+    }
+
     // Ensure panic messages bypass the buffer and go straight to hardware
     crate::drivers::serial::SERIAL_TASK_ACTIVE.store(false, Ordering::SeqCst);
     crate::drivers::framebuffer::RENDER_TASK_ACTIVE.store(false, Ordering::SeqCst);
-
-    // Disable interrupts to prevent further issues during panic
-    unsafe { core::arch::asm!("cli") };
 
     crate::log_error!("KERNEL PANIC: {}", info);
     unsafe { exceptions::print_stack_trace(); }
@@ -497,6 +503,12 @@ fn panic(info: &PanicInfo) -> ! {
     let mut writer = exceptions::PanicWriter::new(&mut fb, 30, 90);
     use core::fmt::Write;
     let _ = writeln!(writer, "Stop Code: KERNEL_PANIC");
+    
+    if let Some(location) = info.location() {
+        let _ = writeln!(writer, "File: {}", location.file());
+        let _ = writeln!(writer, "Line: {}", location.line());
+    }
+
     let _ = writeln!(writer, "Details: {}", info);
     let _ = writeln!(writer, "\nTechnical Information:\n----------------------");
     unsafe { exceptions::print_stack_trace_to(&mut writer); }

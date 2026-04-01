@@ -164,8 +164,13 @@ pub fn dump_stack_memory<W: fmt::Write>(writer: &mut W, esp: u32, ebp: u32) {
     }
 }
 
-pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code: Option<u32>) -> ! {
+pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code: Option<u32>, location: Option<(&str, u32)>) -> ! {
     unsafe { asm!("cli", options(nomem, nostack)); }
+
+    // Prevent recursive exceptions during emergency drawing
+    if crate::kernel::PANICKING.swap(true, Ordering::SeqCst) {
+        loop { unsafe { asm!("hlt"); } }
+    }
 
     // Calculate the ESP at the time of the fault. 
     // In Ring 0, the CPU pushes EFLAGS, CS, and EIP (12 bytes).
@@ -227,6 +232,7 @@ pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code
         crate::serial_println!("\n--- PAGE FAULT DIAGNOSTICS ---");
         crate::serial_println!("Faulting Virtual Address: {:#010x}", cr2);
         crate::serial_println!("Instruction Pointer (EIP): {:#010x}", frame.instruction_pointer);
+        crate::serial_println!("CPU Flags (EFLAGS): {:#010x}", frame.cpu_flags);
         
         if let Some(code) = error_code {
             let p  = if code & (1 << 0) != 0 { "Protection Violation" } else { "Page Not Present (Unmapped)" };
@@ -235,13 +241,17 @@ pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code
             let rs = if code & (1 << 3) != 0 { " [RSVD Violation]" } else { "" };
             let id = if code & (1 << 4) != 0 { "Instruction Fetch" } else { "Data Access" };
             
-            crate::serial_println!("Cause: {} during {} in {} ({}){}", p, rw, us, id, rs);
+            crate::serial_println!("Cause: {} during {} in {} ({}){} [Code: {:#x}]", p, rw, us, id, rs, code);
         }
-        crate::serial_println!("------------------------------\n");
     }
 
     crate::serial_println!("\nCRITICAL SYSTEM ERROR: {}", display_name);
     
+    if let Some((file, line)) = location {
+        crate::serial_println!("Source: {}:{}", file, line);
+    }
+    crate::serial_println!("------------------------------\n");
+
     if let Some(code) = error_code {
         crate::serial_println!("Error Code: {:#x}", code);
     }
@@ -268,14 +278,19 @@ pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code
     use core::fmt::Write;
     let _ = writeln!(writer, "Stop Code: {}", display_name);
 
+    if let Some((file, line)) = location {
+        let _ = writeln!(writer, "At: {}:{}", file, line);
+    }
+
     if name.starts_with("PAGE FAULT") {
         let _ = writeln!(writer, "Address: {:#010x}", cr2);
+        let _ = writeln!(writer, "EFLAGS: {:#010x}", frame.cpu_flags);
         if let Some(code) = error_code {
             let p = if code & 1 != 0 { "Prot" } else { "NP" };
             let rw = if code & 2 != 0 { "W" } else { "R" };
             let us = if code & 4 != 0 { "U" } else { "K" };
             let id = if code & 16 != 0 { "IF" } else { "DA" };
-            let _ = writeln!(writer, "Flags: {} {} {} {}", p, rw, us, id);
+            let _ = writeln!(writer, "Cause: {} {} {} {} ({:#x})", p, rw, us, id, code);
         }
     }
 
@@ -300,15 +315,15 @@ pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code
 // --- Exception Handlers ---
 
 pub extern "x86-interrupt" fn divide_by_zero_handler(frame: &mut InterruptStackFrame) {
-    show_exception_screen("DIVIDE BY ZERO", frame, None);
+    show_exception_screen("DIVIDE BY ZERO", frame, None, None);
 }
 
 pub extern "x86-interrupt" fn debug_handler(frame: &mut InterruptStackFrame) {
-    show_exception_screen("DEBUG EXCEPTION (INT1/SINGLE STEP)", frame, None);
+    show_exception_screen("DEBUG EXCEPTION (INT1/SINGLE STEP)", frame, None, None);
 }
 
 pub extern "x86-interrupt" fn non_maskable_interrupt_handler(frame: &mut InterruptStackFrame) {
-    show_exception_screen("NON MASKABLE INTERRUPT", frame, None);
+    show_exception_screen("NON MASKABLE INTERRUPT", frame, None, None);
 }
 
 pub extern "x86-interrupt" fn breakpoint_handler(frame: &mut InterruptStackFrame) {
@@ -316,35 +331,35 @@ pub extern "x86-interrupt" fn breakpoint_handler(frame: &mut InterruptStackFrame
 }
 
 pub extern "x86-interrupt" fn overflow_handler(frame: &mut InterruptStackFrame) {
-    show_exception_screen("OVERFLOW", frame, None);
+    show_exception_screen("OVERFLOW", frame, None, None);
 }
 
 pub extern "x86-interrupt" fn bound_range_exceeded_handler(frame: &mut InterruptStackFrame) {
-    show_exception_screen("BOUND RANGE EXCEEDED", frame, None);
+    show_exception_screen("BOUND RANGE EXCEEDED", frame, None, None);
 }
 
 pub extern "x86-interrupt" fn invalid_opcode_handler(frame: &mut InterruptStackFrame) {
-    show_exception_screen("INVALID OPCODE", frame, None);
+    show_exception_screen("INVALID OPCODE", frame, None, None);
 }
 
 pub extern "x86-interrupt" fn device_not_available_handler(frame: &mut InterruptStackFrame) {
-    show_exception_screen("DEVICE NOT AVAILABLE", frame, None);
+    show_exception_screen("DEVICE NOT AVAILABLE", frame, None, None);
 }
 
 pub extern "x86-interrupt" fn invalid_tss_handler(frame: &mut InterruptStackFrame, error_code: u32) {
-    show_exception_screen("INVALID TSS", frame, Some(error_code));
+    show_exception_screen("INVALID TSS", frame, Some(error_code), None);
 }
 
 pub extern "x86-interrupt" fn segment_not_present_handler(frame: &mut InterruptStackFrame, error_code: u32) {
-    show_exception_screen("SEGMENT NOT PRESENT", frame, Some(error_code));
+    show_exception_screen("SEGMENT NOT PRESENT", frame, Some(error_code), None);
 }
 
 pub extern "x86-interrupt" fn stack_segment_fault_handler(frame: &mut InterruptStackFrame, error_code: u32) {
-    show_exception_screen("STACK SEGMENT FAULT", frame, Some(error_code));
+    show_exception_screen("STACK SEGMENT FAULT", frame, Some(error_code), None);
 }
 
 pub extern "x86-interrupt" fn gpf_handler(frame: &mut InterruptStackFrame, error_code: u32) {
-    show_exception_screen("GENERAL PROTECTION FAULT", frame, Some(error_code));
+    show_exception_screen("GENERAL PROTECTION FAULT", frame, Some(error_code), None);
 }
 
 pub extern "x86-interrupt" fn page_fault_handler(frame: &mut InterruptStackFrame, error_code: u32) {
@@ -358,7 +373,7 @@ pub extern "x86-interrupt" fn page_fault_handler(frame: &mut InterruptStackFrame
 
     // --- 1. Null Pointer Dereference ---
     if cr2 < 0x1000 {
-        show_exception_screen("PAGE FAULT (NULL DEREF)", frame, Some(error_code));
+        show_exception_screen("PAGE FAULT (NULL DEREF)", frame, Some(error_code), None);
     }
 
     // --- 2. Demand Paging / Auto-map Kernel Memory ---
@@ -405,31 +420,31 @@ pub extern "x86-interrupt" fn page_fault_handler(frame: &mut InterruptStackFrame
         }
     }
 
-    show_exception_screen("PAGE FAULT", frame, Some(error_code));
+    show_exception_screen("PAGE FAULT", frame, Some(error_code), None);
 }
 
 pub extern "x86-interrupt" fn x87_floating_point_handler(frame: &mut InterruptStackFrame) {
-    show_exception_screen("x87 FLOATING POINT EXCEPTION", frame, None);
+    show_exception_screen("x87 FLOATING POINT EXCEPTION", frame, None, None);
 }
 
 pub extern "x86-interrupt" fn alignment_check_handler(frame: &mut InterruptStackFrame, error_code: u32) {
-    show_exception_screen("ALIGNMENT CHECK", frame, Some(error_code));
+    show_exception_screen("ALIGNMENT CHECK", frame, Some(error_code), None);
 }
 
 pub extern "x86-interrupt" fn machine_check_handler(frame: &mut InterruptStackFrame) {
-    show_exception_screen("MACHINE CHECK", frame, None);
+    show_exception_screen("MACHINE CHECK", frame, None, None);
 }
 
 pub extern "x86-interrupt" fn simd_floating_point_handler(frame: &mut InterruptStackFrame) {
-    show_exception_screen("SIMD FLOATING POINT EXCEPTION", frame, None);
+    show_exception_screen("SIMD FLOATING POINT EXCEPTION", frame, None, None);
 }
 
 pub extern "x86-interrupt" fn virtualization_handler(frame: &mut InterruptStackFrame) {
-    show_exception_screen("VIRTUALIZATION EXCEPTION", frame, None);
+    show_exception_screen("VIRTUALIZATION EXCEPTION", frame, None, None);
 }
 
 pub extern "x86-interrupt" fn security_exception_handler(frame: &mut InterruptStackFrame, error_code: u32) {
-    show_exception_screen("SECURITY EXCEPTION", frame, Some(error_code));
+    show_exception_screen("SECURITY EXCEPTION", frame, Some(error_code), None);
 }
 
 #[no_mangle]
@@ -455,5 +470,5 @@ extern "C" fn double_fault_panic(error_code: u32) -> ! {
             cpu_flags: (*tss).eflags,
         }
     };
-    show_exception_screen("DOUBLE FAULT", &frame, Some(error_code));
+    show_exception_screen("DOUBLE FAULT", &frame, Some(error_code), None);
 }

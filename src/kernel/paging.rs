@@ -94,11 +94,13 @@ impl Drop for VirtualAddressSpace {
     fn drop(&mut self) {
         if self.owned {
             unsafe {
+                let mem_limit = crate::kernel::CONFIG.total_memory.load(Ordering::Relaxed);
+                let kernel_limit_idx = ((mem_limit + 0x4000000).max(1024 * 1024 * 1024)) >> 22;
+
                 // 1. Free all dynamically allocated page tables in this directory
                 for i in 0..1024 {
-                    // Only free tables in the "user" range (e.g., above 1GB) to avoid
-                    // accidentally freeing shared kernel page tables cloned during new_user().
-                    if i < 256 { continue; }
+                    // Protect shared kernel page tables cloned during new_user().
+                    if i < kernel_limit_idx as usize { continue; }
 
                     let entry = (*self.directory)[i];
                     if (entry & FLAG_PRESENT) != 0 && (entry & FLAG_HUGE) == 0 {
@@ -135,6 +137,14 @@ impl VirtualAddressSpace {
             // Clone the current kernel page directory to share kernel-space mappings
             core::ptr::copy_nonoverlapping((*core::ptr::addr_of!(PAGE_DIRECTORY)).0.as_ptr(), ptr as *mut u32, 1024);
             
+            // Ensure the User bit is set on all Page Directory Entries.
+            // This allows PTEs to control the actual User/Kernel access.
+            for i in 0..1024 {
+                if ((*ptr)[i] & FLAG_PRESENT) != 0 {
+                    (*ptr)[i] |= FLAG_USER;
+                }
+            }
+
             Some(Self { directory: ptr, owned: true })
         }
     }
@@ -154,15 +164,15 @@ impl VirtualAddressSpace {
                 if (entry & FLAG_HUGE) != 0 {
                     let new_table = allocate_frame()?;
                     let base_phys = entry & 0xFFC00000;
-                    let flags = entry & 0xFFF & !FLAG_HUGE;
+                    let pd_flags = (entry & 0xFFF) & !FLAG_HUGE;
 
                     // Populate the new table with 1024 identity mappings for the 4MB range
                     for i in 0..1024 {
-                        (*new_table)[i] = base_phys + (i as u32 * 4096) | flags;
+                        (*new_table)[i] = base_phys + (i as u32 * 4096) | pd_flags;
                     }
 
                     // Replace the Huge Page entry with the new Page Table
-                    (*self.directory)[pd_idx] = (new_table as u32) | FLAG_PRESENT | FLAG_WRITABLE;
+                    (*self.directory)[pd_idx] = (new_table as u32) | pd_flags | FLAG_PRESENT | FLAG_WRITABLE;
                     
                     // Flush TLB for the entire 4MB region
                     asm!("invlpg [{}]", in(reg) base_phys);
