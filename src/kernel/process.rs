@@ -469,6 +469,10 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
     // Update RTC/System time after EOI to prevent hardware bus stalls
     rtc::handle_timer_tick();
 
+    // Switch to kernel directory immediately to safely reap and schedule.
+    // This prevents a race where we drop the address space currently in CR3.
+    unsafe { asm!("mov cr3, {}", in(reg) crate::kernel::paging::get_kernel_pd_ptr()); }
+
     let mut scheduler = SCHEDULER.lock();
     let current_ticks = TICKS.load(Ordering::Relaxed);
 

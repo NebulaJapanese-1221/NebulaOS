@@ -137,9 +137,12 @@ impl VirtualAddressSpace {
             // Clone the current kernel page directory to share kernel-space mappings
             core::ptr::copy_nonoverlapping((*core::ptr::addr_of!(PAGE_DIRECTORY)).0.as_ptr(), ptr as *mut u32, 1024);
             
-            // Ensure the User bit is set on all Page Directory Entries.
-            // This allows PTEs to control the actual User/Kernel access.
-            for i in 0..1024 {
+            let mem_limit = crate::kernel::CONFIG.total_memory.load(Ordering::Relaxed);
+            let kernel_limit_idx = ((mem_limit + 0x4000000).max(1024 * 1024 * 1024)) >> 22;
+
+            // Only set the User bit on entries that are NOT part of the reserved kernel space.
+            // This enforces hardware-level isolation for the kernel's identity map.
+            for i in (kernel_limit_idx as usize)..1024 {
                 if ((*ptr)[i] & FLAG_PRESENT) != 0 {
                     (*ptr)[i] |= FLAG_USER;
                 }
