@@ -13,6 +13,7 @@ pub mod exceptions;
 pub mod power;
 pub mod gdt;
 pub mod syscall;
+pub mod paging; // Make paging module public
 pub mod process;
 pub mod cpu;
 pub mod elf;

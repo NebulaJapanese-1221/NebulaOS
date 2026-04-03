@@ -1227,6 +1227,10 @@ impl WindowManager {
                 x_offset += button_width as isize + 5;
             }
 
+            // Draw the volume control
+            let vol_x = width as isize - 180;
+            draw_volume_control(fb, vol_x, taskbar_y + 14, clip);
+
             // Draw the time on the right side
             self.draw_clock_on_taskbar(fb, clip);
     }
@@ -1486,6 +1490,31 @@ impl WindowManager {
                     }
                 }
             }
+    }
+}
+
+/// Draws a volume level indicator on the screen.
+pub fn draw_volume_control(fb: &mut framebuffer::Framebuffer, x: isize, y: isize, clip: Rect) {
+    let speaker = crate::drivers::speaker::SPEAKER.lock();
+    let vol = speaker.master_volume;
+    let is_muted = speaker.muted;
+    drop(speaker);
+
+    // Remap hardware attenuation (0-63, where 0 is max) to 0-100% fill
+    let percent = 100 - (vol as u32 * 100 / 63);
+    
+    let width = 60;
+    let height = 12;
+    
+    draw_rect(fb, x, y, width, height, 0x00_10_10_10, Some(clip)); // Background
+    let fill_w = (width * percent as usize) / 100;
+
+    if is_muted {
+        draw_rect(fb, x, y, fill_w, height, 0x00_44_44_44, Some(clip)); // Gray Fill when muted
+        font::draw_string(fb, x - 45, y - 2, "MUTE", 0x00_FF_00_00, Some(clip)); // Red Mute Icon
+    } else {
+        draw_rect(fb, x, y, fill_w, height, 0x00_00_AA_00, Some(clip)); // Green Fill
+        font::draw_string(fb, x - 35, y - 2, "VOL", 0x00_FFFFFF, Some(clip));
     }
 }
 

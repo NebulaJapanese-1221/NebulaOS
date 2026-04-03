@@ -1,4 +1,4 @@
-# NebulaOS
+# NebulaOS v0.0.3-dev2
 
 NebulaOS is a x86 based hobby operating system written in Rust.
 

@@ -2,7 +2,9 @@
 - Note: the date between "()" is the release date for each version
 
 ## v0.0.3-dev2 (In Progress)
-- Development started
+- Added robust Framebuffer initialization with support for 15-bit (RGB555) and 16-bit (RGB565) color depths.
+- Re-implemented a streamlined PAE Paging system (under 200 lines) for improved kernel identity mapping stability.
+- Implemented a DMA-based PCM audio engine
 
 ## v0.0.3-dev (03-22-2026)
 - Added proper System Information detection (CPUID for Brand String).
