@@ -1,4 +1,8 @@
 # NebulaOS Version History
+- Note: the date between "()" is the release date for each version
+
+## v0.0.3-dev2 (In Progress)
+- Development started
 
 ## v0.0.3-dev (03-22-2026)
 - Added proper System Information detection (CPUID for Brand String).
