@@ -16,11 +16,13 @@ pub const FLAG_NX: u64 = 1 << 63;  // No-Execute bit
 /// Page Directory Pointer Table (4 entries, each mapping 1GB)
 #[repr(align(4096))]
 struct Pdpt([u64; 4]);
+pub(crate) struct Pdpt([u64; 4]);
 
 #[derive(Clone, Copy, Debug)]
 /// Page Directory (512 entries, each mapping 2MB)
 #[repr(align(4096))]
 struct PageDirectory([u64; 512]);
+pub(crate) struct PageDirectory([u64; 512]);
 
 #[no_mangle]
 static mut KERNEL_PDPT: Pdpt = Pdpt([0; 4]);
@@ -235,6 +237,9 @@ impl VirtualAddressSpace {
                     let new_table = allocate_frame()?;
                     let base_phys = entry & !0x1FFFFF; // 2MB Alignment
                     let pd_flags = (entry & 0x8000000000000FFF) & !FLAG_HUGE; // Keep NX and standard flags
+                    let mut pd_flags = (entry & 0x8000000000000FFF) & !FLAG_HUGE; 
+                    // Ensure User mode permission is propagated if this is a user address space
+                    if self.owned { pd_flags |= FLAG_USER; }
 
                     // Populate new table for the 2MB range
                     for i in 0..512 {

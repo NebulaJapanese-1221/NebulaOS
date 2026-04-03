@@ -33,6 +33,9 @@ pub struct Framebuffer {
     pub draw_buffer: Option<Vec<u32>>,
     /// An intermediate buffer that holds the frame ready for VRAM blitting.
     pub ready_buffer: Option<Vec<u32>>,
+    /// A dedicated scratch buffer for large pixel operations (like fading or row processing).
+    /// Using this prevents stack overflows during complex GUI operations.
+    pub scratch_buffer: Option<Vec<u32>>,
     /// Flag indicating if a new frame is ready in the ready_buffer.
     pub frame_ready: AtomicBool,
     /// Bounding box of the region that needs to be blitted.
@@ -46,7 +49,7 @@ pub struct Framebuffer {
 impl Framebuffer {
     pub const fn new() -> Self {
         Framebuffer { 
-            info: None, draw_buffer: None, ready_buffer: None,
+            info: None, draw_buffer: None, ready_buffer: None, scratch_buffer: None,
             frame_ready: AtomicBool::new(false),
             dirty_x1: 0, dirty_y1: 0, dirty_x2: 0, dirty_y2: 0,
             clip_rect: None 
@@ -71,6 +74,10 @@ impl Framebuffer {
             }
             self.ready_buffer = Some(Vec::with_capacity(buffer_size));
             if let Some(ref mut buffer) = self.ready_buffer {
+                buffer.resize(buffer_size, 0);
+            }
+            self.scratch_buffer = Some(Vec::with_capacity(buffer_size));
+            if let Some(ref mut buffer) = self.scratch_buffer {
                 buffer.resize(buffer_size, 0);
             }
 
@@ -135,6 +142,30 @@ impl Framebuffer {
         }
     }
 
+    /// Fades the contents of the draw_buffer using the scratch_buffer as a workspace.
+    /// This avoids large stack allocations that cause overflows in kernel tasks.
+    pub fn apply_fade(&mut self, step: u32, max: u32) {
+        if max == 0 { return; }
+
+        // If this is the start of a fade sequence, cache the current draw_buffer into scratch.
+        // This allows us to always fade from the original "source of truth".
+        if step == max {
+            if let (Some(ref draw), Some(ref mut scratch)) = (&self.draw_buffer, &mut self.scratch_buffer) {
+                scratch.copy_from_slice(draw);
+            }
+        }
+
+        if let (Some(ref scratch), Some(ref mut draw)) = (&self.scratch_buffer, &mut self.draw_buffer) {
+            for i in 0..scratch.len() {
+                let pixel = scratch[i];
+                let a = pixel & 0xFF000000;
+                let r = (((pixel >> 16) & 0xFF) * step) / max;
+                let g = (((pixel >> 8) & 0xFF) * step) / max;
+                let b = ((pixel & 0xFF) * step) / max;
+                draw[i] = a | (r << 16) | (g << 8) | b;
+            }
+        }
+    }
     /// Marks the whole screen as dirty and ready for presentation.
     pub fn present(&mut self) {
         if let Some(info) = self.info {

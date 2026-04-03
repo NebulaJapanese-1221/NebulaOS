@@ -111,9 +111,9 @@ pub fn dump_stack_memory<W: fmt::Write>(writer: &mut W, esp: u32, ebp: u32) {
     
     let _ = writeln!(writer, "\nMEMORY_DUMP (ESP: {:#x}):", esp);
     
-    // Sanity check: If ESP is null or near-zero, we cannot dump memory safely.
-    if esp < 0x1000 {
-        let _ = writeln!(writer, "  <Invalid ESP: Memory dump aborted to prevent recursive fault>");
+    // Sanity check: If ESP is garbage, don't attempt a dump
+    if esp < 0x1000 || esp > 0x07FFFFF0 {
+        let _ = writeln!(writer, "  <ESP outside reasonable memory bounds: Dump aborted>");
         return;
     }
 

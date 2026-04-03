@@ -218,7 +218,7 @@ impl Scheduler {
         let id = idx; // Use slot index as ID for stable mapping
         
         // Allocate a kernel stack for this task
-        let stack_size = 65536;
+        let stack_size = 131072; // Increased to 128KB for safer kernel operations
         // Allocate extra space (3 pages) for: 1 page for Canary, 1 page for Guard, 1 page for Alignment Slop
         let mut stack = Vec::with_capacity(stack_size + 12288);
         stack.resize(stack_size + 12288, 0);
