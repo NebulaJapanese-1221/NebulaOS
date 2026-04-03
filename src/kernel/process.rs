@@ -139,6 +139,8 @@ pub struct Task {
     pub age: usize,
     pub guard_page: usize,
     pub address_space: Option<VirtualAddressSpace>,
+    pub heap_start: usize,
+    pub heap_limit: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,6 +188,8 @@ impl Scheduler {
             age: 0,
             guard_page: 0,
             address_space: None,
+            heap_start: 0,
+            heap_limit: 0,
         });
         self.current_index = 0;
         self.initialized = true;
@@ -193,7 +197,14 @@ impl Scheduler {
 
     /// Creates a new task jumping to the given entry point.
     /// The entry_point function will be called by a wrapper that handles task exit.
-    pub fn add_task(&mut self, entry_point: usize, priority: usize, address_space: Option<VirtualAddressSpace>) {
+    pub fn add_task(
+        &mut self,
+        entry_point: usize,
+        priority: usize,
+        address_space: Option<VirtualAddressSpace>,
+        heap_start: usize,
+        heap_limit: usize,
+    ) {
         // Find an available slot in the fixed-size array
         let mut slot_idx = None;
         for i in 0..MAX_TASKS {
@@ -219,7 +230,7 @@ impl Scheduler {
 
         // 2. Align guard page. We ensure it's at least 4KB away from raw_ptr 
         // so that the canary at raw_ptr isn't unmapped if raw_ptr is page-aligned.
-        let guard_page = (raw_ptr + 4096) & !4095;
+        let guard_page = (raw_ptr + 8191) & !4095;
         let usable_stack_bottom = guard_page + 4096;
         
         // Hardware Guard: Unmap the page immediately before the usable stack
@@ -236,9 +247,17 @@ impl Scheduler {
                 *(*sp_ptr as *mut usize) = val;
             };
 
-            if address_space.is_some() {
+            if let Some(ref vas) = address_space {
                 // User task: Set up for user mode execution
-                // EFLAGS: IOPL=3 (bits 12,13), IF=1 (bit 9), always 2 (bit 1)
+                // 1. Initialize user stack. We map only the top page eagerly to handle 
+                // the initial ring transition; the rest is demand-paged.
+                let user_stack_top = 0xC0000000;
+                let frame = crate::kernel::paging::allocate_frame().expect("User stack top alloc failed");
+                vas.map_page(user_stack_top - 4096, frame as usize, crate::kernel::paging::FLAG_PRESENT | crate::kernel::paging::FLAG_WRITABLE | crate::kernel::paging::FLAG_USER);
+
+                // 2. Push User-Mode hardware frame (SS, ESP, EFLAGS, CS, EIP)
+                push(0x23, &mut sp);        // SS (User Data Segment + RPL 3)
+                push(user_stack_top - 16, &mut sp); // ESP (aligned)
                 push(0x3202, &mut sp);      // EFLAGS
                 push(0x1B, &mut sp);       // CS (User Code Segment + RPL 3)
                 push(entry_point, &mut sp); // EIP (User task entry point)
@@ -278,6 +297,8 @@ impl Scheduler {
             age: 0,
             guard_page,
             address_space,
+            heap_start,
+            heap_limit,
         });
     }
 
@@ -512,7 +533,7 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
             if task.state == TaskState::Exited && task.id != 0 && !is_current {
                 // Restore the guard page so the allocator doesn't fault when freeing the Vec
                 if task.guard_page != 0 {
-                    VirtualAddressSpace::kernel().map_page(task.guard_page, task.guard_page, 0x03);
+                    VirtualAddressSpace::kernel().map_page(task.guard_page, task.guard_page, crate::kernel::paging::FLAG_PRESENT | crate::kernel::paging::FLAG_WRITABLE);
                 }
                 scheduler.tasks[i] = None;
             }

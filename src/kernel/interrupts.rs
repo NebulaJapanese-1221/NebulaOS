@@ -56,6 +56,9 @@ pub struct InterruptStackFrame {
     pub instruction_pointer: u32,
     pub code_segment: u32,
     pub cpu_flags: u32,
+    // Only present on cross-ring (User -> Kernel) interrupts
+    pub stack_pointer: u32,
+    pub stack_segment: u32,
 }
 
 // Helper function to set an IDT entry

@@ -33,6 +33,7 @@ pub const FEATURE_SSE4_1: u32 = 1 << 4;
 pub const FEATURE_SSE4_2: u32 = 1 << 5;
 pub const FEATURE_AVX: u32 = 1 << 6;
 pub const FEATURE_FPU: u32 = 1 << 7;
+pub const FEATURE_NX: u32 = 1 << 8;
 
 pub struct KernelConfig {
     pub tsc_frequency: AtomicU32,
@@ -401,8 +402,8 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     
     // Start critical background services before showing the logo.
     // This ensures that VRAM blitting and serial logging are non-blocking.
-    crate::kernel::process::SCHEDULER.lock().add_task(framebuffer_blit_task as *const () as usize, 20, None); // High priority
-    crate::kernel::process::SCHEDULER.lock().add_task(serial_output_task as *const () as usize, 20, None); // Boosted for boot
+    crate::kernel::process::SCHEDULER.lock().add_task(framebuffer_blit_task as *const () as usize, 20, None, 0, 0); // High priority
+    crate::kernel::process::SCHEDULER.lock().add_task(serial_output_task as *const () as usize, 20, None, 0, 0); // Boosted for boot
 
     // Enable interrupts: Background tasks and PIT heartbeat (TICKS) start now.
     interrupts::enable_interrupts();
@@ -411,12 +412,12 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
 
     // PHASE 3.5: Initialize Idle Task
     let idle_entry = crate::kernel::process::idle_task as *const () as usize;
-    crate::kernel::process::SCHEDULER.lock().add_task(idle_entry, 0, None);
+    crate::kernel::process::SCHEDULER.lock().add_task(idle_entry, 0, None, 0, 0);
 
     // PHASE 4: Visual Startup
     draw_boot_screen();
     BOOT_ANIMATION_RUNNING.store(true, Ordering::Relaxed);
-    crate::kernel::process::SCHEDULER.lock().add_task(boot_animation_task as *const () as usize, 20, None);
+    crate::kernel::process::SCHEDULER.lock().add_task(boot_animation_task as *const () as usize, 20, None, 0, 0);
 
     // PHASE 5: Peripheral Drivers
     if let Err(e) = crate::drivers::mouse::initialize() { show_boot_error(e); }
@@ -456,7 +457,7 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     crate::userspace::gui::init();
     
     let render_entry = crate::userspace::gui::window_manager::WindowManager::render_loop as *const () as usize;
-    crate::kernel::process::SCHEDULER.lock().add_task(render_entry, 15, None);
+    crate::kernel::process::SCHEDULER.lock().add_task(render_entry, 15, None, 0, 0);
 
     // PHASE 8: Main Event Loop
     loop {

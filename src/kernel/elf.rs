@@ -80,14 +80,32 @@ pub fn load_and_run(data: &[u8]) -> bool {
                 image_end = end;
             }
             
-            // We map the segment as Read-Only + CoW + User.
-            // The Copy-on-Write mechanism in the page fault handler will handle writes.
+            // Map the file-backed portion of the segment as CoW
             address_space.map_region(
                 ph.vaddr as usize,
                 phys_addr,
-                ph.memsz as usize,
+                ph.filesz as usize,
                 FLAG_PRESENT | FLAG_COW | FLAG_USER
             );
+
+            // Map the remaining memory size (BSS) to fresh zeroed pages 
+            // to prevent leaking kernel heap data into the process.
+            if ph.memsz > ph.filesz {
+                let bss_start = (ph.vaddr + ph.filesz) as usize;
+                let bss_end = (ph.vaddr + ph.memsz) as usize;
+                
+                // Align to page boundary for the first pure-BSS page
+                let bss_page_start = (bss_start + 4095) & !4095;
+                for addr in (bss_page_start..bss_end).step_by(4096) {
+                    if let Some(frame) = allocate_frame() {
+                        address_space.map_page(
+                            addr,
+                            frame as usize,
+                            FLAG_PRESENT | FLAG_WRITABLE | FLAG_USER
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -95,6 +113,7 @@ pub fn load_and_run(data: &[u8]) -> bool {
     // We place the heap right after the program segments, aligned to a page boundary.
     let heap_start = (image_end + 4095) & !4095;
     let initial_heap_pages = 16; // 64 KB initial heap
+    let heap_limit = heap_start + (initial_heap_pages * 4096);
 
     for i in 0..initial_heap_pages {
         if let Some(frame) = allocate_frame() {
@@ -110,6 +129,12 @@ pub fn load_and_run(data: &[u8]) -> bool {
     // We map the entry point directly. Note: We no longer need to "leak" memory
     // here because the address space handles the mapping to the 'data' buffer.
     // In a production kernel, 'data' should be backed by a persistent Page Cache.
-    crate::kernel::process::SCHEDULER.lock().add_task(header.entry as usize, 10, Some(address_space));
+    crate::kernel::process::SCHEDULER.lock().add_task(
+        header.entry as usize,
+        10,
+        Some(address_space),
+        heap_start,
+        heap_limit,
+    );
     true
 }

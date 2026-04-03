@@ -48,7 +48,7 @@ pub fn framebuffer_info(multiboot_info_ptr: usize) -> Option<(usize, usize, usiz
     let multiboot_info = unsafe { &*(multiboot_info_ptr as *const MultibootInfo) };
 
     // Check if framebuffer info is present (bit 12) and type is RGB (1)
-    if multiboot_info.flags & (1 << 12) != 0 && multiboot_info.framebuffer_type == 1 {
+    if (multiboot_info.flags & (1 << 12)) != 0 && multiboot_info.framebuffer_type == 1 {
         Some((multiboot_info.framebuffer_addr as usize, multiboot_info.framebuffer_width as usize, multiboot_info.framebuffer_height as usize, multiboot_info.framebuffer_pitch as usize, multiboot_info.framebuffer_bpp))
     } else {
         None

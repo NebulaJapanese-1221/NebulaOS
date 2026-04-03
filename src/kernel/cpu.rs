@@ -62,6 +62,13 @@ pub fn init() {
     if (ecx & (1 << 20)) != 0 { feat_mask |= crate::kernel::FEATURE_SSE4_2; }
     if (ecx & (1 << 28)) != 0 { feat_mask |= crate::kernel::FEATURE_AVX; }
 
+    // Detect NX (No-Execute) support
+    let mut edx_ext: u32;
+    unsafe {
+        asm!("cpuid", inout("eax") 0x80000001u32 => _, out("ebx") _, out("ecx") _, out("edx") edx_ext);
+    }
+    if (edx_ext & (1 << 20)) != 0 { feat_mask |= crate::kernel::FEATURE_NX; }
+
     crate::kernel::CONFIG.features.store(feat_mask, Ordering::SeqCst);
 
     // Diagnostic log for detected features
@@ -138,6 +145,19 @@ pub fn accumulate_usage(cycles: u64, is_idle: bool) {
 
         let usage = if total > 0 { 100 - (idle * 100 / total) as usize } else { 0 };
         CPU_USAGE.store(usage, Ordering::Relaxed);
+    }
+}
+
+/// Enables the No-Execute (NX) bit in the EFER MSR if supported.
+pub fn enable_nx() {
+    if crate::kernel::CONFIG.has_feature(crate::kernel::FEATURE_NX) {
+        unsafe {
+            let mut low: u32;
+            let mut high: u32;
+            asm!("rdmsr", in("ecx") 0xC0000080u32, out("eax") low, out("edx") high);
+            low |= 1 << 11; // NXE bit
+            asm!("wrmsr", in("ecx") 0xC0000080u32, in("eax") low, in("edx") high);
+        }
     }
 }
 

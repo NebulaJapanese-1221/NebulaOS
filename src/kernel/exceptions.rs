@@ -4,7 +4,7 @@ use crate::drivers::framebuffer::{self, FRAMEBUFFER};
 use crate::userspace::fonts::font;
 use core::sync::atomic::Ordering;
 use super::interrupts::InterruptStackFrame;
-use super::paging::{FLAG_COW, FLAG_WRITABLE, FLAG_PRESENT};
+use super::paging::{FLAG_COW, FLAG_WRITABLE, FLAG_PRESENT, FLAG_USER};
 
 // --- Panic/Exception Screen Implementation ---
 
@@ -173,11 +173,11 @@ pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code
     }
 
     // Calculate the ESP at the time of the fault. 
-    // In Ring 0, the CPU pushes EFLAGS, CS, and EIP (12 bytes).
-    // If an error code exists, it pushes that first (total 16 bytes).
-    let faulting_esp = match error_code {
-        Some(_) => (frame as *const _ as u32) + 16,
-        None => (frame as *const _ as u32) + 12,
+    let faulting_esp = if (frame.code_segment & 0x03) != 0 {
+        frame.stack_pointer // Ring 3 fault: use the hardware-pushed ESP
+    } else {
+        // Ring 0 fault: ESP was just before the hardware frame
+        (frame as *const _ as u32) + if error_code.is_some() { 16 } else { 12 }
     };
 
     // Capture CPU state immediately
@@ -235,11 +235,11 @@ pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code
         crate::serial_println!("CPU Flags (EFLAGS): {:#010x}", frame.cpu_flags);
         
         if let Some(code) = error_code {
-            let p  = if code & (1 << 0) != 0 { "Protection Violation" } else { "Page Not Present (Unmapped)" };
-            let rw = if code & (1 << 1) != 0 { "Write" } else { "Read" };
-            let us = if code & (1 << 2) != 0 { "User Mode" } else { "Kernel Mode" };
-            let rs = if code & (1 << 3) != 0 { " [RSVD Violation]" } else { "" };
-            let id = if code & (1 << 4) != 0 { "Instruction Fetch" } else { "Data Access" };
+            let p  = if (code & (1 << 0)) != 0 { "Protection Violation" } else { "Page Not Present (Unmapped)" };
+            let rw = if (code & (1 << 1)) != 0 { "Write" } else { "Read" };
+            let us = if (code & (1 << 2)) != 0 { "User Mode" } else { "Kernel Mode" };
+            let rs = if (code & (1 << 3)) != 0 { " [RSVD Violation]" } else { "" };
+            let id = if (code & (1 << 4)) != 0 { "Instruction Fetch" } else { "Data Access" };
             
             crate::serial_println!("Cause: {} during {} in {} ({}){} [Code: {:#x}]", p, rw, us, id, rs, code);
         }
@@ -370,24 +370,46 @@ pub extern "x86-interrupt" fn page_fault_handler(frame: &mut InterruptStackFrame
     let present = (error_code & 0x01) != 0;
     // Bit 1: 1 if write, 0 if read
     let is_write = (error_code & 0x02) != 0;
+    // Bit 2: 1 if user mode, 0 if kernel mode
+    let is_user = (error_code & 0x04) != 0;
 
     // --- 1. Null Pointer Dereference ---
     if cr2 < 0x1000 {
         show_exception_screen("PAGE FAULT (NULL DEREF)", frame, Some(error_code), None);
     }
 
-    // --- 2. Demand Paging / Auto-map Kernel Memory ---
+    // --- 2. Demand Paging ---
     if !present {
-        let total_mem = crate::kernel::CONFIG.total_memory.load(Ordering::Relaxed);
-        if cr2 < total_mem {
-            // Demand Paging: Allocate a brand new physical frame from our pool
-            // and map it to the faulting virtual address.
-            if let Some(new_frame) = crate::kernel::paging::allocate_frame() {
-                let vas = crate::kernel::paging::VirtualAddressSpace::kernel();
-                vas.map_page(cr2, new_frame as usize, FLAG_PRESENT | FLAG_WRITABLE);
-                return; // Retry the instruction
+        if is_user {
+            // User-mode Demand Paging (Heap/Stack Growth)
+            // Use try_lock to avoid deadlocks if the fault happened in a sensitive area
+            if let Some(scheduler) = crate::kernel::process::SCHEDULER.try_lock() {
+                if let Some(task) = &scheduler.tasks[scheduler.current_index] {
+                    if let Some(vas) = &task.address_space {
+                    // Demand Paging: User Heap or User Stack.
+                    // The user stack is currently hardcoded as the 64KB region ending at 0xC0000000.
+                    let is_heap = cr2 >= task.heap_start && cr2 < task.heap_limit;
+                    let is_stack = cr2 >= 0xBFFF0000 && cr2 < 0xC0000000;
+
+                    if is_heap || is_stack {
+                            if let Some(new_frame) = crate::kernel::paging::allocate_frame() {
+                                vas.map_page(cr2, new_frame as usize, FLAG_PRESENT | FLAG_WRITABLE | FLAG_USER);
+                                return; // Successfully mapped, retry user instruction
+                            }
+                        }
+                    }
+                }
             }
-            // If allocation fails, fall through to the panic screen
+        } else {
+            // Kernel-mode Demand Paging (Identity Mapping)
+            let total_mem = crate::kernel::CONFIG.total_memory.load(Ordering::Relaxed);
+            if cr2 < total_mem {
+                if let Some(new_frame) = crate::kernel::paging::allocate_frame() {
+                    let vas = crate::kernel::paging::VirtualAddressSpace::kernel();
+                    vas.map_page(cr2, new_frame as usize, FLAG_PRESENT | FLAG_WRITABLE);
+                    return; // Retry the instruction
+                }
+            }
         }
     }
 
@@ -397,23 +419,19 @@ pub extern "x86-interrupt" fn page_fault_handler(frame: &mut InterruptStackFrame
         if let Some(scheduler) = crate::kernel::process::SCHEDULER.try_lock() {
             let vas = scheduler.tasks[scheduler.current_index].as_ref().and_then(|t| t.address_space.as_ref());
             if let Some(vas) = vas {
-                if let Some(entry) = vas.get_page_entry(cr2) {
+                if let Some(entry) = vas.get_page_entry(cr2) { // entry is u64
                     if (entry & FLAG_COW) != 0 {
-                        // Handle Copy-on-Write
-                        use core::alloc::Layout;
-                        use alloc::alloc::alloc;
-                        unsafe {
-                        let layout = Layout::from_size_align(4096, 4096).unwrap();
-                        let new_page = alloc(layout);
-                        
-                        // Copy data from the original (now shared) physical page
-                        let old_page_ptr = (cr2 & !0xFFF) as *const u8;
-                        core::ptr::copy_nonoverlapping(old_page_ptr, new_page, 4096);
+                        // Allocate a new physical frame for the private copy
+                        if let Some(new_frame) = crate::kernel::paging::allocate_frame() {
+                            unsafe {
+                                let old_page_ptr = (cr2 & !0xFFF) as *const u8;
+                                core::ptr::copy_nonoverlapping(old_page_ptr, new_frame as *mut u8, 4096);
 
-                        // Remap the virtual address to the new private page
-                        vas.map_page(cr2, new_page as usize, FLAG_PRESENT | FLAG_WRITABLE);
-                    }
-                        return; // Successfully handled CoW, resume execution
+                                // Remap to the new private frame, ensuring FLAG_USER is preserved
+                                vas.map_page(cr2, new_frame as usize, FLAG_PRESENT | FLAG_WRITABLE | FLAG_USER);
+                            }
+                            return; // Successfully handled CoW
+                        }
                     }
                 }
             }
@@ -459,15 +477,17 @@ pub extern "C" fn double_fault_task_handler() -> ! {
 // This function is safe to call as it's on a new stack.
 #[no_mangle]
 extern "C" fn double_fault_panic(error_code: u32) -> ! {
-    // Retrieve the state of the task that caused the double fault from the main TSS.
-    // When the Task Gate triggers, the CPU saves the old state into the TSS pointed to
-    // by the previous Task Register (TR). Since we only have one main TSS, that's where it is.
+    // Retrieve the state of the task that caused the double fault from the main TSS. 
+    // When the Task Gate triggers, the CPU saves the old state into the TSS pointed to 
+    // by the previous Task Register (TR). Since we only have one main TSS, that's where it is. 
     let frame = unsafe {
-        let tss = &raw const crate::kernel::gdt::TSS;
+        let tss = core::ptr::addr_of!(crate::kernel::gdt::TSS);
         InterruptStackFrame {
             instruction_pointer: (*tss).eip,
             code_segment: (*tss).cs,
             cpu_flags: (*tss).eflags,
+            stack_pointer: (*tss).esp,
+            stack_segment: (*tss).ss,
         }
     };
     show_exception_screen("DOUBLE FAULT", &frame, Some(error_code), None);
