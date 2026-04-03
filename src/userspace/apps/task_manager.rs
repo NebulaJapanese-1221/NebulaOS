@@ -26,10 +26,10 @@ impl TaskManager {
     pub fn new() -> Self {
         Self {
             state: Arc::new(Mutex::new(TaskManagerState {
-                mem_history: Vec::with_capacity(256),
-                cpu_history: Vec::with_capacity(256),
+                mem_history: Vec::new(),
+                cpu_history: Vec::new(),
                 last_tick: 0,
-                graph_buffer: Vec::with_capacity(800 * 100),
+                graph_buffer: Vec::new(),
             })),
         }
     }
@@ -44,7 +44,7 @@ impl App for TaskManager {
         let mut y = win.y + 20 + 5;
         let x = win.x + 5;
 
-        // Draw Process List Header
+        // Draw Header
         font::draw_string(fb, x, y, "ID   State", 0x00_FF_FF_FF, None);
         y += font_height as isize + 5;
         
@@ -53,14 +53,11 @@ impl App for TaskManager {
         y += 5;
 
         let scheduler = SCHEDULER.lock();
-        for (i, task_opt) in scheduler.tasks.iter().enumerate() {
-            if let Some(task) = task_opt {
-            // Simple state visualization
+        for (i, task) in scheduler.tasks.iter().enumerate() {
             let state = if i == scheduler.current_index { "Running" } else { "Ready" };
             let line = format!("{:<4} {}", task.id, state);
             font::draw_string(fb, x, y, &line, 0x00_CC_CC_CC, None);
             y += font_height as isize + 2;
-        }
         }
 
         // --- Draw Memory Graph ---
@@ -79,40 +76,35 @@ impl App for TaskManager {
         if current_tick > state.last_tick + 200 {
             state.last_tick = current_tick;
             let used_bytes = ALLOCATOR.lock().used();
-            // Convert to MB
-            state.mem_history.push(used_bytes / 1024 / 1024); 
+            state.mem_history.push(used_bytes / 1024 / 1024);
 
             // Read CPU usage from kernel stats
             let cpu_usage = crate::kernel::cpu::CPU_USAGE.load(Ordering::Relaxed);
             state.cpu_history.push(cpu_usage as usize);
 
             // Limit history size to fit graph (4px per bar)
-            let max_points = (graph_width / 4) as usize;
+            let max_points = graph_width / 4;
             if state.mem_history.len() > max_points {
-                let drain_count = state.mem_history.len() - max_points;
-                state.mem_history.drain(0..drain_count);
+                state.mem_history.remove(0);
             }
             if state.cpu_history.len() > max_points {
-                let drain_count = state.cpu_history.len() - max_points;
-                state.cpu_history.drain(0..drain_count);
+                state.cpu_history.remove(0);
             }
         }
 
         // Draw bars
-        let total_mem = crate::kernel::CONFIG.total_memory.load(Ordering::Relaxed) / 1024 / 1024;
+        let total_mem = crate::kernel::TOTAL_MEMORY.load(Ordering::Relaxed) / 1024 / 1024;
         let mem_scale_max = if total_mem > 0 { total_mem } else { 128 };
-
-        // Destructure state to allow simultaneous borrows of disjoint fields
-        let TaskManagerState { ref mem_history, ref cpu_history, ref mut graph_buffer, .. } = *state;
 
         // Resize and clear local buffer
         let buf_size = graph_width * graph_height;
-        if graph_buffer.len() != buf_size {
-            graph_buffer.resize(buf_size, 0);
+        if state.graph_buffer.len() != buf_size {
+            state.graph_buffer.resize(buf_size, 0);
         }
-        graph_buffer.fill(0xFF_20_20_20); // Opaque dark gray background
+        state.graph_buffer.fill(0xFF_20_20_20); // Opaque dark gray background
 
-        for (i, &val) in mem_history.iter().enumerate() { 
+        let mem_history = state.mem_history.clone();
+        for (i, &val) in mem_history.iter().enumerate() {
             let bar_h = (val * graph_height) / mem_scale_max;
             let bar_x = i * 4;
             
@@ -120,15 +112,15 @@ impl App for TaskManager {
                 let start_y = graph_height.saturating_sub(bar_h);
                 for by in start_y..graph_height {
                     for bx in 0..3 {
-                        graph_buffer[by * graph_width + (bar_x + bx)] = 0xFF_00_AA_00;
+                        state.graph_buffer[by * graph_width + (bar_x + bx)] = 0xFF_00_AA_00;
                     }
                 }
             }
         }
         // Blit memory graph
-        fb.draw_bitmap(x as usize, y as usize, graph_width, graph_height, graph_buffer.as_slice());
+        fb.draw_bitmap(x as usize, y as usize, graph_width, graph_height, &state.graph_buffer);
 
-        let last_mem = mem_history.last().copied().unwrap_or(0);
+        let last_mem = state.mem_history.last().copied().unwrap_or(0);
         font::draw_string(fb, x + 5, y + 5, &format!("{} / {} MB", last_mem, mem_scale_max), 0x00_FFFFFF, None);
 
         // --- Draw CPU Graph ---
@@ -138,8 +130,9 @@ impl App for TaskManager {
             y += font_height as isize + 2;
 
             // Reuse buffer for CPU graph
-            graph_buffer.fill(0xFF_20_20_20);
+            state.graph_buffer.fill(0xFF_20_20_20);
 
+            let cpu_history = state.cpu_history.clone();
             for (i, &val) in cpu_history.iter().enumerate() {
                 // Clamp to 100%
                 let safe_val = if val > 100 { 100 } else { val };
@@ -155,16 +148,16 @@ impl App for TaskManager {
                     let start_y = graph_height.saturating_sub(bar_h);
                     for by in start_y..graph_height {
                         for bx in 0..3 {
-                            graph_buffer[by * graph_width + (bar_x + bx)] = color;
+                            state.graph_buffer[by * graph_width + (bar_x + bx)] = color;
                         }
                     }
                 }
             }
             
             // Blit CPU graph
-            fb.draw_bitmap(x as usize, y as usize, graph_width, graph_height, graph_buffer.as_slice());
+            fb.draw_bitmap(x as usize, y as usize, graph_width, graph_height, &state.graph_buffer);
 
-            let last_cpu = cpu_history.last().copied().unwrap_or(0);
+            let last_cpu = state.cpu_history.last().copied().unwrap_or(0);
             font::draw_string(fb, x + 5, y + 5, &format!("{} %", last_cpu), 0x00_FFFFFF, None);
         }
     }

@@ -1,7 +1,7 @@
 use super::ps2;
 use crate::kernel::interrupts::InterruptStackFrame;
 use crate::kernel::io;
-use core::sync::atomic::{AtomicUsize, AtomicU8, AtomicBool, Ordering};
+use spin::Mutex;
 
 #[derive(Debug, Clone, Copy)]
 pub struct MousePacket {
@@ -13,88 +13,37 @@ pub struct MousePacket {
 
 const BUFFER_SIZE: usize = 256;
 pub struct MouseBuffer {
-    packets: [u64; BUFFER_SIZE],
-    ready: [AtomicBool; BUFFER_SIZE],
-    head: AtomicUsize,
-    tail: AtomicUsize,
+    packets: [MousePacket; BUFFER_SIZE],
+    head: usize,
+    tail: usize,
 }
 
 impl MouseBuffer {
     pub const fn new() -> Self {
-        const DEFAULT_READY: AtomicBool = AtomicBool::new(false);
         Self {
-            packets: [0; BUFFER_SIZE],
-            ready: [DEFAULT_READY; BUFFER_SIZE],
-            head: AtomicUsize::new(0),
-            tail: AtomicUsize::new(0),
+            packets: [MousePacket { x: 0, y: 0, buttons: 0, wheel: 0 }; BUFFER_SIZE],
+            head: 0,
+            tail: 0,
         }
     }
 
-    pub fn push(&self, packet: MousePacket) {
-        // Pack 6 bytes into u64: buttons(8), wheel(8), x(16), y(16)
-        let val = (packet.buttons as u64) | 
-                  ((packet.wheel as u8 as u64) << 8) | 
-                  ((packet.x as u16 as u64) << 16) | 
-                  ((packet.y as u16 as u64) << 32);
-
-        loop {
-            let head = self.head.load(Ordering::Relaxed);
-            let tail = self.tail.load(Ordering::Acquire);
-            let next = (head + 1) % BUFFER_SIZE;
-
-            if next == tail { return; } // Buffer full, drop packet
-
-            if self.head.compare_exchange_weak(head, next, Ordering::SeqCst, Ordering::Relaxed).is_ok() {
-                // SAFETY: We have atomically reserved this slot via compare_exchange on 'head'.
-                // No other producer can write to this index until the consumer processes it.
-                unsafe {
-                    let packets_ptr = self.packets.as_ptr() as *mut u64;
-                    core::ptr::write_volatile(packets_ptr.add(head), val);
-                }
-                self.ready[head].store(true, Ordering::Release);
-                break;
-            }
-            core::hint::spin_loop();
-        }
-    }
-
-    pub fn pop(&self) -> Option<MousePacket> {
-        let tail = self.tail.load(Ordering::Relaxed);
-        let head = self.head.load(Ordering::Acquire);
-
-        if tail == head { return None; }
-
-        if self.ready[tail].load(Ordering::Acquire) {
-            // SAFETY: The 'ready' flag with Acquire ordering ensures that the producer 
-            // has finished writing to this slot.
-            let val = unsafe {
-                core::ptr::read_volatile(self.packets.as_ptr().add(tail))
-            };
-            self.ready[tail].store(false, Ordering::Release);
-            self.tail.store((tail + 1) % BUFFER_SIZE, Ordering::Release);
-
-            Some(MousePacket {
-                buttons: val as u8,
-                wheel: (val >> 8) as i8,
-                x: (val >> 16) as i16,
-                y: (val >> 32) as i16,
-            })
-        } else {
-            None
+    pub fn push(&mut self, packet: MousePacket) {
+        let next = (self.head + 1) % BUFFER_SIZE;
+        if next != self.tail {
+            self.packets[self.head] = packet;
+            self.head = next;
         }
     }
 }
 
-pub static MOUSE_BUFFER: MouseBuffer = MouseBuffer::new();
+pub static MOUSE_BUFFER: Mutex<MouseBuffer> = Mutex::new(MouseBuffer::new());
 
 // State for the interrupt handler to track packet assembly
 static mut BYTE_CYCLE: u8 = 0;
 static mut BYTES: [u8; 4] = [0; 4];
-static MOUSE_ID: AtomicU8 = AtomicU8::new(0); // Use AtomicU8 for thread-safe access
+static mut MOUSE_ID: u8 = 0;
 
-pub fn initialize() -> Result<(), &'static str> {
-    crate::serial_println!("[MOUSE] Initializing PS/2 mouse...");
-
+pub fn initialize() {
     unsafe {
         // 1. Disable PS/2 devices to prevent them from sending data during setup
         ps2::write_command(0xAD); // Disable keyboard
@@ -115,55 +64,46 @@ pub fn initialize() -> Result<(), &'static str> {
 
         // 4. Send commands to the mouse itself
         // Reset mouse first to ensure clean state
-        ps2::send_device_command(0xFF, true)?;
-        if ps2::wait_and_read()? != 0xAA { return Err("Mouse reset: Self-test failed"); }
-        if ps2::wait_and_read()? != 0x00 { return Err("Mouse reset: Unexpected ID"); }
-
-        // Set Defaults (Note: this often disables extensions, so we do it before the magic sequence)
-        ps2::send_device_command(0xF6, true)?;
-
-        // Set Scaling 1:1 (Command 0xE6) to ensure predictable relative movement
-        ps2::send_device_command(0xE6, true)?;
-
-        // Set Resolution (Command 0xE8, Data 0x03 = 8 counts/mm) for higher precision
-        ps2::send_device_command(0xE8, true)?;
-        ps2::send_device_command(0x03, true)?;
-
-        // Enable Intellimouse Extensions (Magic Sequence: 200, 100, 80)
-        for rate in [200, 100, 80] {
-            ps2::send_device_command(0xF3, true)?;
-            ps2::send_device_command(rate, true)?;
+        if ps2::write_mouse_command(0xFF) {
+            // After a reset, the mouse sends an ACK (0xFA), then a self-test result (0xAA), and an ID (0x00).
+            // The write_mouse_command function consumes the ACK. We must consume the other two bytes.
+            if ps2::wait_output_avail() { let _ = ps2::read_data(); } // Consume self-test result
+            if ps2::wait_output_avail() { let _ = ps2::read_data(); } // Consume mouse ID
+        } else {
+            crate::serial_println!("[MOUSE] Reset failed");
         }
 
+        // Set Defaults (Note: this often disables extensions, so we do it before the magic sequence)
+        ps2::write_mouse_command(0xF6);
+
+        // Enable Intellimouse Extensions (Magic Sequence: 200, 100, 80)
+        ps2::write_mouse_command(0xF3); ps2::write_mouse_command(200);
+        ps2::write_mouse_command(0xF3); ps2::write_mouse_command(100);
+        ps2::write_mouse_command(0xF3); ps2::write_mouse_command(80);
+
         // Get Device ID to verify extension is enabled (should be 3 or 4)
-        ps2::send_device_command(0xF2, true)?;
-        let id = ps2::wait_and_read()?;
-        MOUSE_ID.store(id, Ordering::Relaxed);
-        crate::serial_println!("[MOUSE] Device ID: {:#x}", id);
+        ps2::write_mouse_command(0xF2);
+        if ps2::wait_output_avail() {
+            MOUSE_ID = ps2::read_data();
+        }
 
-        // Set final sample rate to 100Hz for smoother tracking
-        ps2::send_device_command(0xF3, true)?;
-        ps2::send_device_command(100, true)?;
-
-        ps2::send_device_command(0xF4, true)?; // Enable Scanning
+        ps2::write_mouse_command(0xF4); // Enable Scanning
 
         // 5. Enable the devices
         ps2::write_command(0xAE); // Enable keyboard
         ps2::write_command(0xA8); // Enable mouse
     }
-    crate::serial_println!("[MOUSE] PS/2 mouse initialization complete.");
-    Ok(())
 }
 
 pub fn handle_interrupt() {
-    loop {
-        let status = unsafe { ps2::read_status() };
-        if (status & ps2::STATUS_OUTPUT_BUFFER) == 0 { break; }
-        let byte = unsafe { ps2::read_data() };
+    unsafe {
+        let status = ps2::read_status();
+        if (status & ps2::STATUS_OUTPUT_BUFFER) != 0 {
+            let byte = ps2::read_data();
 
-        // Only process if it IS from the mouse (Bit 5 set)
-        if (status & ps2::STATUS_MOUSE_DATA) != 0 {
-            unsafe {
+            // Only process if it IS from the mouse (Bit 5 set)
+            if (status & ps2::STATUS_MOUSE_DATA) != 0 {
+                
                 // Process the byte immediately to form a packet
                 match BYTE_CYCLE {
                     0 => {
@@ -182,7 +122,7 @@ pub fn handle_interrupt() {
                         BYTE_CYCLE = 0;
 
                         // If Intellimouse (ID 3 or 4), expect a 4th byte
-                        if MOUSE_ID.load(Ordering::Relaxed) == 3 || MOUSE_ID.load(Ordering::Relaxed) == 4 {
+                        if MOUSE_ID == 3 || MOUSE_ID == 4 {
                             BYTE_CYCLE = 3;
                         } else {
                             let mut x = BYTES[1] as i16;
@@ -193,7 +133,7 @@ pub fn handle_interrupt() {
                             if (BYTES[0] & 0x20) != 0 { y |= 0xFF00u16 as i16; }
 
                             // Packet complete, push to buffer
-                            MOUSE_BUFFER.push(MousePacket {
+                            MOUSE_BUFFER.lock().push(MousePacket {
                                 buttons: BYTES[0] & 0x07,
                                 x,
                                 y,
@@ -210,15 +150,14 @@ pub fn handle_interrupt() {
                         if (BYTES[0] & 0x10) != 0 { x |= 0xFF00u16 as i16; }
                         if (BYTES[0] & 0x20) != 0 { y |= 0xFF00u16 as i16; }
 
-                        let mouse_id = MOUSE_ID.load(Ordering::Relaxed);
-                        let wheel = if mouse_id == 3 {
+                        let wheel = if MOUSE_ID == 3 {
                             byte as i8 // ID 3: standard signed byte
-                        } else if mouse_id == 4 {
+                        } else if MOUSE_ID == 4 {
                             let val = byte & 0x0F; // ID 4: lower 4 bits are wheel
                             if (val & 0x08) != 0 { (val | 0xF0) as i8 } else { val as i8 }
                         } else { 0 };
 
-                        MOUSE_BUFFER.push(MousePacket {
+                        MOUSE_BUFFER.lock().push(MousePacket {
                             buttons: BYTES[0] & 0x07,
                             x,
                             y,
@@ -243,5 +182,15 @@ pub extern "x86-interrupt" fn interrupt_handler(_frame: &mut InterruptStackFrame
 }
 
 pub fn get_packet() -> Option<MousePacket> {
-    MOUSE_BUFFER.pop()
+    // This function should be non-blocking. It checks the buffer once.
+    let mut buffer = MOUSE_BUFFER.lock();
+    let packet = if buffer.head == buffer.tail {
+        None
+    } else {
+        let packet = buffer.packets[buffer.tail];
+        buffer.tail = (buffer.tail + 1) % BUFFER_SIZE;
+        Some(packet)
+    };
+    core::mem::drop(buffer);
+    packet
 }

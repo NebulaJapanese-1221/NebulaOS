@@ -2,9 +2,7 @@ use core::arch::{asm, naked_asm};
 use core::fmt;
 use crate::drivers::framebuffer::{self, FRAMEBUFFER};
 use crate::userspace::fonts::font;
-use core::sync::atomic::Ordering;
 use super::interrupts::InterruptStackFrame;
-use super::paging::{FLAG_COW, FLAG_WRITABLE, FLAG_PRESENT, FLAG_USER};
 
 // --- Panic/Exception Screen Implementation ---
 
@@ -28,22 +26,9 @@ impl<'a> fmt::Write for PanicWriter<'a> {
                 self.y += 16;
                 self.x = self.start_x;
             } else {
-                font::draw_char(self.fb, self.x, self.y, c, 0xFF_FFFFFF, None);
+                font::draw_char(self.fb, self.x, self.y, c, 0xFFFFFFFF, None);
                 self.x += 8;
             }
-        }
-        Ok(())
-    }
-}
-
-/// A simple wrapper to allow writing formatted strings to the serial port.
-struct SerialWriter;
-impl fmt::Write for SerialWriter {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        // Access the hardware directly to bypass LogLevel filtering and prefixes
-        let port = crate::drivers::serial::SERIAL1.lock();
-        for byte in s.bytes() {
-            port.write_byte(byte);
         }
         Ok(())
     }
@@ -52,259 +37,90 @@ impl fmt::Write for SerialWriter {
 /// Walks the stack and prints a stack trace to the serial port.
 /// This function is unsafe because it reads from arbitrary memory locations by following the base pointer.
 pub unsafe fn print_stack_trace() {
-    let mut writer = SerialWriter;
-    print_stack_trace_to(&mut writer);
+    let mut rbp: u32;
+    asm!("mov {}, ebp", out(reg) rbp, options(nomem, nostack));
+
+    crate::serial_println!("\nStack Trace (current RBP: 0x{:08x}):", rbp);
+
+    if rbp == 0 {
+        return;
+    }
+
+    // Basic alignment check to avoid immediate faults on garbage
+    if rbp & 3 != 0 {
+        crate::serial_println!("  <RBP unaligned, stopping trace>");
+        return;
+    }
+
+    let mut i = 0;
+    // Limit to 20 frames to prevent infinite loops in case of stack corruption.
+    while rbp != 0 && i < 20 {
+        // The return address is stored on the stack just above the saved RBP.
+        let return_address = *(rbp as *const u32).add(1);
+        crate::serial_println!("  Frame {:02}: Return to 0x{:08x}", i, return_address);
+        // The next RBP is the value pointed to by the current RBP.
+        let next_rbp = *(rbp as *const u32);
+        
+        // Basic sanity check: Stack usually grows down, so previous frame RBP should be > current RBP
+        if next_rbp <= rbp && next_rbp != 0 {
+             crate::serial_println!("  <Stack Corruption or End detected>");
+             break;
+        }
+        rbp = next_rbp;
+        i += 1;
+    }
 }
 
 /// Walks the stack and prints a stack trace to the provided writer.
 /// This function is unsafe because it reads from arbitrary memory locations by following the base pointer.
 pub unsafe fn print_stack_trace_to<W: fmt::Write>(writer: &mut W) {
-    let rbp: u32;
-    unsafe {
-        asm!("mov {}, ebp", out(reg) rbp, options(nomem, nostack));
-    }
+    let mut rbp: u32;
+    asm!("mov {}, ebp", out(reg) rbp, options(nomem, nostack));
 
-    let _ = writeln!(writer, "\nStack Trace (current RBP: 0x{:08x}):", rbp);
-
-    if rbp == 0 { return; }
-
-    // Sanity check: Ensure RBP is not in null-page or clearly out of physical bounds (assuming max 128MB)
-    if rbp < 0x1000 || rbp > 0x08000000 { 
-        let _ = writeln!(writer, "  <RBP invalid, stopping trace>");
-        return;
-    }
-
-    let mut current_rbp = rbp;
+    let _ = writeln!(writer, "\nStack Trace (RBP: {:#x}):", rbp);
     let mut i = 0;
-
-    // Limit to 20 frames to prevent infinite loops in case of stack corruption.
-    while current_rbp != 0 && i < 20 {
-        // Safety: Verify pointer before dereferencing to prevent recursive panics
-        if current_rbp < 0x1000 || current_rbp > 0x07FFFFFC { break; }
-
-        let return_address = unsafe { *(current_rbp as *const u32).add(1) };
-
-        if let Some((name, offset)) = crate::kernel::symbols::resolve(return_address as usize) {
-            let _ = writeln!(writer, "  Frame {:02}: 0x{:08x} <{}+{:#x}>", i, return_address, name, offset);
-        } else {
-            let _ = writeln!(writer, "  Frame {:02}: 0x{:08x} <unknown>", i, return_address);
-        }
+    while rbp != 0 && i < 20 {
+        let return_address = *(rbp as *const u32).add(1);
+        let _ = writeln!(writer, "  Frame {:02}: Return to 0x{:08x}", i, return_address);
         
-        // The next RBP is the value pointed to by the current RBP.
-        let next_rbp = unsafe { *(current_rbp as *const u32) };
-        
-        // Basic sanity check: Stack usually grows down, so previous frame RBP should be > current RBP
-        if next_rbp <= current_rbp && next_rbp != 0 {
+        let next_rbp = *(rbp as *const u32);
+        if next_rbp <= rbp && next_rbp != 0 {
              let _ = writeln!(writer, "  <Stack End or Corruption>");
              break;
         }
-        current_rbp = next_rbp;
+        rbp = next_rbp;
         i += 1;
     }
 }
 
-/// Prints a hexadecimal dump of the memory around the stack pointer.
-pub fn dump_stack_memory<W: fmt::Write>(writer: &mut W, esp: u32, ebp: u32) {
-    // In standard x86 stack frames, EBP points to the saved EBP,
-    // and EBP + 4 points to the return address.
-    let return_addr_ptr = ebp + 4;
-    
-    let _ = writeln!(writer, "\nMEMORY_DUMP (ESP: {:#x}):", esp);
-    
-    // Sanity check: If ESP is garbage, don't attempt a dump
-    if esp < 0x1000 || esp > 0x07FFFFF0 {
-        let _ = writeln!(writer, "  <ESP outside reasonable memory bounds: Dump aborted>");
-        return;
-    }
-
-    let start_addr = (esp & !0xF).saturating_sub(64);
-    
-    for i in 0..10 {
-        let addr = start_addr + (i * 16);
-        if addr > 0x07FFFFF0 { break; } // Bound check for 128MB RAM systems
-
-        let _ = write!(writer, "{:08x}: ", addr);
-        
-        // Hex values (grouped as u32)
-        for j in 0..4 {
-            let current_ptr = addr + (j * 4);
-            
-            // Safe dereference check
-            let val = if current_ptr >= 0x1000 {
-                unsafe { *(current_ptr as *const u32) }
-            } else {
-                0x00000000
-            };
-
-            if current_ptr == return_addr_ptr {
-                let _ = write!(writer, "[{:08x}]", val);
-            } else {
-                let _ = write!(writer, " {:08x} ", val);
-            }
-        }
-
-        // ASCII representation
-        let _ = write!(writer, " |");
-        for j in 0..16 {
-            let current_ptr = addr + j;
-            let byte = if current_ptr >= 0x1000 {
-                unsafe { *(current_ptr as *const u8) }
-            } else {
-                0
-            };
-
-            if byte >= 32 && byte <= 126 {
-                let _ = write!(writer, "{}", byte as char);
-            } else {
-                let _ = write!(writer, ".");
-            }
-        }
-        let _ = write!(writer, "|");
-        let _ = writeln!(writer, "");
-    }
-}
-
-pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code: Option<u32>, location: Option<(&str, u32)>) -> ! {
+pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code: Option<u32>) -> ! {
     unsafe { asm!("cli", options(nomem, nostack)); }
 
-    // Prevent recursive exceptions during emergency drawing
-    if crate::kernel::PANICKING.swap(true, Ordering::SeqCst) {
-        loop { unsafe { asm!("hlt"); } }
-    }
-
-    // Calculate the ESP at the time of the fault. 
-    let faulting_esp = if (frame.code_segment & 0x03) != 0 {
-        frame.stack_pointer // Ring 3 fault: use the hardware-pushed ESP
-    } else {
-        // Ring 0 fault: ESP was just before the hardware frame
-        (frame as *const _ as u32) + if error_code.is_some() { 16 } else { 12 }
-    };
-
-    // Capture CPU state immediately
-    let (eax, ebx, ecx, edx, esi, edi, ebp): (u32, u32, u32, u32, u32, u32, u32);
-    let (cr0, cr2, cr3, cr4): (u32, u32, u32, u32);
-    unsafe {
-        asm!("mov {0}, eax", out(reg) eax);
-        asm!("mov {0}, ebx", out(reg) ebx);
-        asm!("mov {0}, ecx", out(reg) ecx);
-        asm!("mov {0}, edx", out(reg) edx);
-        asm!("mov {0}, esi", out(reg) esi);
-        asm!("mov {0}, edi", out(reg) edi);
-        asm!("mov {0}, ebp", out(reg) ebp);
-        asm!("mov {0}, cr0", out(reg) cr0);
-        asm!("mov {0}, cr2", out(reg) cr2);
-        asm!("mov {0}, cr3", out(reg) cr3);
-        asm!("mov {0}, cr4", out(reg) cr4);
-    }
-
-    // Check if this fault occurred in a registered Heap Guard zone
-    let mut is_guard_violation = false;
-    let guards = crate::kernel::allocator::HEAP_GUARDS.lock();
-    for guard_opt in guards.iter() {
-        if let Some(guard) = guard_opt {
-            if cr2 >= guard.start as u32 && cr2 < guard.end as u32 {
-                is_guard_violation = true;
-                break;
-            }
-        }
-    }
-
-    // Check if this is a hardware Stack Guard violation
-    let mut is_stack_overflow = false;
-    if name == "PAGE FAULT" {
-        // Use try_lock to avoid deadlocks if the fault happened inside the scheduler
-        if let Some(scheduler) = crate::kernel::process::SCHEDULER.try_lock() {
-            if let Some(task) = scheduler.tasks[scheduler.current_index].as_ref() {
-                if cr2 >= task.guard_page as u32 && cr2 < (task.guard_page + 4096) as u32 {
-                    is_stack_overflow = true;
-                }
-            }
-        }
-    }
-
     // Print details to serial port immediately, as drawing to screen might fail or deadlock
-    let display_name = if is_stack_overflow { "STACK_OVERFLOW_GUARD_FAULT" } 
-                      else if is_guard_violation { "HEAP_GUARD_VIOLATION" } 
-                      else { name };
-
-    // --- Page Fault Debugger ---
-    if name.starts_with("PAGE FAULT") {
-        crate::serial_println!("\n--- PAGE FAULT DIAGNOSTICS ---");
-        crate::serial_println!("Faulting Virtual Address: {:#010x}", cr2);
-        crate::serial_println!("Instruction Pointer (EIP): {:#010x}", frame.instruction_pointer);
-        crate::serial_println!("CPU Flags (EFLAGS): {:#010x}", frame.cpu_flags);
-        
-        if let Some(code) = error_code {
-            let p  = if (code & (1 << 0)) != 0 { "Protection Violation" } else { "Page Not Present (Unmapped)" };
-            let rw = if (code & (1 << 1)) != 0 { "Write" } else { "Read" };
-            let us = if (code & (1 << 2)) != 0 { "User Mode" } else { "Kernel Mode" };
-            let rs = if (code & (1 << 3)) != 0 { " [RSVD Violation]" } else { "" };
-            let id = if (code & (1 << 4)) != 0 { "Instruction Fetch" } else { "Data Access" };
-            
-            crate::serial_println!("Cause: {} during {} in {} ({}){} [Code: {:#x}]", p, rw, us, id, rs, code);
-        }
-    }
-
-    crate::serial_println!("\nCRITICAL SYSTEM ERROR: {}", display_name);
-    
-    if let Some((file, line)) = location {
-        crate::serial_println!("Source: {}:{}", file, line);
-    }
-    crate::serial_println!("------------------------------\n");
-
+    crate::serial_println!("\nCRITICAL SYSTEM ERROR: {}", name);
     if let Some(code) = error_code {
         crate::serial_println!("Error Code: {:#x}", code);
     }
-    crate::serial_println!("CONTEXT: IP={:#010x} CS={:#06x} FLAGS={:#010x}", frame.instruction_pointer, frame.code_segment, frame.cpu_flags);
-    crate::serial_println!("GPR: EAX={:#x} EBX={:#x} ECX={:#x} EDX={:#x}", eax, ebx, ecx, edx);
-    crate::serial_println!("GPR: ESI={:#x} EDI={:#x} EBP={:#x}", esi, edi, ebp);
-    crate::serial_println!("CRs: CR0={:#x} CR2={:#x} CR3={:#x} CR4={:#x}", cr0, cr2, cr3, cr4);
-
+    crate::serial_println!("CONTEXT:\nIP: {:#010x}  CS: {:#06x}  FLAGS: {:#010x}", frame.instruction_pointer, frame.code_segment, frame.cpu_flags);
+    
     crate::serial_println!("Stack Frame:\n{:#?}", frame);
     unsafe { print_stack_trace(); }
-    crate::kernel::process::print_kernel_trace();
 
-    // Force unlock the framebuffer to prevent deadlock if the exception happened while drawing
-    unsafe { FRAMEBUFFER.force_unlock(); }
     let mut fb = FRAMEBUFFER.lock();
-    fb.clear(0x00_AA0000); // Clean Crimson
+    fb.clear(0x00_CC0000); // Red background (RSOD)
 
-    font::draw_string(&mut fb, 30, 30, "!! CRITICAL SYSTEM ERROR !!", 0xFFFFFFFF, None);
-    font::draw_string(&mut fb, 30, 60, "NebulaOS has encountered an unrecoverable logic fault.", 0xFFDDDDDD, None);
-    font::draw_string(&mut fb, 30, 75, "The system has been halted to preserve data integrity.", 0xFFDDDDDD, None);
+    font::draw_string(&mut fb, 30, 30, ":(", 0xFFFFFFFF, None);
+    font::draw_string(&mut fb, 30, 60, "NebulaOS ran into a problem and needs to restart.", 0xFFFFFFFF, None);
 
     let mut writer = PanicWriter::new(&mut fb, 30, 90);
     
     use core::fmt::Write;
-    let _ = writeln!(writer, "Stop Code: {}", display_name);
-
-    if let Some((file, line)) = location {
-        let _ = writeln!(writer, "At: {}:{}", file, line);
-    }
-
-    if name.starts_with("PAGE FAULT") {
-        let _ = writeln!(writer, "Address: {:#010x}", cr2);
-        let _ = writeln!(writer, "EFLAGS: {:#010x}", frame.cpu_flags);
-        if let Some(code) = error_code {
-            let p = if code & 1 != 0 { "Prot" } else { "NP" };
-            let rw = if code & 2 != 0 { "W" } else { "R" };
-            let us = if code & 4 != 0 { "U" } else { "K" };
-            let id = if code & 16 != 0 { "IF" } else { "DA" };
-            let _ = writeln!(writer, "Cause: {} {} {} {} ({:#x})", p, rw, us, id, code);
-        }
-    }
-
-    if is_guard_violation {
-        let _ = writeln!(writer, "Violation at: {:#010x} (Unmapped Guard Page)", cr2);
-    }
-    
+    let _ = writeln!(writer, "Stop Code: {}", name);
     if let Some(code) = error_code {
         let _ = writeln!(writer, "Error Code: {:#x}", code);
     }
-    let _ = writeln!(writer, "\nTechnical Information:\n----------------------\nIP: {:#010x}  CS: {:#06x}  FLAGS: {:#010x}", 
-        frame.instruction_pointer, frame.code_segment, frame.cpu_flags);
+    let _ = writeln!(writer, "\nTechnical Information:\n----------------------\nIP: {:#010x}  CS: {:#06x}  FLAGS: {:#010x}", frame.instruction_pointer, frame.code_segment, frame.cpu_flags);
     unsafe { print_stack_trace_to(&mut writer); }
-    dump_stack_memory(&mut writer, faulting_esp, ebp);
     
     fb.present();
 
@@ -315,15 +131,17 @@ pub fn show_exception_screen(name: &str, frame: &InterruptStackFrame, error_code
 // --- Exception Handlers ---
 
 pub extern "x86-interrupt" fn divide_by_zero_handler(frame: &mut InterruptStackFrame) {
-    show_exception_screen("DIVIDE BY ZERO", frame, None, None);
+    show_exception_screen("DIVIDE BY ZERO", frame, None);
 }
 
 pub extern "x86-interrupt" fn debug_handler(frame: &mut InterruptStackFrame) {
-    show_exception_screen("DEBUG EXCEPTION (INT1/SINGLE STEP)", frame, None, None);
+    crate::serial_println!("EXCEPTION: DEBUG");
+    // Debug exceptions (like single-step) generally resume, but for now we dump info
+    crate::serial_println!("{:#?}", frame);
 }
 
 pub extern "x86-interrupt" fn non_maskable_interrupt_handler(frame: &mut InterruptStackFrame) {
-    show_exception_screen("NON MASKABLE INTERRUPT", frame, None, None);
+    show_exception_screen("NON MASKABLE INTERRUPT", frame, None);
 }
 
 pub extern "x86-interrupt" fn breakpoint_handler(frame: &mut InterruptStackFrame) {
@@ -331,138 +149,63 @@ pub extern "x86-interrupt" fn breakpoint_handler(frame: &mut InterruptStackFrame
 }
 
 pub extern "x86-interrupt" fn overflow_handler(frame: &mut InterruptStackFrame) {
-    show_exception_screen("OVERFLOW", frame, None, None);
+    show_exception_screen("OVERFLOW", frame, None);
 }
 
 pub extern "x86-interrupt" fn bound_range_exceeded_handler(frame: &mut InterruptStackFrame) {
-    show_exception_screen("BOUND RANGE EXCEEDED", frame, None, None);
+    show_exception_screen("BOUND RANGE EXCEEDED", frame, None);
 }
 
 pub extern "x86-interrupt" fn invalid_opcode_handler(frame: &mut InterruptStackFrame) {
-    show_exception_screen("INVALID OPCODE", frame, None, None);
+    show_exception_screen("INVALID OPCODE", frame, None);
 }
 
 pub extern "x86-interrupt" fn device_not_available_handler(frame: &mut InterruptStackFrame) {
-    show_exception_screen("DEVICE NOT AVAILABLE", frame, None, None);
+    show_exception_screen("DEVICE NOT AVAILABLE", frame, None);
 }
 
 pub extern "x86-interrupt" fn invalid_tss_handler(frame: &mut InterruptStackFrame, error_code: u32) {
-    show_exception_screen("INVALID TSS", frame, Some(error_code), None);
+    show_exception_screen("INVALID TSS", frame, Some(error_code));
 }
 
 pub extern "x86-interrupt" fn segment_not_present_handler(frame: &mut InterruptStackFrame, error_code: u32) {
-    show_exception_screen("SEGMENT NOT PRESENT", frame, Some(error_code), None);
+    show_exception_screen("SEGMENT NOT PRESENT", frame, Some(error_code));
 }
 
 pub extern "x86-interrupt" fn stack_segment_fault_handler(frame: &mut InterruptStackFrame, error_code: u32) {
-    show_exception_screen("STACK SEGMENT FAULT", frame, Some(error_code), None);
+    show_exception_screen("STACK SEGMENT FAULT", frame, Some(error_code));
 }
 
 pub extern "x86-interrupt" fn gpf_handler(frame: &mut InterruptStackFrame, error_code: u32) {
-    show_exception_screen("GENERAL PROTECTION FAULT", frame, Some(error_code), None);
+    show_exception_screen("GENERAL PROTECTION FAULT", frame, Some(error_code));
 }
 
 pub extern "x86-interrupt" fn page_fault_handler(frame: &mut InterruptStackFrame, error_code: u32) {
-    let cr2: usize;
-    unsafe { asm!("mov {}, cr2", out(reg) cr2); }
-
-    // Bit 0 of error_code: 0 if page not present, 1 if protection violation
-    let present = (error_code & 0x01) != 0;
-    // Bit 1: 1 if write, 0 if read
-    let is_write = (error_code & 0x02) != 0;
-    // Bit 2: 1 if user mode, 0 if kernel mode
-    let is_user = (error_code & 0x04) != 0;
-
-    // --- 1. Null Pointer Dereference ---
-    if cr2 < 0x1000 {
-        show_exception_screen("PAGE FAULT (NULL DEREF)", frame, Some(error_code), None);
-    }
-
-    // --- 2. Demand Paging ---
-    if !present {
-        if is_user {
-            // User-mode Demand Paging (Heap/Stack Growth)
-            // Use try_lock to avoid deadlocks if the fault happened in a sensitive area
-            if let Some(scheduler) = crate::kernel::process::SCHEDULER.try_lock() {
-                if let Some(task) = &scheduler.tasks[scheduler.current_index] {
-                    if let Some(vas) = &task.address_space {
-                    // Demand Paging: User Heap or User Stack.
-                    // The user stack is currently hardcoded as the 64KB region ending at 0xC0000000.
-                    let is_heap = cr2 >= task.heap_start && cr2 < task.heap_limit;
-                    let is_stack = cr2 >= 0xBFFF0000 && cr2 < 0xC0000000;
-
-                    if is_heap || is_stack {
-                            if let Some(new_frame) = crate::kernel::paging::allocate_frame() {
-                                vas.map_page(cr2, new_frame as usize, FLAG_PRESENT | FLAG_WRITABLE | FLAG_USER);
-                                return; // Successfully mapped, retry user instruction
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            // Kernel-mode Demand Paging (Identity Mapping)
-            let total_mem = crate::kernel::CONFIG.total_memory.load(Ordering::Relaxed);
-            if cr2 < total_mem {
-                if let Some(new_frame) = crate::kernel::paging::allocate_frame() {
-                    let vas = crate::kernel::paging::VirtualAddressSpace::kernel();
-                    vas.map_page(cr2, new_frame as usize, FLAG_PRESENT | FLAG_WRITABLE);
-                    return; // Retry the instruction
-                }
-            }
-        }
-    }
-
-    // --- 3. Copy-on-Write Handling ---
-    if present && is_write {
-        // Safe acquisition of the address space for CoW handling
-        if let Some(scheduler) = crate::kernel::process::SCHEDULER.try_lock() {
-            let vas = scheduler.tasks[scheduler.current_index].as_ref().and_then(|t| t.address_space.as_ref());
-            if let Some(vas) = vas {
-                if let Some(entry) = vas.get_page_entry(cr2) { // entry is u64
-                    if (entry & FLAG_COW) != 0 {
-                        // Allocate a new physical frame for the private copy
-                        if let Some(new_frame) = crate::kernel::paging::allocate_frame() {
-                            unsafe {
-                                let old_page_ptr = (cr2 & !0xFFF) as *const u8;
-                                core::ptr::copy_nonoverlapping(old_page_ptr, new_frame as *mut u8, 4096);
-
-                                // Remap to the new private frame, ensuring FLAG_USER is preserved
-                                vas.map_page(cr2, new_frame as usize, FLAG_PRESENT | FLAG_WRITABLE | FLAG_USER);
-                            }
-                            return; // Successfully handled CoW
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    show_exception_screen("PAGE FAULT", frame, Some(error_code), None);
+    show_exception_screen("PAGE FAULT", frame, Some(error_code));
 }
 
 pub extern "x86-interrupt" fn x87_floating_point_handler(frame: &mut InterruptStackFrame) {
-    show_exception_screen("x87 FLOATING POINT EXCEPTION", frame, None, None);
+    show_exception_screen("x87 FLOATING POINT EXCEPTION", frame, None);
 }
 
 pub extern "x86-interrupt" fn alignment_check_handler(frame: &mut InterruptStackFrame, error_code: u32) {
-    show_exception_screen("ALIGNMENT CHECK", frame, Some(error_code), None);
+    show_exception_screen("ALIGNMENT CHECK", frame, Some(error_code));
 }
 
 pub extern "x86-interrupt" fn machine_check_handler(frame: &mut InterruptStackFrame) {
-    show_exception_screen("MACHINE CHECK", frame, None, None);
+    show_exception_screen("MACHINE CHECK", frame, None);
 }
 
 pub extern "x86-interrupt" fn simd_floating_point_handler(frame: &mut InterruptStackFrame) {
-    show_exception_screen("SIMD FLOATING POINT EXCEPTION", frame, None, None);
+    show_exception_screen("SIMD FLOATING POINT EXCEPTION", frame, None);
 }
 
 pub extern "x86-interrupt" fn virtualization_handler(frame: &mut InterruptStackFrame) {
-    show_exception_screen("VIRTUALIZATION EXCEPTION", frame, None, None);
+    show_exception_screen("VIRTUALIZATION EXCEPTION", frame, None);
 }
 
 pub extern "x86-interrupt" fn security_exception_handler(frame: &mut InterruptStackFrame, error_code: u32) {
-    show_exception_screen("SECURITY EXCEPTION", frame, Some(error_code), None);
+    show_exception_screen("SECURITY EXCEPTION", frame, Some(error_code));
 }
 
 #[no_mangle]
@@ -477,18 +220,16 @@ pub extern "C" fn double_fault_task_handler() -> ! {
 // This function is safe to call as it's on a new stack.
 #[no_mangle]
 extern "C" fn double_fault_panic(error_code: u32) -> ! {
-    // Retrieve the state of the task that caused the double fault from the main TSS. 
-    // When the Task Gate triggers, the CPU saves the old state into the TSS pointed to 
-    // by the previous Task Register (TR). Since we only have one main TSS, that's where it is. 
+    // Retrieve the state of the task that caused the double fault from the main TSS.
+    // When the Task Gate triggers, the CPU saves the old state into the TSS pointed to
+    // by the previous Task Register (TR). Since we only have one main TSS, that's where it is.
     let frame = unsafe {
-        let tss = core::ptr::addr_of!(crate::kernel::gdt::TSS);
+        let tss = &raw const crate::kernel::gdt::TSS;
         InterruptStackFrame {
             instruction_pointer: (*tss).eip,
             code_segment: (*tss).cs,
             cpu_flags: (*tss).eflags,
-            stack_pointer: (*tss).esp,
-            stack_segment: (*tss).ss,
         }
     };
-    show_exception_screen("DOUBLE FAULT", &frame, Some(error_code), None);
+    show_exception_screen("DOUBLE FAULT", &frame, Some(error_code));
 }

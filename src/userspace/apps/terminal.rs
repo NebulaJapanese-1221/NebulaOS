@@ -1,86 +1,139 @@
+use alloc::string::{String, ToString};
+use alloc::format;
+use alloc::vec::Vec;
+use alloc::boxed::Box;
 use crate::drivers::framebuffer;
 use crate::userspace::gui::{self, font, Window};
 use super::app::{App, AppEvent};
-use alloc::boxed::Box;
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
-use alloc::format;
-use crate::drivers::ata::AtaDrive;
-use core::sync::atomic::Ordering;
 
 #[derive(Clone)]
 pub struct Terminal {
     pub history: Vec<String>,
-    prompt: String,
-    current_input: String,
+    pub input_buffer: String,
+    pub prompt: String,
 }
 
 impl Terminal {
     pub fn new() -> Self {
-        Self {
+        let mut term = Self {
             history: Vec::new(),
-            prompt: String::from("root@nebula: / # "),
-            current_input: String::new(),
+            input_buffer: String::new(),
+            prompt: String::from("/> "),
+        };
+        term.history.push(String::from("NebulaOS Terminal"));
+        term
+    }
+
+    pub fn process_key(&mut self, key: char) {
+        match key {
+            '\x08' => { // Backspace
+                self.input_buffer.pop();
+            }
+            '\n' => { // Enter
+                let cmd = self.input_buffer.trim().to_string();
+                if !cmd.is_empty() {
+                    self.history.push(format!("{}{}", self.prompt, cmd));
+                    self.execute_command(&cmd);
+                } else {
+                    self.history.push(self.prompt.clone());
+                }
+                self.input_buffer.clear();
+            }
+            _ => {
+                if !key.is_control() {
+                    self.input_buffer.push(key);
+                }
+            }
         }
     }
 
     fn execute_command(&mut self, cmd: &str) {
-        self.history.push(format!("{}{}", self.prompt, cmd));
-        
         let parts: Vec<&str> = cmd.trim().split_whitespace().collect();
         if parts.is_empty() { return; }
 
         match parts[0] {
             "help" => {
-                let locale_guard = crate::userspace::localisation::CURRENT_LOCALE.lock();
-                let loc = locale_guard.as_ref().unwrap();
-                self.history.push(format!("--- {} ---", loc.ctx_new_terminal()));
                 self.history.push("Available commands:".to_string());
-                self.history.push("  help      - Show this help message".to_string());
-                self.history.push("  uname     - Show system information".to_string());
-                self.history.push("  uptime    - Show system uptime".to_string());
-                self.history.push("  clear     - Clear the screen".to_string());
-                self.history.push("  ls        - List files (ATA Driver Test)".to_string());
-            }
-            "uname" => {
-                let locale_guard = crate::userspace::localisation::CURRENT_LOCALE.lock();
-                let loc = locale_guard.as_ref().unwrap();
-                self.history.push(format!("{}: NebulaOS {}", loc.info_kernel(), crate::kernel::VERSION));
-                self.history.push(format!("{}: i386-unknown-none", loc.info_target()));
-                if let Some(brand) = crate::kernel::cpu::CPU_BRAND.lock().as_ref() {
-                    self.history.push(format!("CPU: {}", brand));
-                }
-            }
-            "uptime" => {
-                 let total_seconds = crate::kernel::process::TICKS.load(Ordering::Relaxed) / 1000;
-                 self.history.push(format!("Uptime: {}s", total_seconds));
+                self.history.push("  clear    - Clear the screen".to_string());
+                self.history.push("  ps       - List running processes".to_string());
+                self.history.push("  reboot   - Reboot the system".to_string());
+                self.history.push("  shutdown - Power off the system".to_string());
+                self.history.push("  help     - Show this message".to_string());
+                self.history.push("  uname    - Show system info (-a for all)".to_string());
+                self.history.push("  ver      - Show system version".to_string());
+                self.history.push("  uptime   - Show system uptime".to_string());
             }
             "clear" => {
                 self.history.clear();
+                self.history.push(String::from("NebulaOS Terminal"));
             }
-            "ls" => {
-                let drive = AtaDrive::new(true, true); // Primary Master
-                // We read the first sector (LBA 0) to verify access
-                let sector = drive.read_sectors(0, 1);
-                
-                if sector.len() == 512 {
-                    self.history.push("[ATA] Primary Master: Read Success".to_string());
-                    
-                    // Check for MBR signature (0x55, 0xAA at end of sector)
-                    if sector[510] == 0x55 && sector[511] == 0xAA {
-                         self.history.push("Filesystem: Detected (MBR)".to_string());
-                         // Mock listing demonstrating 'files' were found on the disk
-                         self.history.push("Contents of /:".to_string());
-                         self.history.push("  <DIR>  system".to_string());
-                         self.history.push("  <DIR>  userspace".to_string());
-                         self.history.push("         kernel.elf  [1024 KB]".to_string());
-                         self.history.push("         boot.cfg    [2 KB]".to_string());
-                    } else {
-                        self.history.push("Filesystem: Unknown / Unformatted".to_string());
+            "ver" => {
+                self.history.push(format!("NebulaOS v{}", crate::kernel::VERSION));
+            }
+            "uname" => {
+                let arg = if parts.len() > 1 { parts[1] } else { "" };
+                match arg {
+                    "-a" | "--all" => { 
+                         let brand_guard = crate::kernel::cpu::CPU_BRAND.lock();
+                         let cpu = brand_guard.as_deref().unwrap_or("i686");
+                         let cores = crate::kernel::CPU_CORES.load(core::sync::atomic::Ordering::Relaxed);
+                         self.history.push(format!("NebulaOS nebula {} {} ({} cores)", crate::kernel::VERSION, cpu, cores));
                     }
-                } else {
-                    self.history.push("Error: Failed to read from ATA drive.".to_string());
+                    "-s" | "--kernel-name" | "" => {
+                        self.history.push("NebulaOS".to_string());
+                    }
+                    "-n" | "--nodename" => {
+                        self.history.push("nebula".to_string());
+                    }
+                    "-r" | "--kernel-release" => {
+                        self.history.push(format!("{}", crate::kernel::VERSION));
+                    }
+                    "-v" | "--kernel-version" => {
+                        self.history.push("custom-build".to_string());
+                    }
+                    "-m" | "--machine" => {
+                        self.history.push("i686".to_string());
+                    }
+                    "-p" | "--processor" => {
+                        let brand_guard = crate::kernel::cpu::CPU_BRAND.lock();
+                        self.history.push(brand_guard.as_deref().unwrap_or("unknown").to_string());
+                    }
+                    "--help" => {
+                        self.history.push("Usage: uname [OPTION]...".to_string());
+                        self.history.push("Print certain system information.".to_string());
+                        self.history.push(" -a, --all                print all information".to_string());
+                        self.history.push(" -s, --kernel-name        print the kernel name".to_string());
+                        self.history.push(" -n, --nodename           print the network node hostname".to_string());
+                        self.history.push(" -r, --kernel-release     print the kernel release".to_string());
+                        self.history.push(" -v, --kernel-version     print the kernel version".to_string());
+                        self.history.push(" -m, --machine            print the machine hardware name".to_string());
+                        self.history.push(" -p, --processor          print the processor type".to_string());
+                    }
+                    _ => {
+                        self.history.push(format!("uname: invalid option -- '{}'", arg));
+                    }
                 }
+            }
+            "ps" => {
+                self.history.push(String::from("ID  STATUS"));
+                let scheduler = crate::kernel::process::SCHEDULER.lock();
+                for (i, task) in scheduler.tasks.iter().enumerate() {
+                    let status = if i == scheduler.current_index { "Running" } else { "Ready" };
+                    self.history.push(format!("{:<3} {}", task.id, status));
+                }
+            }
+            "reboot" => {
+                self.history.push("Rebooting...".to_string());
+                crate::kernel::power::reboot();
+            }
+            "shutdown" => {
+                self.history.push("Shutting down...".to_string());
+                crate::kernel::power::shutdown();
+            }
+            "uptime" => {
+                let ticks = crate::kernel::process::TICKS.load(core::sync::atomic::Ordering::Relaxed);
+                let seconds = ticks / 1000;
+                self.history.push(format!("Uptime: {} seconds", seconds));
             }
             _ => {
                 self.history.push(format!("Unknown command: {}", parts[0]));
@@ -91,36 +144,37 @@ impl Terminal {
 
 impl App for Terminal {
     fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window) {
-        // Draw background
-        gui::draw_rect(fb, win.x, win.y + 20, win.width, win.height - 20, 0x00_00_00_00, None); // Black
+        gui::draw_rect(fb, win.x, win.y + 20, win.width, win.height - 20, 0x00_000000, None);
 
-        let font_height = 16;
-        let line_spacing = 2;
-        let max_lines = (win.height - 25) / (font_height + line_spacing);
-        
-        // Calculate visible range (Simple tail log)
-        let total_lines = self.history.len() + 1;
-        let start_line = if total_lines > max_lines { total_lines - max_lines } else { 0 };
-
+        let start_x = win.x + 5;
         let mut y = win.y + 25;
-        let x = win.x + 5;
+        let line_height = 16;
 
-        for i in start_line..self.history.len() {
-             font::draw_string(fb, x, y, self.history[i].as_str(), 0x00_CC_CC_CC, None);
-             y += (font_height + line_spacing) as isize;
+        let max_lines = (win.height - 30) / line_height;
+        // Reserve one line for the input prompt so it is always visible
+        let history_lines = if max_lines > 0 { max_lines - 1 } else { 0 };
+        let skip = if self.history.len() > history_lines { self.history.len() - history_lines } else { 0 };
+
+        for line in self.history.iter().skip(skip) {
+            font::draw_string(fb, start_x, y, line, 0x00_CCCCCC, None);
+            y += line_height as isize;
         }
 
-        let input_line = format!("{}{}_", self.prompt, self.current_input);
-        font::draw_string(fb, x, y, input_line.as_str(), 0x00_FF_FF_FF, None);
+        let input_line = alloc::format!("{}{}", self.prompt, self.input_buffer);
+        if y < (win.y + win.height as isize - line_height as isize) {
+             font::draw_string(fb, start_x, y, input_line.as_str(), 0x00_FFFFFF, None);
+             let cursor_x = start_x + font::string_width(&input_line) as isize;
+             gui::draw_rect(fb, cursor_x, y, 8, line_height as usize, 0x00_FFFFFF, None);
+        }
     }
 
     fn handle_event(&mut self, event: &AppEvent) {
         if let AppEvent::KeyPress { key } = event {
-            if *key == '\n' { let cmd = self.current_input.clone(); self.current_input.clear(); self.execute_command(&cmd); }
-            else if *key == '\x08' { self.current_input.pop(); }
-            else if !key.is_control() { self.current_input.push(*key); }
+            self.process_key(*key);
         }
     }
 
-    fn box_clone(&self) -> Box<dyn App> { Box::new(self.clone()) }
+    fn box_clone(&self) -> Box<dyn App> {
+        Box::new(self.clone())
+    }
 }

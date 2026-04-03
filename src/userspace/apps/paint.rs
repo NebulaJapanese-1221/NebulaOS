@@ -89,20 +89,19 @@ impl App for Paint {
 
         if self.buffer_width > 0 {
              // Blit buffer to screen
-             let w = self.buffer_width.min(win.width as usize);
-             let h = self.buffer_height.min(canvas_height as usize);
+             let w = self.buffer_width.min(win.width);
+             let h = self.buffer_height.min(canvas_height);
              
-             if let Some(info) = fb.info.as_ref() {
-                 let fb_w = info.width as isize;
-                 let fb_h = info.height as isize;
-                 for y in 0..h {
-                     let screen_y = canvas_y + y as isize;
-                     if screen_y < 0 || screen_y >= fb_h { continue; }
-                     for x in 0..w {
-                         let color = self.buffer[y * self.buffer_width + x];
-                         let screen_x = win.x + x as isize;
-                         if color != 0 && screen_x >= 0 && screen_x < fb_w {
-                             fb.set_pixel(screen_x as usize, screen_y as usize, color);
+             for y in 0..h {
+                 for x in 0..w {
+                     let color = self.buffer[y * self.buffer_width + x];
+                     if color != 0 { // Simple transparency
+                         if let Some(info) = &fb.info {
+                             let screen_x = win.x + x as isize;
+                             let screen_y = canvas_y + y as isize;
+                             if screen_x >= 0 && screen_x < info.width as isize && screen_y >= 0 && screen_y < info.height as isize {
+                                  fb.set_pixel(screen_x as usize, screen_y as usize, color);
+                             }
                          }
                      }
                  }

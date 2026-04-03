@@ -22,16 +22,11 @@ dependencies = [
 
 [[package]]
 name = "nebula_os"
-version = "0.0.3-dev2"
+version = "0.0.3-dev"
 dependencies = [
  "linked_list_allocator",
- "nebulafs",
  "spin",
 ]
-
-[[package]]
-name = "nebulafs"
-version = "0.0.1"
 
 [[package]]
 name = "scopeguard"

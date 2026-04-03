@@ -7,13 +7,6 @@ pub unsafe fn inb(port: u16) -> u8 {
     value
 }
 
-/// Reads a word (16 bits) from the specified I/O port.
-pub unsafe fn inw(port: u16) -> u16 {
-    let mut value: u16;
-    asm!("in ax, dx", in("dx") port, out("ax") value, options(nomem, nostack, preserves_flags));
-    value
-}
-
 /// Writes a byte to the specified I/O port.
 pub unsafe fn outb(port: u16, value: u8) {
     asm!("out dx, al", in("dx") port, in("al") value, options(nomem, nostack, preserves_flags));

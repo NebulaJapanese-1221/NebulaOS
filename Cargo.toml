@@ -1,14 +1,11 @@
-[workspace]
-
 [package]
 name = "nebula_os"
-version = "0.0.3-dev2"
+version = "0.0.3-dev"
 edition = "2021"
 
 [dependencies]
 spin = "0.9.8"
 linked_list_allocator = "0.10.5"
-nebulafs = { path = "NebulaFS" }
 # Settings for bare-metal profile
 [profile.dev]
 panic = "abort"

@@ -6,4 +6,3 @@ pub mod serial;
 pub mod rtc;
 pub mod ps2;
 pub mod pit;
-pub mod ata;

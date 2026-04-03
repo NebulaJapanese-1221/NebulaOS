@@ -48,25 +48,16 @@ pub unsafe fn wait_output_avail() -> bool {
     true
 }
 
-/// Waits for data to be available and reads it. Returns an error on timeout.
-pub unsafe fn wait_and_read() -> Result<u8, &'static str> {
-    if wait_output_avail() {
-        Ok(read_data())
-    } else {
-        Err("PS/2 Timeout: Device not responding")
-    }
-}
-
-/// Sends a command to a PS/2 device and waits for the 0xFA acknowledgement.
-/// `is_mouse` triggers the 0xD4 (Select Auxiliary Device) prefix.
-pub unsafe fn send_device_command(byte: u8, is_mouse: bool) -> Result<(), &'static str> {
-    if is_mouse {
-        write_command(0xD4);
-    }
+/// Sends a command to the mouse (Aux device) and waits for ACK.
+/// This handles the protocol of writing 0xD4 to port 0x64 first.
+pub unsafe fn write_mouse_command(byte: u8) -> bool {
+    write_command(0xD4); // Write to Auxiliary Device
     write_data(byte);
-
-    match wait_and_read()? {
-        0xFA => Ok(()),
-        _ => Err("PS/2 Error: Device rejected command (No ACK)"),
+    
+    // Wait for ACK
+    if wait_output_avail() {
+        let ack = read_data();
+        return ack == 0xFA;
     }
+    false
 }

@@ -3,9 +3,9 @@
 
 use core::panic::PanicInfo;
 
-// NOTE: This file contains the NebulaOS Bootloader Entry Point draft.
-// Per project organization, this should be moved to src/boot/main.rs.
-// To replace GRUB and be Multiboot compliant, the final version must:
+// The NebulaOS Bootloader Entry Point
+// This would ostensibly be loaded by the BIOS at 0x7C00 (Stage 1) or loaded as a Stage 2.
+// To replace GRUB and be Multiboot compliant, this loader must:
 // 1. Switch to Protected Mode (32-bit).
 // 2. parse the Multiboot header of the Kernel (nebula_os).
 // 3. Load the Kernel into memory.

@@ -1,3 +1,5 @@
+use core::arch::asm;
+
 // --- Dispatcher ---
 
 /// The main syscall dispatcher.
@@ -9,16 +11,16 @@
 /// ebx, ecx, edx: Arguments 1, 2, 3
 #[no_mangle]
 pub extern "C" fn syscall_dispatcher(
-    esp: usize,
     eax: usize,
     ebx: usize,
     ecx: usize,
     _edx: usize
 ) -> usize {
-    let result = match eax {
+    match eax {
         0 => {
-            // Syscall 0: Yield
-            return crate::kernel::process::yield_now(esp);
+            // Syscall 0: Yield / Sleep
+            unsafe { asm!("hlt") };
+            0
         }
         1 => {
             // Syscall 1: Print (ebx = ptr, ecx = len)
@@ -47,50 +49,11 @@ pub extern "C" fn syscall_dispatcher(
                 0 // Fail
             }
         }
-        3 => {
-            // Syscall 3: Set Task Priority (ebx = task_id, ecx = new_priority)
-            let task_id = ebx;
-            let new_priority = ecx;
-            if crate::kernel::process::SCHEDULER.lock().set_task_priority(task_id, new_priority) {
-                1 // Success
-            } else {
-                0 // Fail
-            }
-        }
-        4 => {
-            // Syscall 4: Get Current Task ID
-            crate::kernel::process::SCHEDULER.lock().get_current_task_id()
-        }
-        5 => {
-            // Syscall 5: Sleep (ebx = ms)
-            crate::kernel::process::SCHEDULER.lock().sleep_current_task(ebx);
-            return crate::kernel::process::yield_now(esp);
-        }
-        6 => {
-            // Syscall 6: Get Task Priority (ebx = task_id)
-            let task_id = ebx;
-            if let Some(priority) = crate::kernel::process::SCHEDULER.lock().get_task_priority(task_id) {
-                priority
-            } else {
-                usize::MAX
-            }
-        }
-        7 => {
-            // Syscall 7: Get CPU Usage
-            // Returns the current CPU usage percentage (0-100)
-            crate::kernel::cpu::CPU_USAGE.load(core::sync::atomic::Ordering::Relaxed)
-        }
         _ => {
             crate::serial_println!("Unknown Syscall: {}", eax);
             usize::MAX
         }
-    };
-
-    // For non-yielding syscalls, write the result to the EAX slot on the stack
-    unsafe {
-        *((esp + 28) as *mut usize) = result;
     }
-    esp
 }
 
 // --- Assembly Handler ---
@@ -101,8 +64,6 @@ pub extern "C" fn syscall_dispatcher(
 core::arch::global_asm!(
     ".global syscall_handler",
     "syscall_handler:",
-    // 1. Save dummy error code to match timer/exception frame layout
-    "push 0",
     // Save Segment Registers
     "push ds",
     "push es",
@@ -116,8 +77,6 @@ core::arch::global_asm!(
     "mov ax, 0x10",
     "mov ds, ax",
     "mov es, ax",
-    "mov fs, ax",
-    "mov gs, ax",
 
     // 4. Prepare arguments for syscall_dispatcher(eax, ebx, ecx, edx)
     // After `pusha`, ESP points to the saved registers. We use it as a base.
@@ -129,16 +88,15 @@ core::arch::global_asm!(
     "push [ebp + 24]",  // Arg 2: ecx
     "push [ebp + 16]",  // Arg 1: ebx
     "push [ebp + 28]",  // Arg 0: eax
-    "push ebp",         // Arg: current_esp
 
     // 5. Call the dispatcher
     "call syscall_dispatcher",
 
-    // 6. Cleanup arguments (5 arguments * 4 bytes = 20)
-    "add esp, 20",
+    // 6. Cleanup arguments (4 * 4 bytes)
+    "add esp, 16",
 
-    // 7. Switch stack to the returned ESP (allows yielding to new tasks)
-    "mov esp, eax",
+    // 7. Save the return value into the EAX slot on the stack so `popa` restores it.
+    "mov [ebp + 28], eax",
 
     // 8. Restore all registers and return from interrupt
     "popa",
@@ -146,7 +104,6 @@ core::arch::global_asm!(
     "pop fs",
     "pop es",
     "pop ds",
-    "add esp, 4",       // Pop dummy error code
     "iretd"
 );
 

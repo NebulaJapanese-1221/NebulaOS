@@ -1,5 +1,3 @@
-use crate::drivers::framebuffer;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rect {
     pub x: isize,
@@ -45,26 +43,6 @@ impl Rect {
             Some(Rect { x, y, width: (right - x) as usize, height: (bottom - y) as usize })
         } else {
             None
-        }
-    }
-}
-
-pub fn draw_rect(fb: &mut framebuffer::Framebuffer, x: isize, y: isize, width: usize, height: usize, color: u32, clip: Option<Rect>) {    
-    if let Some(fb_info) = fb.info.as_ref() {
-        let screen_rect = Rect { x: 0, y: 0, width: fb_info.width, height: fb_info.height };
-        let mut target_rect = Rect { x, y, width, height };
-
-        if let Some(c) = clip {
-            if let Some(clipped) = target_rect.intersection(&c) { target_rect = clipped; }
-            else { return; }
-        }
-
-        if let Some(clipped) = target_rect.intersection(&screen_rect) {
-            let end_y = clipped.y + clipped.height as isize;
-            let end_x = clipped.x + clipped.width as isize;
-            for py in clipped.y .. end_y {
-                for px in clipped.x .. end_x { fb.set_pixel(px as usize, py as usize, color); }
-            }
         }
     }
 }
