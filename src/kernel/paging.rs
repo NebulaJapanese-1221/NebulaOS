@@ -25,7 +25,7 @@ pub struct VirtualAddressSpace {
 
 impl VirtualAddressSpace {
     pub fn kernel() -> Self {
-        unsafe { Self { pdpt: addr_of_mut!(KERNEL_PDPT), owned: false } }
+        Self { pdpt: addr_of_mut!(KERNEL_PDPT), owned: false }
     }
 
     pub fn new_user() -> Option<Self> {
@@ -75,7 +75,7 @@ impl VirtualAddressSpace {
         }
     }
 
-    unsafe fn get_or_create_table(&self, pd: *mut PageDirectory, idx: usize, flags: u64) -> Option<*mut [u64; 512]> {
+    unsafe fn get_or_create_table(&self, pd: *mut PageDirectory, idx: usize, _flags: u64) -> Option<*mut [u64; 512]> {
         let entry = (*pd).0[idx];
         if (entry & FLAG_PRESENT) != 0 {
             return Some((entry & !0xFFF) as *mut [u64; 512]);
@@ -149,6 +149,10 @@ pub fn init(fb_info: Option<(usize, usize, usize, usize, u8)>) {
     }
 }
 
+pub unsafe fn get_kernel_pd_ptr() -> u32 {
+    addr_of_mut!(KERNEL_PDPT) as u32
+}
+
 /// Allocates a 4KB physical frame and zeros it.
 pub fn allocate_frame() -> Option<*mut [u64; 512]> {
     unsafe {
@@ -156,8 +160,4 @@ pub fn allocate_frame() -> Option<*mut [u64; 512]> {
         let ptr = alloc::alloc::alloc_zeroed(layout) as *mut [u64; 512];
         if ptr.is_null() { None } else { Some(ptr) }
     }
-}
-
-pub unsafe fn get_kernel_pd_ptr() -> u32 {
-    addr_of_mut!(KERNEL_PDPT) as u32
 }

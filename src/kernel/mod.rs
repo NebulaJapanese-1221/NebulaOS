@@ -18,64 +18,106 @@ pub mod process;
 pub mod cpu;
 pub mod elf;
 
-pub const VERSION: &str = "0.0.3-dev";
+pub const VERSION: &str = "0.0.3-dev2";
 
 pub static TOTAL_MEMORY: AtomicUsize = AtomicUsize::new(0);
 pub static CPU_CORES: AtomicUsize = AtomicUsize::new(1);
+static BOOT_ANIM_FRAME: AtomicUsize = AtomicUsize::new(0);
 
-fn draw_boot_screen() {   
-    let mut fb = FRAMEBUFFER.lock();
-    let (width, height) = {
-        if let Some(ref fb_info) = fb.info {
-            (fb_info.width, fb_info.height)
-        } else {
-            return;
+/// Pre-calculated offsets for a 12-spoke loading wheel (30-degree increments).
+const SPOKE_OFFSETS: [(isize, isize); 12] = [
+    (0, -20), (10, -17), (17, -10), (20, 0),
+    (17, 10), (10, 17), (0, 20), (-10, 17),
+    (-17, 10), (-20, 0), (-17, -10), (-10, -17)
+];
+
+fn draw_spinner(fb: &mut crate::drivers::framebuffer::Framebuffer, cx: isize, cy: isize) {
+    let frame = BOOT_ANIM_FRAME.fetch_add(1, Ordering::Relaxed);
+    
+    for i in 0..12 {
+        let (dx, dy) = SPOKE_OFFSETS[i];
+        
+        // Calculate brightness: current spoke is brightest, previous ones fade out (tail effect)
+        let diff = (i + 12 - (frame % 12)) % 12;
+        let brightness = match diff {
+            0 => 255,
+            1 => 180,
+            2 => 120,
+            3 => 60,
+            _ => 30,
+        };
+        
+        let color = (brightness << 16) | (brightness << 8) | brightness;
+
+        // Draw the spoke as a line from the inner hub (radius 8) to outer rim (radius 20)
+        for r in 8..=20 {
+            let px = cx + (dx * r / 20);
+            let py = cy + (dy * r / 20);
+            fb.set_pixel(px as usize, py as usize, color);
         }
+    }
+}
+
+fn draw_boot_screen_content(fb: &mut crate::drivers::framebuffer::Framebuffer, status: &str, progress: usize) {
+    let (width, height) = match fb.info.as_ref() {
+        Some(info) => (info.width, info.height),
+        None => return,
     };
 
     fb.clear(0x00_000033); // Dark blue background
 
     let title = "NebulaOS";
     let x_title = (width / 2).saturating_sub((title.len() * 8) / 2);
-    let y_title = (height / 2).saturating_sub(16 / 2);
+    let y_title = (height / 2).saturating_sub(40);
     
-    font::draw_string(&mut fb, x_title as isize, y_title as isize, title, 0x00_FFFFFF, None);
+    font::draw_string(fb, x_title as isize, y_title as isize, title, 0x00_FFFFFF, None);
 
-    fb.present();
+    // Draw bike-spoke spinner below the title
+    draw_spinner(fb, (width / 2) as isize, (height / 2) as isize + 20);
+
+    // Draw status message
+    let x_status = (width / 2).saturating_sub((status.len() * 8) / 2);
+    font::draw_string(fb, x_status as isize, (height / 2) as isize + 60, status, 0x00_CCCCCC, None);
+
+    // Draw progress bar
+    draw_progress_bar_internal(fb, progress, width, height);
 }
 
-fn add_boot_status(status: &str, line: usize) {
+fn draw_boot_screen(status: &str, progress: usize) {
     let mut fb = FRAMEBUFFER.lock();
-    let x = 20;
-    // Start printing status messages (line is 1-based index)
-    let y = 20 + (line * 20);
-    font::draw_string(&mut fb, x as isize, y as isize, status, 0x00_CCCCCC, None); // Light gray
-    fb.present();
+    let (width, height) = match fb.info.as_ref() {
+        Some(info) => (info.width, info.height),
+        None => return,
+    };
+
+    draw_boot_screen_content(&mut fb, status, progress);
+    // Only present the center area where animations/text are actually changing to save VRAM bandwidth
+    fb.present_rect(width / 2 - 210, height / 2 - 10, 420, 130);
 }
 
-fn draw_progress_bar(progress: usize) {
-    let mut fb = FRAMEBUFFER.lock();
-    if let Some(info) = fb.info.as_ref() {
-        let bar_width = 400;
-        let bar_height = 20;
-        let x = (info.width / 2) - (bar_width / 2);
-        let y = (info.height / 2) + 20;
-        
-        // Draw background
-        for j in 0..bar_height {
-            for i in 0..bar_width {
-                fb.set_pixel(x + i, y + j, 0x00_404040);
-            }
+fn add_boot_status(status: &str, progress: usize) {
+    draw_boot_screen(status, progress);
+}
+
+fn draw_progress_bar_internal(fb: &mut crate::drivers::framebuffer::Framebuffer, progress: usize, width: usize, height: usize) {
+    let bar_width = 400;
+    let bar_height = 4;
+    let x = (width / 2).saturating_sub(bar_width / 2);
+    let y = (height / 2) + 100;
+    
+    // Draw background
+    for j in 0..bar_height {
+        for i in 0..bar_width {
+            fb.set_pixel(x + i, y + j, 0x00_202020);
         }
-        
-        // Draw progress
-        let filled_width = (bar_width * progress) / 100;
-        for j in 0..bar_height {
-            for i in 0..filled_width {
-                fb.set_pixel(x + i, y + j, 0x00_00FF00);
-            }
+    }
+    
+    // Draw progress
+    let filled_width = (bar_width * progress) / 100;
+    for j in 0..bar_height {
+        for i in 0..filled_width {
+            fb.set_pixel(x + i, y + j, 0x00_00AAFF);
         }
-        fb.present();
     }
 }
 
@@ -105,48 +147,80 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     // Initialize Framebuffer first to show boot status text
     if let Some(fb_info) = fb_info_opt {
         crate::drivers::framebuffer::FRAMEBUFFER.lock().init(fb_info);
-        // Clear screen and show initial text immediately
-        draw_boot_screen(); 
+        
+        // Enable hardware paging now that we have memory map and FB info
+        paging::init(fb_info_opt);
+
+        // Setup the initial frame in the backbuffer without presenting it (prevents flash)
+        {
+            let mut fb = FRAMEBUFFER.lock();
+            draw_boot_screen_content(&mut fb, "Starting NebulaOS...", 0);
+            fb.apply_fade(10, 10); // Capture to scratch, using 10 steps for speed
+            for i in 0..=5 { // Fewer steps for faster fade-in
+                fb.apply_fade(i, 10); // Fade from black to full
+                fb.present(); // Full screen present required for fade
+                for _ in 0..10000 { unsafe { asm!("nop") } } // Calibrated delay
+            }
+        }
     } else {
         crate::serial_println!("ERROR: No framebuffer information found!");
     }
     
     // Initialize GDT and TSS
     gdt::init();
+    add_boot_status("Initializing GDT...", 10);
 
     // Set PIT frequency for scheduler (e.g., 1000 Hz)
-    // This must be done before interrupts are enabled.
     crate::drivers::pit::set_frequency(1000);
 
     // Initialize IDT (but do not enable interrupts yet)
     interrupts::init();
-    add_boot_status("[OK] Interrupts Initialized", 2); 
-    draw_progress_bar(30);
+    add_boot_status("Interrupts Initialized", 20); 
 
     // Initialize the mouse driver (polls for ACKs, so interrupts must be disabled)
     crate::drivers::mouse::initialize();
-    add_boot_status("[OK] Mouse Driver Initialized", 3);
-    draw_progress_bar(60);
+    add_boot_status("Mouse Driver Initialized", 40);
 
     // Initialize the keyboard driver
     crate::drivers::keyboard::init();
+    add_boot_status("Keyboard Driver Initialized", 50);
+
+    // Initialize the brightness driver
+    crate::drivers::brightness::BRIGHTNESS.lock().init();
+    add_boot_status("Brightness Driver Initialized", 60);
 
     // Now it is safe to enable interrupts
     interrupts::enable_interrupts();
-    add_boot_status("[OK] Interrupts Enabled", 4);
-    draw_progress_bar(90);
+    add_boot_status("Interrupts Enabled", 70);
 
     // Initialize ACPI
     acpi::init();
+    add_boot_status("ACPI Subsystem Ready", 80);
+
+    // Initialize Speaker and play startup sound
+    {
+        let mut speaker = crate::drivers::speaker::SPEAKER.lock();
+        speaker.init(None, None);
+        speaker.play_startup_sound();
+    }
+    add_boot_status("Audio Subsystem Ready", 85);
 
     // Initialize CPU Info detection (CPUID)
     cpu::init();
-    add_boot_status("[OK] CPU Info Detected", 5);
+    add_boot_status("CPU Topology Detected", 90);
 
-    // NOTE: The old text-mode GUI has been disabled.
-    // The next step is to build a new GUI that draws to the framebuffer.
-    add_boot_status("[OK] Initializing GUI...", 6);
-    draw_progress_bar(100);
+    add_boot_status("Launching Desktop Environment...", 100);
+
+    // Fade out boot screen
+    {
+        let mut fb = FRAMEBUFFER.lock();
+        fb.apply_fade(10, 10); // Sync scratch buffer
+        for i in (0..=5).rev() { // Snappy fade-out
+            fb.apply_fade(i, 10);
+            fb.present();
+            for _ in 0..10000 { unsafe { asm!("nop") } }
+        }
+    }
     
     // Initialize localisation before GUI
     crate::userspace::localisation::init();

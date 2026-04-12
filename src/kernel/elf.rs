@@ -1,5 +1,4 @@
 use core::mem::size_of;
-use alloc::vec::Vec;
 
 pub const ELF_MAGIC: [u8; 4] = [0x7F, b'E', b'L', b'F'];
 pub const PT_LOAD: u32 = 1;
@@ -44,15 +43,6 @@ pub fn check_header(data: &[u8]) -> bool {
     let header = unsafe { &*(data.as_ptr() as *const ElfHeader) };
     // Check Magic and Class (1 = 32-bit)
     header.ident[0..4] == ELF_MAGIC && header.ident[4] == 1
-}
-
-/// Returns the entry point address if valid.
-pub fn get_entry_point(data: &[u8]) -> Option<u32> {
-    if !check_header(data) {
-        return None;
-    }
-    let header = unsafe { &*(data.as_ptr() as *const ElfHeader) };
-    Some(header.entry)
 }
 
 /// Loads the ELF binary into memory and adds it as a task.

@@ -7,4 +7,7 @@ pub mod rtc;
 pub mod ps2;
 pub mod pci;
 pub mod pit;
+pub mod brightness;
 pub mod speaker;
+pub mod battery;
+pub mod ec;

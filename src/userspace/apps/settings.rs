@@ -129,6 +129,21 @@ impl Settings {
                 let btn_lt = Button { rect: Rect { x: content_x, y: content_y + (font_height as isize + 4) * 2 + 5, width: 280, height: (font_height + 4) }, text: btn_lt_text, bg_color: 0x00_30_30_30, text_color: 0xFFFFFF };
                 btn_hc.draw(fb, 0, 0, None);
                 btn_lt.draw(fb, 0, 0, None);
+
+                // Brightness Slider
+                let slider_y = content_y + (font_height as isize + 4) * 3 + 20;
+                font::draw_string(fb, content_x, slider_y, "Brightness", 0x00_FF_FF_FF, None);
+                
+                let slider_x = content_x + 100;
+                let slider_w = 150;
+                let slider_h = 2;
+                let level = crate::drivers::brightness::BRIGHTNESS_LEVEL.load(Ordering::Relaxed);
+
+                // Track
+                crate::userspace::gui::draw_rect(fb, slider_x, slider_y + 6, slider_w, slider_h, 0x00_80_80_80, None);
+                // Handle
+                let handle_x = slider_x + ((level as usize * slider_w) / 100) as isize;
+                crate::userspace::gui::draw_rect(fb, handle_x - 4, slider_y, 8, 14, 0x00_FF_CC_00, None);
             },
             Tab::Theme => {
                 font::draw_string(fb, content_x, content_y, locale.label_bg_color(), 0x00_FF_FF_FF, None);
@@ -234,6 +249,13 @@ impl App for Settings {
                             } else if btn_lt_rect.contains(rel_x, rel_y) {
                                 LARGE_TEXT.fetch_xor(true, Ordering::Relaxed);
                                 FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
+                            } else {
+                                // Check Brightness Slider
+                                let slider_y = (font_height as isize + 4) * 3 + 20;
+                                if rel_y >= slider_y && rel_y <= slider_y + 14 && rel_x >= 100 && rel_x <= 250 {
+                                    let new_level = ((rel_x - 100) * 100 / 150) as u8;
+                                    crate::drivers::brightness::set_master_brightness(new_level);
+                                }
                             }
                         }
                         Tab::Language => {
@@ -266,10 +288,11 @@ impl App for Settings {
                     }
                 }
             }
-            AppEvent::MouseMove { x, y, .. } if self.current_tab == Tab::Theme => {
+            AppEvent::MouseMove { x, y, .. } => {
                 if *y >= content_pane_y_start {
                     let rel_y = *y - content_pane_y_start;
                     let rel_x = *x - content_pane_x_start;
+                    if self.current_tab == Tab::Theme {
                     let slider_x_rel = 30;
                     let slider_w = 150;
 
@@ -293,6 +316,14 @@ impl App for Settings {
                         DESKTOP_GRADIENT_START.store(new_start, Ordering::Relaxed);
                         DESKTOP_GRADIENT_END.store(new_end, Ordering::Relaxed);
                         FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
+                    }
+                    } else if self.current_tab == Tab::Accessibility {
+                        let slider_y = (font_height as isize + 4) * 3 + 20;
+                        // Allow dragging if mouse is roughly near the slider height
+                        if rel_y >= slider_y - 10 && rel_y <= slider_y + 24 && rel_x >= 100 && rel_x <= 250 {
+                            let new_level = ((rel_x - 100) * 100 / 150) as u8;
+                            crate::drivers::brightness::set_master_brightness(new_level);
+                        }
                     }
                 }
             }

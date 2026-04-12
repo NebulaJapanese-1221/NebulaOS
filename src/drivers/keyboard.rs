@@ -26,6 +26,7 @@ impl KeyBuffer {
                 capslock: false,
                 last_scancode: 0,
                 repeat_count: 0,
+                extended: false,
             },
         }
     }
@@ -59,11 +60,17 @@ pub fn handle_interrupt() {
 
         // Only process if it IS NOT from the mouse (Bit 5 clear)
         if (status & ps2::STATUS_MOUSE_DATA) == 0 {
-            update_modifiers(scancode);
-            if scancode < 0x80 {
-                if let Some(c) = scancode_to_char(scancode) {
-                    KEY_BUFFER.lock().push(c);
+            if scancode == 0xE0 {
+                KEY_BUFFER.lock().modifiers.extended = true;
+            } else {
+                update_modifiers(scancode);
+                if scancode < 0x80 {
+                    if let Some(c) = scancode_to_char(scancode) {
+                        KEY_BUFFER.lock().push(c);
+                    }
                 }
+                // Reset extended state after processing the following byte
+                KEY_BUFFER.lock().modifiers.extended = false;
             }
         }
     }
@@ -84,6 +91,7 @@ pub struct Modifiers {
     pub capslock: bool,
     pub last_scancode: u8,
     pub repeat_count: u32,
+    pub extended: bool,
 }
 
 /// The global keyboard buffer.
@@ -132,11 +140,6 @@ pub fn is_shift_pressed() -> bool {
     kb.modifiers.lshift || kb.modifiers.rshift
 }
 
-pub fn is_capslock_enabled() -> bool {
-    let kb = KEY_BUFFER.lock();
-    kb.modifiers.capslock
-}
-
 pub fn is_alt_pressed() -> bool {
     let kb = KEY_BUFFER.lock();
     kb.modifiers.alt
@@ -172,10 +175,24 @@ static SCANCODE_SET1_SHIFTED: [char; 128] = [
 /// Converts a PS/2 scancode (Set 1) to a character.
 /// Handles a basic QWERTY layout.
 pub fn scancode_to_char(scancode: u8) -> Option<char> {
-    let shift = is_shift_pressed();
-    let capslock = is_capslock_enabled();
-    let idx = scancode as usize;
+    let kb = KEY_BUFFER.lock();
+    let shift = kb.modifiers.lshift || kb.modifiers.rshift;
+    let capslock = kb.modifiers.capslock;
+    let extended = kb.modifiers.extended;
+    drop(kb);
 
+    if extended {
+        return match scancode {
+            0x20 => Some('\u{B2}'), // Multimedia Mute
+            0x2E => Some('\u{B1}'), // Multimedia Vol Down
+            0x30 => Some('\u{B0}'), // Multimedia Vol Up
+            0x08 => Some('\u{B3}'), // Multimedia Brightness Down (Common on some laptops)
+            0x09 => Some('\u{B4}'), // Multimedia Brightness Up (Common on some laptops)
+            _ => None,
+        };
+    }
+
+    let idx = scancode as usize;
     if idx >= SCANCODE_SET1.len() {
         return None;
     }

@@ -23,6 +23,7 @@ use crate::userspace::localisation;
 pub use crate::userspace::fonts::font;
 
 const MAX_WINDOWS: usize = 10;
+const TOP_BAR_HEIGHT: usize = 26;
 
 pub static DESKTOP_GRADIENT_START: AtomicU32 = AtomicU32::new(0x00_10_20_40);
 pub static DESKTOP_GRADIENT_END: AtomicU32 = AtomicU32::new(0x00_50_80_B0);
@@ -83,7 +84,6 @@ enum ResizeDirection {
 pub enum MouseButton {
     Left,
     Right,
-    Middle,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -182,6 +182,9 @@ pub struct WindowManager {
     drag_rect: Option<Rect>,
     task_switcher_open: bool,
     task_switcher_index: usize,
+    osd_timeout: usize,
+    brightness_osd_timeout: usize,
+    tooltip: Option<(alloc::string::String, isize, isize)>,
 }
 
 impl WindowManager {
@@ -207,6 +210,9 @@ impl WindowManager {
             drag_rect: None,
             task_switcher_open: false,
             task_switcher_index: 0,
+            osd_timeout: 0,
+            brightness_osd_timeout: 0,
+            tooltip: None,
         }
     }
 
@@ -238,6 +244,9 @@ impl WindowManager {
         // The old redraw logic is replaced by dirty rect tracking.
         // We no longer use boolean flags to trigger a full redraw.
 
+        // Synchronize hardware power status (Battery/Thermal)
+        crate::kernel::acpi::update_power_status();
+
         // Check if time needs update
         if TIME_NEEDS_UPDATE.load(Ordering::Relaxed) {
             TIME_NEEDS_UPDATE.store(false, Ordering::Relaxed);
@@ -256,11 +265,58 @@ impl WindowManager {
             drop(current_dt); // Release lock early
         }
 
+        // Handle OSD timeout
+        if self.osd_timeout > 0 {
+            self.osd_timeout -= 1;
+            if self.osd_timeout == 0 {
+                if let Some(info) = FRAMEBUFFER.lock().info.as_ref() {
+                    let osd_w = 200; let osd_h = 60;
+                    self.mark_dirty(Rect {
+                        x: (info.width as isize - osd_w) / 2,
+                        y: (info.height as isize - osd_h) / 2,
+                        width: osd_w as usize, height: osd_h as usize
+                    });
+                }
+            }
+        }
+
+        // Handle Brightness OSD timeout
+        if self.brightness_osd_timeout > 0 {
+            self.brightness_osd_timeout -= 1;
+            if self.brightness_osd_timeout == 0 {
+                if let Some(info) = FRAMEBUFFER.lock().info.as_ref() {
+                    let osd_w = 200; let osd_h = 60;
+                    self.mark_dirty(Rect {
+                        x: (info.width as isize - osd_w) / 2,
+                        y: (info.height as isize - osd_h) / 2,
+                        width: osd_w as usize, height: osd_h as usize
+                    });
+                }
+            }
+        }
         // Cache screen dimensions to avoid locking Framebuffer in the loop
         let (screen_width, screen_height) = if let Some(info) = FRAMEBUFFER.lock().info.as_ref() {
             (info.width as isize, info.height as isize)
         } else {
             (800, 600) // Fallback
+        };
+
+        // Tooltip logic for Battery Indicator
+        let mut new_tooltip = None;
+        let top_bar_y = 0;
+        let bat_x = screen_width - 335;
+        let bat_hit_rect = Rect { x: bat_x, y: top_bar_y, width: 80, height: TOP_BAR_HEIGHT as usize };
+
+        if bat_hit_rect.contains(self.input.mouse_x, self.input.mouse_y) {
+            let info = crate::drivers::battery::BATTERY.lock().get_info();
+            let text = format!("Health: {}%  Cycles: {}", info.health, info.cycle_count);
+            new_tooltip = Some((text, bat_x, taskbar_y - 25));
+        }
+
+        if self.tooltip != new_tooltip {
+            if let Some((_, tx, ty)) = &self.tooltip { self.mark_dirty(Rect { x: *tx, y: *ty, width: 220, height: 25 }); }
+            if let Some((_, tx, ty)) = &new_tooltip { self.mark_dirty(Rect { x: *tx, y: *ty, width: 250, height: 25 }); }
+            self.tooltip = new_tooltip;
         };
 
         // Mark the cursor's starting position as dirty ONCE before processing packets
@@ -365,6 +421,71 @@ impl WindowManager {
                         if !self.windows.is_empty() {
                             self.task_switcher_index = (self.task_switcher_index + 1) % self.windows.len();
                         }
+                    } else if (key == 'm' || key == 'M') && self.input.ctrl_pressed {
+                        // Global Shortcut: Ctrl+M to toggle mute
+                        crate::drivers::speaker::SPEAKER.lock().toggle_mute();
+                        self.osd_timeout = 60;
+                        if let Some(info) = FRAMEBUFFER.lock().info.as_ref() {
+                             let osd_w = 200; let osd_h = 60;
+                             self.mark_dirty(Rect { x: (info.width as isize - osd_w)/2, y: (info.height as isize - osd_h)/2, width: osd_w as usize, height: osd_h as usize });
+                             self.mark_dirty(Rect { x: 0, y: info.height as isize - 40, width: info.width, height: 40 });
+                        }
+                    } else if (key == '=' || key == '+') && self.input.ctrl_pressed {
+                        // Global Shortcut: Ctrl+Plus to increase volume
+                        crate::drivers::speaker::SPEAKER.lock().increment_volume(5);
+                        self.osd_timeout = 60;
+                        if let Some(info) = FRAMEBUFFER.lock().info.as_ref() {
+                             let osd_w = 200; let osd_h = 60;
+                             self.mark_dirty(Rect { x: (info.width as isize - osd_w)/2, y: (info.height as isize - osd_h)/2, width: osd_w as usize, height: osd_h as usize });
+                             self.mark_dirty(Rect { x: 0, y: info.height as isize - 40, width: info.width, height: 40 });
+                        }
+                    } else if (key == '-' || key == '_') && self.input.ctrl_pressed {
+                        // Global Shortcut: Ctrl+Minus to decrease volume
+                        crate::drivers::speaker::SPEAKER.lock().increment_volume(-5);
+                        self.osd_timeout = 60;
+                        if let Some(info) = FRAMEBUFFER.lock().info.as_ref() {
+                             let osd_w = 200; let osd_h = 60;
+                             self.mark_dirty(Rect { x: (info.width as isize - osd_w)/2, y: (info.height as isize - osd_h)/2, width: osd_w as usize, height: osd_h as usize });
+                             self.mark_dirty(Rect { x: 0, y: info.height as isize - 40, width: info.width, height: 40 });
+                        }
+                    } else if key == '\u{B0}' || key == '\u{B1}' || key == '\u{B2}' {
+                        // Hardware Multimedia Keys (Commonly mapped in driver)
+                        let mut speaker = crate::drivers::speaker::SPEAKER.lock();
+                        match key {
+                            '\u{B0}' => speaker.increment_volume(5),  // Vol Up
+                            '\u{B1}' => speaker.increment_volume(-5), // Vol Down
+                            '\u{B2}' => speaker.toggle_mute(),        // Mute
+                            _ => {}
+                        }
+                        self.osd_timeout = 60;
+                        if let Some(info) = FRAMEBUFFER.lock().info.as_ref() {
+                             let osd_w = 200; let osd_h = 60;
+                             self.mark_dirty(Rect { x: (info.width as isize - osd_w)/2, y: (info.height as isize - osd_h)/2, width: osd_w as usize, height: osd_h as usize });
+                             self.mark_dirty(Rect { x: 0, y: info.height as isize - 40, width: info.width, height: 40 });
+                        }
+                    } else if key == '\u{B3}' { // Brightness Down
+                        crate::drivers::brightness::increment_master_brightness(-5);
+                        self.brightness_osd_timeout = 60;
+                        if let Some(info) = FRAMEBUFFER.lock().info.as_ref() {
+                             let osd_w = 200; let osd_h = 60;
+                             self.mark_dirty(Rect { x: (info.width as isize - osd_w)/2, y: (info.height as isize - osd_h)/2, width: osd_w as usize, height: osd_h as usize });
+                             // No taskbar update for brightness
+                        }
+                    } else if key == '\u{B4}' { // Brightness Up
+                        crate::drivers::brightness::increment_master_brightness(5);
+                        self.brightness_osd_timeout = 60;
+                        if let Some(info) = FRAMEBUFFER.lock().info.as_ref() {
+                             let osd_w = 200; let osd_h = 60;
+                             self.mark_dirty(Rect { x: (info.width as isize - osd_w)/2, y: (info.height as isize - osd_h)/2, width: osd_w as usize, height: osd_h as usize });
+                             // No taskbar update for brightness
+                        }
+                    } else if (key == 'b' || key == 'B') && self.input.ctrl_pressed {
+                        // Global Shortcut: Ctrl+B to toggle brightness OSD (or cycle modes)
+                        self.brightness_osd_timeout = 60; // Just show OSD for now
+                        if let Some(info) = FRAMEBUFFER.lock().info.as_ref() {
+                             let osd_w = 200; let osd_h = 60;
+                             self.mark_dirty(Rect { x: (info.width as isize - osd_w)/2, y: (info.height as isize - osd_h)/2, width: osd_w as usize, height: osd_h as usize });
+                        }
                     } else {
                         if self.task_switcher_open && !self.input.alt_pressed {
                             // Alt released, switch to selected window
@@ -453,16 +574,17 @@ impl WindowManager {
             if let Some(target_id) = self.click_target_id {
                 if self.drag_win_id.is_none() && self.resize_win_id.is_none() {
                     if let Some(idx) = self.windows.iter().position(|w| w.id == target_id) {
+                        let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
+                        let title_height = font_height + 6;
                         let (win_x, win_y, win_w, win_h) = {
                             let w = &self.windows[idx];
                             (w.x, w.y, w.width, w.height)
                         };
                         
                         if let WindowContent::App(app) = &mut self.windows[idx].content {
-                            // Use 22 for title height to match draw_window offset
                             let rel_x = self.input.mouse_x - win_x;
-                            let rel_y = self.input.mouse_y - (win_y + 22);
-                            if rel_x >= 0 && rel_x < win_w as isize && rel_y >= 0 && rel_y < win_h.saturating_sub(22) as isize {
+                            let rel_y = self.input.mouse_y - (win_y + title_height as isize);
+                            if rel_x >= 0 && rel_x < win_w as isize && rel_y >= 0 && rel_y < win_h.saturating_sub(title_height) as isize {
                                 app.handle_event(&AppEvent::MouseMove { x: rel_x, y: rel_y, width: win_w, height: win_h });
                             }
                         }
@@ -556,6 +678,28 @@ impl WindowManager {
             let start_button_width = 120;
             let locale_guard = localisation::CURRENT_LOCALE.lock();
             let locale = locale_guard.as_ref().unwrap();
+
+            // 0. Check for clicks on the TOP BAR (Functional UI)
+            if self.input.mouse_y < TOP_BAR_HEIGHT as isize {
+                let width = FRAMEBUFFER.lock().info.as_ref().map(|i| i.width).unwrap_or(800);
+                
+                // Volume Click: Mute Toggle
+                let vol_x = width as isize - 225;
+                if self.input.mouse_x >= vol_x - 40 && self.input.mouse_x < vol_x + 60 {
+                    crate::drivers::speaker::SPEAKER.lock().toggle_mute();
+                    self.osd_timeout = 60;
+                    self.mark_dirty(Rect { x: 0, y: 0, width, height: TOP_BAR_HEIGHT });
+                    return;
+                }
+
+                // Clock Click: Refresh Desktop
+                let clock_x = width as isize - 160;
+                if self.input.mouse_x >= clock_x {
+                    FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
+                    return;
+                }
+            }
+
             let start_button = Button::new(0, taskbar_y, start_button_width, taskbar_height, locale.start());
 
             if self.context_menu_open {
@@ -805,11 +949,13 @@ impl WindowManager {
                             (win.x, win.y, win.width, win.maximized)
                         };
 
-                        let close_button = Button::new(win_x + win_width as isize - 20, win_y + 2, 16, 16, "x");
-                        let max_button = Button::new(win_x + win_width as isize - 40, win_y + 2, 16, 16, "+");
-                        let min_button = Button::new(win_x + win_width as isize - 60, win_y + 2, 16, 16, "-");
+                        let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
+                        let title_height = font_height + 6;
+                        let close_button = Button::new(win_x + win_width as isize - 20, win_y + 3, 16, 16, "x");
+                        let max_button = Button::new(win_x + win_width as isize - 40, win_y + 3, 16, 16, "+");
+                        let min_button = Button::new(win_x + win_width as isize - 60, win_y + 3, 16, 16, "-");
 
-                        if self.input.mouse_y < win_y + 20 { // Clicked title bar
+                        if self.input.mouse_y < win_y + title_height as isize { // Clicked title bar
                             if close_button.contains(self.input.mouse_x, self.input.mouse_y) {
                                 // Remove window
                                 // The rect was already marked dirty when the window was clicked.
@@ -834,9 +980,10 @@ impl WindowManager {
                                         top_win.maximized = false;
                                     } else {
                                         top_win.restore_rect = Some(old_rect);
-                                        top_win.x = 0; top_win.y = 0;
+                                        top_win.x = 0; 
+                                        top_win.y = TOP_BAR_HEIGHT as isize;
                                         top_win.width = fb_info_w;
-                                        top_win.height = fb_info_h - taskbar_h;
+                                        top_win.height = fb_info_h - taskbar_h - TOP_BAR_HEIGHT;
                                         top_win.maximized = true;
                                     }
                                     (old_rect, Rect { x: top_win.x, y: top_win.y, width: top_win.width, height: top_win.height })
@@ -1032,10 +1179,13 @@ impl WindowManager {
                 }
             }
 
-            // 3. Draw Taskbar
+            // 3. Draw Top Bar (System Status)
+            self.draw_top_bar(&mut local_fb, *dirty_rect);
+
+            // 4. Draw Taskbar (Window Management)
             self.draw_taskbar(&mut local_fb, self.input.mouse_x, self.input.mouse_y, *dirty_rect);
 
-            // 4. Draw Start Menu if open
+            // 5. Draw Start Menu if open
             if self.start_menu_open {
                 self.draw_start_menu(&mut local_fb, self.input.mouse_x, self.input.mouse_y, *dirty_rect);
             }
@@ -1049,6 +1199,16 @@ impl WindowManager {
                 self.draw_task_switcher(&mut local_fb, *dirty_rect);
             }
 
+            // Draw Volume OSD
+            if self.osd_timeout > 0 {
+                self.draw_osd(&mut local_fb, *dirty_rect);
+            }
+
+            // Draw Brightness OSD
+            if self.brightness_osd_timeout > 0 {
+                self.draw_brightness_osd(&mut local_fb, *dirty_rect);
+            }
+
             // Draw Drag Overlay
             if let Some(rect) = self.drag_rect {
                 let border_color = 0x00_FF_FF_FF; // White outline
@@ -1056,6 +1216,11 @@ impl WindowManager {
                 draw_rect(&mut local_fb, rect.x, rect.y + rect.height as isize - 2, rect.width, 2, border_color, Some(*dirty_rect)); // Bottom
                 draw_rect(&mut local_fb, rect.x, rect.y, 2, rect.height, border_color, Some(*dirty_rect)); // Left
                 draw_rect(&mut local_fb, rect.x + rect.width as isize - 2, rect.y, 2, rect.height, border_color, Some(*dirty_rect)); // Right
+            }
+
+            // 6. Draw Tooltip
+            if let Some((ref text, tx, ty)) = self.tooltip {
+                self.draw_tooltip(&mut local_fb, text.as_str(), tx, ty, *dirty_rect);
             }
 
             // 5. Draw Mouse Cursor
@@ -1220,19 +1385,45 @@ impl WindowManager {
                     win.title.to_string()
                 };
 
-                let mut button = Button::new(x_offset, taskbar_y + 2, button_width, taskbar_height - 4, &title);
+                let mut button = Button::new(x_offset, taskbar_y + 2, button_width, taskbar_height - 4, title);
                 button.bg_color = if win.minimized { 0x00_30_30_30 } else { 0x00_50_50_50 };
                 button.text_color = 0x00_FF_FF_FF;
                 button.draw(fb, mouse_x, mouse_y, Some(clip));
                 x_offset += button_width as isize + 5;
             }
+    }
 
-            // Draw the volume control
-            let vol_x = width as isize - 180;
-            draw_volume_control(fb, vol_x, taskbar_y + 14, clip);
+    fn draw_top_bar(&self, fb: &mut framebuffer::Framebuffer, clip: Rect) {
+        let (width, _) = if let Some(ref info) = fb.info {
+            (info.width, info.height)
+        } else {
+            return;
+        };
 
-            // Draw the time on the right side
-            self.draw_clock_on_taskbar(fb, clip);
+        let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
+        let bg_color = if high_contrast { 0x00_00_00_00 } else { 0x00_1A_1A_1A };
+        let border_color = if high_contrast { 0x00_FF_FF_FF } else { 0x00_33_33_33 };
+
+        // Semi-transparent look (by being slightly lighter than black)
+        draw_rect(fb, 0, 0, width, TOP_BAR_HEIGHT, bg_color, Some(clip));
+        draw_rect(fb, 0, TOP_BAR_HEIGHT as isize - 1, width, 1, border_color, Some(clip));
+
+        // Brand/OS Label
+        font::draw_string(fb, 10, 5, "Nebula", 0x00_00_AA_FF, Some(clip));
+
+        // Right-aligned status icons
+        let clock_width = (19 * 8) + 10; // "YYYY-MM-DD HH:MM:SS" is 19 chars
+        let bat_x = width as isize - 335;
+        let vol_x = width as isize - 225;
+        let clock_x = width as isize - clock_width as isize - 5;
+
+        draw_battery_indicator(fb, bat_x, 7, clip);
+        draw_volume_control(fb, vol_x, 7, clip);
+        
+        // Draw clock
+        let time = CURRENT_DATETIME.lock();
+        let datetime_s = format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", time.year, time.month, time.day, time.hour, time.minute, time.second);
+        font::draw_string(fb, clock_x, 5, datetime_s.as_str(), 0x00_FFFFFF, Some(clip));
     }
 
     // New function to draw only the clock area on the taskbar
@@ -1309,6 +1500,22 @@ impl WindowManager {
             shutdown_button.draw(fb, mouse_x, mouse_y, Some(clip));
     }
 
+    fn draw_tooltip(&self, fb: &mut framebuffer::Framebuffer, text: &str, x: isize, y: isize, clip: Rect) {
+        let w = font::string_width(text) + 10;
+        let h = 20;
+        let rect = Rect { x, y, width: w, height: h };
+        
+        if !clip.intersects(&rect) { return; }
+
+        draw_rect(fb, x, y, w, h, 0x00_FFFFE1, Some(clip)); // Classic Tooltip Yellow
+        draw_rect(fb, x, y, w, 1, 0x00_000000, Some(clip)); // Border
+        draw_rect(fb, x, y, 1, h, 0x00_000000, Some(clip));
+        draw_rect(fb, x + w as isize - 1, y, 1, h, 0x00_000000, Some(clip));
+        draw_rect(fb, x, y + h as isize - 1, w, 1, 0x00_000000, Some(clip));
+
+        font::draw_string(fb, x + 5, y + 2, text, 0x00_000000, Some(clip));
+    }
+
     fn draw_context_menu(&self, fb: &mut framebuffer::Framebuffer, mouse_x: isize, mouse_y: isize, clip: Rect) {
         let menu_x = self.context_menu_x;
         let menu_y = self.context_menu_y;
@@ -1367,6 +1574,59 @@ impl WindowManager {
                 // Draw simple char as icon representation
                 font::draw_char(fb, item_x + 12, start_y + 12, win.title.chars().next().unwrap_or('?'), 0x00_FFFFFF, Some(clip));
             }
+        }
+    }
+
+    fn draw_osd(&self, fb: &mut framebuffer::Framebuffer, clip: Rect) {
+        if let Some(info) = fb.info.as_ref() {
+            let osd_w = 200;
+            let osd_h = 60;
+            let x = (info.width as isize - osd_w) / 2;
+            let y = (info.height as isize - osd_h) / 2;
+            let osd_rect = Rect { x, y, width: osd_w as usize, height: osd_h as usize };
+
+            if !clip.intersects(&osd_rect) { return; }
+
+            let speaker = crate::drivers::speaker::SPEAKER.lock();
+            let vol = speaker.master_volume;
+            let muted = speaker.muted;
+            drop(speaker);
+
+            let percent = 100 - (vol as u32 * 100 / 63);
+            
+            // Draw Background with border
+            draw_rect(fb, x, y, osd_w as usize, osd_h as usize, 0x00_20_20_20, Some(clip));
+            draw_rect(fb, x, y, osd_w as usize, 1, 0x00_FFFFFF, Some(clip));
+
+            let label = if muted { "MUTE" } else { "VOLUME" };
+            font::draw_string(fb, x + 10, y + 10, label, 0x00_FFFFFF, Some(clip));
+            
+            let bar_color = if muted { 0x00_44_44_44 } else { 0x00_00_FF_00 };
+            draw_rect(fb, x + 10, y + 35, 180 * percent as usize / 100, 15, bar_color, Some(clip));
+        }
+    }
+
+    fn draw_brightness_osd(&self, fb: &mut framebuffer::Framebuffer, clip: Rect) {
+        if let Some(info) = fb.info.as_ref() {
+            let osd_w = 200;
+            let osd_h = 60;
+            let x = (info.width as isize - osd_w) / 2;
+            let y = (info.height as isize - osd_h) / 2;
+            let osd_rect = Rect { x, y, width: osd_w as usize, height: osd_h as usize };
+
+            if !clip.intersects(&osd_rect) { return; }
+
+            let brightness_level = crate::drivers::brightness::BRIGHTNESS_LEVEL.load(Ordering::Relaxed);
+            
+            // Draw Background with border
+            draw_rect(fb, x, y, osd_w as usize, osd_h as usize, 0x00_20_20_20, Some(clip));
+            draw_rect(fb, x, y, osd_w as usize, 1, 0x00_FFFFFF, Some(clip));
+
+            let label = "BRIGHTNESS";
+            font::draw_string(fb, x + 10, y + 10, label, 0x00_FFFFFF, Some(clip));
+            
+            let bar_color = 0x00_FF_CC_00; // Orange/Yellow for brightness
+            draw_rect(fb, x + 10, y + 35, 180 * brightness_level as usize / 100, 15, bar_color, Some(clip));
         }
     }
 
@@ -1516,6 +1776,37 @@ pub fn draw_volume_control(fb: &mut framebuffer::Framebuffer, x: isize, y: isize
         draw_rect(fb, x, y, fill_w, height, 0x00_00_AA_00, Some(clip)); // Green Fill
         font::draw_string(fb, x - 35, y - 2, "VOL", 0x00_FFFFFF, Some(clip));
     }
+}
+
+/// Draws a battery icon and percentage on the taskbar.
+pub fn draw_battery_indicator(fb: &mut framebuffer::Framebuffer, x: isize, y: isize, clip: Rect) {
+    let info = crate::drivers::battery::BATTERY.lock().get_info();
+    
+    let width = 30;
+    let height = 12;
+    
+    // Draw Battery Body
+    draw_rect(fb, x, y, width, height, 0x00_10_10_10, Some(clip)); // Outline/BG
+    draw_rect(fb, x + width as isize, y + 3, 2, 6, 0x00_CCCCCC, Some(clip)); // Positive terminal nub
+
+    // Determine color based on level
+    let color = match info.percentage {
+        0..=20 => 0x00_FF_00_00, // Red
+        21..=50 => 0x00_FF_AA_00, // Orange
+        _ => 0x00_00_AA_00,      // Green
+    };
+
+    let fill_w = (width * info.percentage as usize) / 100;
+    draw_rect(fb, x, y, fill_w, height, color, Some(clip));
+
+    // Draw charging indicator (simple '+')
+    if info.state == crate::drivers::battery::BatteryState::Charging {
+        font::draw_char(fb, x + 11, y - 2, '+', 0x00_FFFFFF, Some(clip));
+    }
+
+    // Only draw percentage on taskbar by default. Extended info is in tooltip.
+    let s = format!("{}%", info.percentage);
+    font::draw_string(fb, x + 40, y - 2, s.as_str(), 0x00_FFFFFF, Some(clip));
 }
 
 pub fn draw_rect(fb: &mut framebuffer::Framebuffer, x: isize, y: isize, width: usize, height: usize, color: u32, clip: Option<Rect>) {    

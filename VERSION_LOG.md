@@ -3,8 +3,17 @@
 
 ## v0.0.3-dev2 (In Progress)
 - Added robust Framebuffer initialization with support for 15-bit (RGB555) and 16-bit (RGB565) color depths.
-- Re-implemented a streamlined PAE Paging system (under 200 lines) for improved kernel identity mapping stability.
-- Implemented a DMA-based PCM audio engine
+- Implemented a streamlined PAE Paging system for improved kernel identity mapping stability.
+- Implemented a DMA-based PCM audio engine for AC97.
+- Added PCI Bus Scanning for automatic AC97 hardware detection.
+- Added a Volume Control widget to the GUI with mute indicator.
+- Implemented hardware volume control logic for the audio subsystem and global hotkeys.
+- Added a 'Brightness' driver with simulated control and OSD popup.
+- Added a 'Battery' driver
+- Implemented a dynamic ToolTip system for the taskbar.
+- Added a system top bar for status indicators (Volume, Battery, Date/Time).
+- Added a better boot screen.
+- Added system startup and shutdown sounds.
 
 ## v0.0.3-dev (03-22-2026)
 - Added proper System Information detection (CPUID for Brand String).

@@ -1,7 +1,7 @@
 //! Driver for AC97 Audio Controller (Actual Speaker/Line Out).
 
-use crate::kernel::io;
 use crate::kernel::paging::allocate_frame;
+use crate::kernel::io;
 use spin::Mutex;
 use core::ptr;
 
@@ -16,9 +16,7 @@ const REG_PCM_OUT_VOLUME: u16 = 0x18;
 
 /// AC97 Bus Master Registers (Offsets from BAR1)
 const PCM_OUT_BDBAR: u16 = 0x10; // Buffer Descriptor Base Address
-const PCM_OUT_CIV:   u16 = 0x14; // Current Index Value
 const PCM_OUT_LVI:   u16 = 0x15; // Last Valid Index
-const PCM_OUT_SR:    u16 = 0x16; // Status Register
 const PCM_OUT_CR:    u16 = 0x1B; // Control Register
 
 /// Buffer Descriptor structure for AC97 DMA.
@@ -29,7 +27,6 @@ struct BufferDescriptor {
 }
 
 const BDL_ENTRY_IOC: u16 = 1 << 15; // Interrupt on Completion
-const BDL_ENTRY_BUP: u16 = 1 << 14; // Buffer Underrun Policy
 
 pub struct SpeakerDriver {
     pub mixer_base: u16,
@@ -75,7 +72,7 @@ impl SpeakerDriver {
             self.bdl_phys = frame as u32;
         }
 
-        self.set_volume(31); // 50% Volume
+        self.set_volume(40); // 40% Default Volume
     }
 
     /// Sets the master volume (0 to 100).
@@ -83,10 +80,17 @@ impl SpeakerDriver {
         let percent = percent.min(100);
         // AC97 volume is inverted: 0 is loudest, 63 is quietest.
         // We map 0-100% to 63-0.
-        let vol_value = 63 - (percent * 63 / 100);
+        let vol_value = 63 - (percent as u16 * 63 / 100) as u8;
         self.master_volume = vol_value;
 
         self.update_hardware_volume();
+    }
+
+    /// Adjusts volume by a relative percentage (e.g. +5 or -5).
+    pub fn increment_volume(&mut self, delta: i8) {
+        let current_percent = 100 - (self.master_volume as i32 * 100 / 63);
+        let new_percent = (current_percent + delta as i32).clamp(0, 100) as u8;
+        self.set_volume(new_percent);
     }
 
     /// Starts playing PCM audio from a buffer using DMA.
@@ -127,27 +131,49 @@ impl SpeakerDriver {
             let buffer = frame as *mut i16;
             unsafe {
                 for i in 0..8000 {
-                    // Simple square wave pulse
-                    let val = if (i / 50) % 2 == 0 { 4000 } else { -4000 };
-                    ptr::write_volatile(buffer.add(i), val);
+                    // Ascending Arpeggio: C4 (261Hz), E4 (329Hz), G4 (392Hz)
+                    let freq = if i < 2000 { 30 }      // C
+                               else if i < 4000 { 24 } // E
+                               else { 20 };            // G
+                    
+                    // Basic Triangle-ish wave for a softer sound than square
+                    let wave = if (i / freq) % 2 == 0 { 
+                        ((i % freq) as i16 * 400) - 4000 
+                    } else { 
+                        4000 - ((i % freq) as i16 * 400) 
+                    };
+                    
+                    // Apply simple fade out at the very end
+                    let volume_envelope = if i > 6000 { (8000 - i) as i16 / 2 } else { 1000 };
+                    ptr::write_volatile(buffer.add(i), wave.saturating_mul(volume_envelope) / 1000);
                 }
                 self.play_pcm(frame as u32, 8000);
             }
         }
     }
 
-    pub fn stop_pcm(&self) {
-        let cr = unsafe { io::inb(self.bus_master_base + PCM_OUT_CR) };
-        unsafe { io::outb(self.bus_master_base + PCM_OUT_CR, cr & !0x01); }
+    /// Plays a short, descending shutdown sound.
+    pub fn play_shutdown_sound(&self) {
+        if self.bdl_phys == 0 { return; }
+        
+        if let Some(frame) = allocate_frame() {
+            let buffer = frame as *mut i16;
+            unsafe {
+                for i in 0..8000 {
+                    // Descending: G4 (392Hz), E4 (329Hz), C4 (261Hz)
+                    let freq = if i < 2000 { 20 }
+                               else if i < 4000 { 24 }
+                               else { 30 };
+                    let wave = if (i / freq) % 2 == 0 { 2000 } else { -2000 };
+                    ptr::write_volatile(buffer.add(i), wave);
+                }
+                self.play_pcm(frame as u32, 8000);
+            }
+        }
     }
 
-    pub fn mute(&mut self) {
-        self.muted = true;
-        self.update_hardware_volume();
-    }
-
-    pub fn unmute(&mut self) {
-        self.muted = false;
+    pub fn toggle_mute(&mut self) {
+        self.muted = !self.muted;
         self.update_hardware_volume();
     }
 
@@ -167,9 +193,3 @@ impl SpeakerDriver {
 }
 
 pub static SPEAKER: Mutex<SpeakerDriver> = Mutex::new(SpeakerDriver::new());
-
-/// Public API for volume control used by the GUI or Shell.
-pub fn set_master_volume(percent: u8) {
-    let mut speaker = SPEAKER.lock();
-    speaker.set_volume(percent);
-}

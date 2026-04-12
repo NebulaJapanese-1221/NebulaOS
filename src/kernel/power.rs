@@ -25,6 +25,13 @@ pub fn shutdown() {
         }
     }
 
+    // Play shutdown sound
+    {
+        let speaker = crate::drivers::speaker::SPEAKER.lock();
+        speaker.play_shutdown_sound();
+    }
+    for _ in 0..5_000_000 { unsafe { asm!("nop") } } // Wait for sound to play
+
     // This will attempt to perform an ACPI shutdown.
     // It may not work on all hardware or emulators, but it is more portable.
     acpi::acpi_shutdown();

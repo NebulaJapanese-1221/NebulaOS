@@ -2,15 +2,6 @@
 
 use crate::kernel::io;
 
-pub struct PciDevice {
-    pub bus: u8,
-    pub slot: u8,
-    pub vendor_id: u16,
-    pub device_id: u16,
-    pub class_id: u8,
-    pub subclass_id: u8,
-}
-
 /// Reads a 32-bit value from the PCI configuration space.
 pub fn read_config_32(bus: u8, slot: u8, func: u8, offset: u8) -> u32 {
     let address = ((bus as u32) << 16) | ((slot as u32) << 11) |

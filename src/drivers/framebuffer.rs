@@ -214,6 +214,9 @@ impl Framebuffer {
     /// Returns true if a blit actually occurred.
     pub fn blit_to_vram(&mut self) -> bool {
         if !self.frame_ready.swap(false, Ordering::Acquire) { return false; }
+        
+        let start_tsc = crate::kernel::cpu::read_tsc();
+        GPU_HEARTBEAT.fetch_add(1, Ordering::Relaxed);
 
         let x = self.dirty_x1;
         let y = self.dirty_y1;
@@ -231,6 +234,9 @@ impl Framebuffer {
             self.dirty_x2 = 0;
             self.dirty_y2 = 0;
         }
+
+        let end_tsc = crate::kernel::cpu::read_tsc();
+        BLIT_LATENCY.store((end_tsc - start_tsc) as usize, Ordering::Relaxed);
 
         true
     }
