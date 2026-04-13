@@ -21,7 +21,7 @@ impl Button {
         }
     }
 
-    pub fn draw(&self, fb: &mut framebuffer::Framebuffer, _mouse_x: isize, _mouse_y: isize, clip: Option<Rect>) {
+    pub fn draw(&self, fb: &mut framebuffer::Framebuffer, mouse_x: isize, mouse_y: isize, clip: Option<Rect>) {
         // Enforce clipping to the button's own rectangle to prevent spillover
         let draw_clip = if let Some(c) = clip {
             if let Some(intersection) = c.intersection(&self.rect) {
@@ -34,13 +34,20 @@ impl Button {
         };
 
         let high_contrast = super::HIGH_CONTRAST.load(core::sync::atomic::Ordering::Relaxed);
+        let is_hovered = self.contains(mouse_x, mouse_y);
 
-        let draw_color = if high_contrast { 0x00_00_00_00 } else { self.bg_color };
-        super::draw_rect(fb, self.rect.x, self.rect.y, self.rect.width, self.rect.height, draw_color, Some(draw_clip));
+        let mut draw_color = if high_contrast { 0x00_00_00_00 } else { self.bg_color };
+        if is_hovered && !high_contrast {
+            draw_color = 0x00_00_50_A0; // Nebula Blue Hover
+            super::draw_rounded_rect(fb, self.rect.x, self.rect.y, self.rect.width, self.rect.height, 6, draw_color, Some(draw_clip));
+        } else {
+            super::draw_rect(fb, self.rect.x, self.rect.y, self.rect.width, self.rect.height, draw_color, Some(draw_clip));
+        }
 
         // Add 3D bevel effect
-        let (bright, dark) = if high_contrast {
-            (0x00_FF_FF_FF, 0x00_FF_FF_FF)
+        let (bright, dark) = if high_contrast || is_hovered {
+            // Use flat design for hover highlight
+            (draw_color, draw_color)
         } else {
             (0x00_FF_FF_FF, 0x00_40_40_40)
         };
@@ -54,7 +61,7 @@ impl Button {
         let text_x = self.rect.x + (self.rect.width as isize - font::string_width(self.text.as_str()) as isize) / 2;
         let text_y = self.rect.y + (self.rect.height as isize - font_height) / 2;
         
-        let final_text_color = if high_contrast { 0x00_FF_FF_FF } else { self.text_color };
+        let final_text_color = if high_contrast || is_hovered { 0x00_FF_FF_FF } else { self.text_color };
         
         font::draw_string(fb, text_x, text_y, self.text.as_str(), final_text_color, Some(draw_clip));
     }

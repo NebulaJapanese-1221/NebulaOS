@@ -222,14 +222,6 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     acpi::init();
     add_boot_status("ACPI Subsystem Ready", 80);
 
-    // Initialize Speaker and play startup sound
-    {
-        let mut speaker = crate::drivers::speaker::SPEAKER.lock();
-        speaker.init(None, None);
-        speaker.play_startup_sound();
-    }
-    add_boot_status("Audio Subsystem Ready", 85);
-
     // Initialize CPU Info detection (CPUID)
     cpu::init();
     add_boot_status("CPU Topology Detected", 90);

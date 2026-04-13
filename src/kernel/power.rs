@@ -9,12 +9,6 @@ pub fn shutdown() {
     // Disable interrupts to prevent other tasks from drawing over the screen
     unsafe { asm!("cli", options(nomem, nostack)); }
 
-    // Play shutdown sound
-    {
-        let speaker = crate::drivers::speaker::SPEAKER.lock();
-        speaker.play_shutdown_sound();
-    }
-
     // Animate "Shutting Down" screen while the sound plays
     for _ in 0..60 {
         let mut fb = FRAMEBUFFER.lock();
