@@ -258,8 +258,10 @@ impl WindowManager {
             if *current_dt != new_time { // Only redraw if time actually changed
                 *current_dt = new_time;
                 if let Some(info) = FRAMEBUFFER.lock().info.as_ref() {
-                    let clock_width = (19 * 8) + 10;
-                    let rect = Rect { x: info.width as isize - clock_width as isize - 5, y: 0, width: clock_width, height: TOP_BAR_HEIGHT };
+                    let group_width = 254; // Battery(72) + Gap(20) + Clock(162)
+                    let bat_x = (info.width as isize - group_width) / 2;
+                    let clock_x = bat_x + 92; // Offset by battery width + gap
+                    let rect = Rect { x: clock_x, y: 0, width: 162, height: TOP_BAR_HEIGHT };
                     self.mark_dirty(rect);
                 }
             }
@@ -313,8 +315,9 @@ impl WindowManager {
         // Tooltip logic for Battery Indicator
         let mut new_tooltip = None;
         let top_bar_y = 0;
-        let bat_x = screen_width - 450; // Adjusted spacing now that volume is gone
-        let bat_hit_rect = Rect { x: bat_x, y: top_bar_y, width: 180, height: TOP_BAR_HEIGHT as usize };
+        let group_width = 254;
+        let bat_x = (screen_width - group_width) / 2;
+        let bat_hit_rect = Rect { x: bat_x, y: top_bar_y, width: 80, height: TOP_BAR_HEIGHT as usize };
 
         if bat_hit_rect.contains(self.input.mouse_x, self.input.mouse_y) {
             let info = crate::drivers::battery::BATTERY.lock().get_info();
@@ -566,7 +569,7 @@ impl WindowManager {
         }
       
         // Update cursor style based on what's under it
-        self.update_cursor_style();
+        self.update_cursor_style(screen_width, screen_height);
 
         if FULL_REDRAW_REQUESTED.load(Ordering::Relaxed) {
             FULL_REDRAW_REQUESTED.store(false, Ordering::Relaxed);
@@ -580,7 +583,7 @@ impl WindowManager {
         }
     }
 
-    fn update_cursor_style(&mut self) {
+    fn update_cursor_style(&mut self, _screen_width: isize, _screen_height: isize) {
         let mut new_style = CursorStyle::Arrow;
         const BORDER_SIZE: isize = 5;
 
@@ -982,9 +985,7 @@ impl WindowManager {
                     // Clicked on desktop
                     self.click_target_id = None;
                     if self.start_menu_open {
-                        let menu_height: usize = 345;
-                        let menu_width: usize = 200;
-                        self.mark_dirty(Rect { x: 0, y: menu_y, width: 210, height: 355 });
+                        self.mark_dirty(Rect { x: 0, y: TOP_BAR_HEIGHT as isize, width: 210, height: 355 });
                         self.start_menu_open = false;
                     }
                 }
@@ -1096,43 +1097,36 @@ impl WindowManager {
         for dirty_rect in &final_rects {
             // 1. Draw Desktop Background (Clear the region)
             // Extract info to avoid holding an immutable borrow on local_fb while calling set_pixel (mutable borrow)
-            let (screen_width, screen_height) = if let Some(info) = &local_fb.info { (info.width, info.height) } else { (0, 0) };
+            let (screen_width, screen_height) = if let Some(info) = &local_fb.info { (info.width as isize, info.height as isize) } else { (0, 0) };
             
-            if screen_width > 0 {
-                let screen_rect = Rect { x: 0, y: 0, width: screen_width, height: screen_height };
-                if let Some(r) = dirty_rect.intersection(&screen_rect) {
-                    let h = screen_height as isize;
-                    for y in r.y..(r.y + r.height as isize) {
-                        let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
-                        let (start_c, end_c) = if high_contrast {
-                            (0x00_00_00_00, 0x00_00_00_00) // Solid black in high contrast
-                        } else {
-                            (DESKTOP_GRADIENT_START.load(Ordering::Relaxed), DESKTOP_GRADIENT_END.load(Ordering::Relaxed))
-                        };
+            let screen_rect = Rect { x: 0, y: 0, width: screen_width as usize, height: screen_height as usize };
+            if let Some(r) = dirty_rect.intersection(&screen_rect) {
+                let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
+                let start_c = if high_contrast { 0 } else { DESKTOP_GRADIENT_START.load(Ordering::Relaxed) };
+                let end_c = if high_contrast { 0 } else { DESKTOP_GRADIENT_END.load(Ordering::Relaxed) };
+                
+                let (r1, g1, b1) = (((start_c >> 16) & 0xFF) as isize, ((start_c >> 8) & 0xFF) as isize, (start_c & 0xFF) as isize);
+                let (r2, g2, b2) = (((end_c >> 16) & 0xFF) as isize, ((end_c >> 8) & 0xFF) as isize, (end_c & 0xFF) as isize);
+                let (rd, gd, bd) = (r2 - r1, g2 - g1, b2 - b1);
 
-                        let (r1, g1, b1) = (((start_c >> 16) & 0xFF) as isize, ((start_c >> 8) & 0xFF) as isize, (start_c & 0xFF) as isize);
-                        let (r2, g2, b2) = (((end_c >> 16) & 0xFF) as isize, ((end_c >> 8) & 0xFF) as isize, (end_c & 0xFF) as isize);
-
-                        let r_val = r1 + ((r2 - r1) * y) / h;
-                        let g_val = g1 + ((g2 - g1) * y) / h;
-                        let b_val = b1 + ((b2 - b1) * y) / h;
-                        
-                        let color = ((r_val as u32) << 16) | ((g_val as u32) << 8) | (b_val as u32);
-                        
-                        // Optimized: Use draw_rect (slice::fill) instead of pixel-by-pixel loop
-                        draw_rect(&mut local_fb, r.x, y, r.width, 1, color, Some(*dirty_rect));
-                    }
+                for y in r.y..(r.y + r.height as isize) {
+                    let color = if high_contrast { 0 } else {
+                        let rv = r1 + (rd * y) / screen_height;
+                        let gv = g1 + (gd * y) / screen_height;
+                        let bv = b1 + (bd * y) / screen_height;
+                        ((rv as u32) << 16) | ((gv as u32) << 8) | (bv as u32)
+                    };
                     
-                    // Draw version string on desktop (bottom right, above taskbar)
-                    let version = format!("NebulaOS {}", crate::kernel::VERSION);
-                    let v_w = font::string_width(&version);
-                    let v_x = screen_width as isize - v_w as isize - 8;
-                    let v_y = screen_height as isize - 40 - 20; // 40 taskbar, 20 padding
-                    
-                    if dirty_rect.intersects(&Rect { x: v_x, y: v_y, width: v_w, height: 16 }) {
-                        font::draw_string(&mut local_fb, v_x, v_y, &version, 0x00_FFFFFF, Some(*dirty_rect));
+                    // Direct buffer access is significantly faster than draw_rect calls
+                    if let Some(buf) = local_fb.draw_buffer.as_mut() {
+                        let offset = (y as usize * screen_width as usize) + r.x as usize;
+                        buf[offset..offset + r.width].fill(color);
                     }
                 }
+                    
+                    if dirty_rect.intersects(&Rect { x: v_x, y: v_y, width: v_w, height: 16 }) {
+                        font::draw_string(&mut local_fb, v_x, v_y, &version_str, 0x00_FFFFFF, Some(*dirty_rect));
+                    }
             } else {
                 draw_rect(&mut local_fb, dirty_rect.x, dirty_rect.y, dirty_rect.width, dirty_rect.height, 0x00_5A_9D_A5, Some(*dirty_rect));
             }
@@ -1366,14 +1360,12 @@ impl WindowManager {
         // Brand/OS Label
         font::draw_string(fb, 10, 5, "Nebula", 0x00_00_AA_FF, Some(clip));
 
-        // Right-aligned status icons
-        let clock_width = (19 * 8) + 10; // "YYYY-MM-DD HH:MM:SS" is 19 chars
-        let bat_x = width as isize - 335;
-        let vol_x = width as isize - 225;
-        let clock_x = width as isize - clock_width as isize - 5;
+        // Centered status icons (Status Island)
+        let group_width = 254;
+        let bat_x = (width as isize - group_width) / 2;
+        let clock_x = bat_x + 92; // Offset by battery width (72) + padding (20)
 
         draw_battery_indicator(fb, bat_x, 7, clip);
-        draw_volume_control(fb, vol_x, 7, clip);
         
         // Draw clock
         let time = CURRENT_DATETIME.lock();
@@ -1444,8 +1436,17 @@ impl WindowManager {
                 fb.clear_clip();
             }
 
+            // Ensure the menu never draws over the top bar (Fixes "bottom on top" glitch)
+            let menu_area_clip = if let Some(c) = clip.intersection(&Rect { 
+                x: 0, y: TOP_BAR_HEIGHT as isize, width: 2000, height: 2000 
+            }) {
+                c
+            } else {
+                return;
+            };
+
             // 1. Draw Rounded Background
-            draw_rounded_rect(fb, menu_x, menu_y, menu_width, menu_height, radius, bg_color, Some(clip));
+            draw_rounded_rect(fb, menu_x, menu_y, menu_width, menu_height, radius, bg_color, Some(menu_area_clip));
 
             // 2. Draw Rounded Outline
             // Straight edges
@@ -1463,7 +1464,7 @@ impl WindowManager {
             ];
 
             for (cx, cy, cl_x, cl_y) in corner_coords {
-                if let Some(c) = clip.intersection(&Rect { x: cl_x, y: cl_y, width: radius as usize, height: radius as usize }) {
+                if let Some(c) = menu_area_clip.intersection(&Rect { x: cl_x, y: cl_y, width: radius as usize, height: radius as usize }) {
                     fb.set_clip(c.x as usize, c.y as usize, c.width, c.height);
                     fb.draw_circle(cx, cy, radius, border_color);
                 }
@@ -1473,20 +1474,28 @@ impl WindowManager {
             let locale_guard = localisation::CURRENT_LOCALE.lock();
             let locale = locale_guard.as_ref().unwrap();
             let item_width = menu_width - 20;
-            Button::new(menu_x + 10, menu_y + 15, item_width, 30, locale.app_text_editor()).draw(fb, mouse_x, mouse_y, Some(clip));
-            Button::new(menu_x + 10, menu_y + 55, item_width, 30, locale.app_calculator()).draw(fb, mouse_x, mouse_y, Some(clip));
-            Button::new(menu_x + 10, menu_y + 95, item_width, 30, locale.app_paint()).draw(fb, mouse_x, mouse_y, Some(clip));
-            Button::new(menu_x + 10, menu_y + 135, item_width, 30, locale.app_settings()).draw(fb, mouse_x, mouse_y, Some(clip));
-            Button::new(menu_x + 10, menu_y + 175, item_width, 30, locale.app_terminal()).draw(fb, mouse_x, mouse_y, Some(clip));
-            Button::new(menu_x + 10, menu_y + 215, item_width, 30, "Task Manager").draw(fb, mouse_x, mouse_y, Some(clip));
+            // Pre-calculate common button properties to avoid repeated allocations
+            let labels = [
+                (locale.app_text_editor(), 15, 0x00_C0_C0_C0),
+                (locale.app_calculator(), 55, 0x00_C0_C0_C0),
+                (locale.app_paint(), 95, 0x00_C0_C0_C0),
+                (locale.app_settings(), 135, 0x00_C0_C0_C0),
+                (locale.app_terminal(), 175, 0x00_C0_C0_C0),
+                ("Task Manager", 215, 0x00_C0_C0_C0),
+                (locale.btn_reboot(), menu_height as isize - 85, 0x00_FF_A0_40),
+                (locale.btn_shutdown(), menu_height as isize - 45, 0x00_FF_60_60),
+            ];
 
-            let mut reboot_button = Button::new(menu_x + 10, menu_y + menu_height as isize - 85, item_width, 30, locale.btn_reboot());
-            reboot_button.bg_color = 0x00_FF_A0_40; // Orange
-            reboot_button.draw(fb, mouse_x, mouse_y, Some(clip));
-
-            let mut shutdown_button = Button::new(menu_x + 10, menu_y + menu_height as isize - 45, item_width, 30, locale.btn_shutdown());
-            shutdown_button.bg_color = 0x00_FF_60_60; // Light red
-            shutdown_button.draw(fb, mouse_x, mouse_y, Some(clip));
+            // Optimized Item Drawing: Avoid heap allocations for Buttons during animation
+            for (text, y_off, color) in labels {
+                let item_rect = Rect { x: menu_x + 10, y: menu_y + y_off, width: item_width, height: 30 };
+                let is_hovered = item_rect.contains(mouse_x, mouse_y);
+                let bg = if is_hovered { 0x00_00_50_A0 } else { color };
+                
+                draw_rounded_rect(fb, item_rect.x, item_rect.y, item_rect.width, item_rect.height, 6, bg, Some(menu_area_clip));
+                let text_color = if is_hovered { 0x00_FFFFFF } else { 0x00_000000 };
+                font::draw_string(fb, item_rect.x + 10, item_rect.y + 7, text, text_color, Some(menu_area_clip));
+            }
     }
 
     fn draw_tooltip(&self, fb: &mut framebuffer::Framebuffer, text: &str, x: isize, y: isize, clip: Rect) {
@@ -1767,6 +1776,42 @@ pub fn draw_rect(fb: &mut framebuffer::Framebuffer, x: isize, y: isize, width: u
                 let offset = py * info.width + start_x;
                 buffer[offset..offset + clipped.width].fill(color);
             }
+        }
+    }
+}
+
+/// Draws a rectangle with rounded corners using quadrant clipping.
+pub fn draw_rounded_rect(fb: &mut framebuffer::Framebuffer, x: isize, y: isize, width: usize, height: usize, radius: isize, color: u32, clip: Option<Rect>) {
+    if radius <= 0 {
+        draw_rect(fb, x, y, width, height, color, clip);
+        return;
+    }
+
+    let clip_rect = clip.unwrap_or(Rect { x: -10000, y: -10000, width: 20000, height: 20000 });
+
+    // Core body (plus-shape optimization to avoid corner overlap)
+    draw_rect(fb, x, y + radius, width, (height as isize - 2 * radius) as usize, color, Some(clip_rect));
+    draw_rect(fb, x + radius, y, (width as isize - 2 * radius) as usize, radius as usize, color, Some(clip_rect));
+    draw_rect(fb, x + radius, y + height as isize - radius, (width as isize - 2 * radius) as usize, radius as usize, color, Some(clip_rect));
+
+    // Optimized Scanline Corner Filling (Replaces concentric circles)
+    let centers = [
+        (x + radius, y + radius, -1, -1), // TL
+        (x + width as isize - radius - 1, y + radius, 1, -1), // TR
+        (x + radius, y + height as isize - radius - 1, -1, 1), // BL
+        (x + width as isize - radius - 1, y + height as isize - radius - 1, 1, 1), // BR
+    ];
+
+    let r2 = radius * radius;
+    for (cx, cy, dx_sign, dy_sign) in centers {
+        for dy in 0..radius {
+            let mut max_dx = 0;
+            for dx in 0..radius {
+                if dx * dx + dy * dy <= r2 { max_dx = dx; } else { break; }
+            }
+            let py = cy + dy * dy_sign;
+            let sx = if dx_sign < 0 { cx - max_dx } else { cx };
+            draw_rect(fb, sx, py, max_dx as usize + 1, 1, color, Some(clip_rect));
         }
     }
 }

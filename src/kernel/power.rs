@@ -9,13 +9,12 @@ pub fn shutdown() {
     // Disable interrupts to prevent other tasks from drawing over the screen
     unsafe { asm!("cli", options(nomem, nostack)); }
 
-    // Animate "Shutting Down" screen while the sound plays
-    for _ in 0..60 {
+    // Animate "Shutting Down" screen
+    for _ in 0..30 { // Reduced frame count for a snappier exit
         let mut fb = FRAMEBUFFER.lock();
         if let Some(info) = fb.info.as_ref() {
             let width = info.width;
             let height = info.height;
-            fb.clear(0x00_050515);
             
             let msg = "NebulaOS is powering off...";
             let x = (width / 2).saturating_sub((msg.len() * 8) / 2);
@@ -23,10 +22,11 @@ pub fn shutdown() {
             
             // Draw the spinner animation
             crate::kernel::draw_spinner(&mut fb, (width / 2) as isize, (height / 2) as isize);
-            fb.present();
+            // Optimized blit
+            fb.present_rect(width / 2 - 150, height / 2 - 60, 300, 120);
         }
         drop(fb);
-        for _ in 0..40000 { unsafe { asm!("nop") } } // Calibrated delay for ~30 FPS
+        for _ in 0..15000 { unsafe { asm!("nop") } }
     }
 
     // This will attempt to perform an ACPI shutdown.
@@ -82,16 +82,21 @@ pub fn reboot() -> ! {
             }
         }
 
-        // Use the keyboard controller (port 0x64) to trigger a system reset.
-        // This is a common and reliable method.
-        let mut good = false;
-        while !good {
-            // Wait for the input buffer to be clear.
-            if (io::inb(0x64) & 2) == 0 {
-                io::outb(0x64, 0xFE); // Send the 'CPU Reset' command.
-                good = true;
-            }
+        // Method 1: PCI Reset (Port 0xCF9) - Very reliable on modern systems
+        io::outb(0xCF9, 0x06);
+        for _ in 0..1000 { unsafe { asm!("nop") } }
+
+        // Method 2: Keyboard Controller Reset (Port 0x64)
+        for _ in 0..10 {
+            while (io::inb(0x64) & 2) != 0 { unsafe { asm!("nop") } }
+            io::outb(0x64, 0xFE);
+            for _ in 0..10000 { unsafe { asm!("nop") } }
         }
+
+        // Method 3: Triple Fault (Fallback)
+        let idt_ptr = crate::kernel::interrupts::IdtEntry::new(0, 0, 0);
+        asm!("lidt [{}]", in(reg) &idt_ptr);
+        asm!("int 3");
     }
     loop { unsafe { asm!("hlt") } }
 }

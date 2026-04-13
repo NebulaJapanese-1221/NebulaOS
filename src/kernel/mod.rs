@@ -3,7 +3,7 @@ use core::panic::PanicInfo;
 use core::arch::asm; 
 use crate::drivers::framebuffer::FRAMEBUFFER;
 use crate::userspace::fonts::font;
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 pub mod io;
 pub mod interrupts;
 pub mod multiboot;
@@ -23,6 +23,8 @@ pub const VERSION: &str = "0.0.3-dev2";
 pub static TOTAL_MEMORY: AtomicUsize = AtomicUsize::new(0);
 pub static CPU_CORES: AtomicUsize = AtomicUsize::new(1);
 static BOOT_ANIM_FRAME: AtomicUsize = AtomicUsize::new(0);
+static BOOT_ANIM_RUNNING: AtomicBool = AtomicBool::new(true);
+static BOOT_PROGRESS_DISPLAY: AtomicUsize = AtomicUsize::new(0);
 
 /// Pre-calculated offsets for a 12-spoke loading wheel (30-degree increments).
 const SPOKE_OFFSETS: [(isize, isize); 12] = [
@@ -31,30 +33,30 @@ const SPOKE_OFFSETS: [(isize, isize); 12] = [
     (-17, 10), (-20, 0), (-17, -10), (-10, -17)
 ];
 
+/// Pre-assembled u32 colors for the spinner to avoid runtime bit-shifting and matching.
+const SPINNER_COLORS: [u32; 12] = [
+    0x00_FF_FF_FF, 0x00_64_C8_FF, 0x00_50_96_FF, 0x00_3C_64_C8, 0x00_28_3C_96, 0x00_14_1E_50,
+    0x00_0F_0F_28, 0x00_0F_0F_28, 0x00_0F_0F_28, 0x00_0F_0F_28, 0x00_0F_0F_28, 0x00_0F_0F_28,
+];
+
 pub(crate) fn draw_spinner(fb: &mut crate::drivers::framebuffer::Framebuffer, cx: isize, cy: isize) {
-    let frame = BOOT_ANIM_FRAME.fetch_add(1, Ordering::Relaxed);
+    let frame = if BOOT_ANIM_RUNNING.load(Ordering::Relaxed) {
+        BOOT_ANIM_FRAME.fetch_add(3, Ordering::Relaxed) // Increment by 3 for even faster rotation
+    } else {
+        BOOT_ANIM_FRAME.load(Ordering::Relaxed)
+    };
+    
+    let head = (frame % 12) as usize;
     
     for i in 0..12 {
+        let color = SPINNER_COLORS[(i + 12 - head) % 12];
         let (dx, dy) = SPOKE_OFFSETS[i];
-        
-        // Calculate brightness: current spoke is brightest, previous ones fade out (tail effect)
-        let diff = (i + 12 - (frame % 12)) % 12;
-        let (r, g, b) = match diff {
-            0 => (255, 255, 255), // Lead (White)
-            1 => (100, 200, 255), // Nebula Blue
-            2 => (80, 150, 255),
-            3 => (60, 100, 200),
-            4 => (40, 60, 150),
-            5 => (20, 30, 80),
-            _ => (15, 15, 40),    // Dim tail
-        };
-        
-        let color = ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
 
-        // Draw the spoke as a line from the inner hub (radius 8) to outer rim (radius 20)
-        for r in 8..=20 {
-            let px = cx + (dx * r / 20);
-            let py = cy + (dy * r / 20);
+        // Draw the spoke as a series of pixels. Stepping by 2 provides a smooth appearance 
+        // while reducing writes and calculations by ~50%.
+        for r in (8..=20).step_by(2) {
+            let px = cx + (dx * r as isize / 20);
+            let py = cy + (dy * r as isize / 20);
             fb.set_pixel(px as usize, py as usize, color);
         }
     }
@@ -107,8 +109,18 @@ fn draw_boot_screen(status: &str, progress: usize) {
     fb.present_rect(width / 2 - 210, (height / 2).saturating_sub(15), 420, 150);
 }
 
-fn add_boot_status(status: &str, progress: usize) {
-    draw_boot_screen(status, progress);
+fn add_boot_status(status: &str, target_progress: usize) {
+    let current = BOOT_PROGRESS_DISPLAY.load(Ordering::Relaxed);
+    if target_progress > current {
+        for p in current..=target_progress {
+            BOOT_PROGRESS_DISPLAY.store(p, Ordering::Relaxed);
+            draw_boot_screen(status, p);
+            // Calibrated delay for a smooth "sliding" feel during boot
+            for _ in 0..7000 { unsafe { asm!("nop") } }
+        }
+    } else {
+        draw_boot_screen(status, target_progress);
+    }
 }
 
 fn draw_progress_bar_internal(fb: &mut crate::drivers::framebuffer::Framebuffer, progress: usize, width: usize, height: usize) {
@@ -177,15 +189,13 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
 
         // Setup the initial frame in the backbuffer without presenting it (prevents flash)
         {
+            let (width, height) = (fb_info.1, fb_info.2);
             let mut fb = FRAMEBUFFER.lock();
-            draw_boot_screen_content(&mut fb, "Starting NebulaOS...", 0);
             fb.clear(0x00_050515); // Full clear only once on entry
-            fb.apply_fade(10, 10); // Capture to scratch, using 10 steps for speed
-            for i in 0..=10 { 
-                fb.apply_fade(i, 10); // Fade from black to full
-                fb.present(); // Full screen present required for fade
-                for _ in 0..40000 { unsafe { asm!("nop") } } // Calibrated delay for smoothness
-            }
+            draw_boot_screen_content(&mut fb, "Starting NebulaOS...", 0);
+            
+            // Immediately present the boot screen content without the slow fade-in animation
+            fb.present_rect(width / 2 - 210, (height / 2).saturating_sub(15), 420, 150);
         }
     } else {
         crate::serial_println!("ERROR: No framebuffer information found!");
@@ -231,12 +241,14 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     // Fade out boot screen
     {
         let mut fb = FRAMEBUFFER.lock();
-        fb.apply_fade(10, 10); // Sync scratch buffer
-        for i in (0..=10).rev() { 
-            fb.apply_fade(i, 10);
-            fb.present();
-            for _ in 0..40000 { unsafe { asm!("nop") } }
-        }
+        let (width, height) = match fb.info.as_ref() {
+            Some(info) => (info.width, info.height),
+            None => (800, 600),
+        };
+        // Skip the fade-out and present the final boot state before launching the GUI
+        BOOT_ANIM_RUNNING.store(false, Ordering::Relaxed); // Freeze the spinner
+        draw_boot_screen_content(&mut fb, "Launching Desktop Environment...", 100);
+        fb.present_rect(width / 2 - 210, (height / 2).saturating_sub(15), 420, 150);
     }
     
     // Initialize localisation before GUI
