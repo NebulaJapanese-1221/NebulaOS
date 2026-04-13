@@ -9,11 +9,13 @@
 - Added a Volume Control widget to the GUI with mute indicator.
 - Implemented hardware volume control logic for the audio subsystem and global hotkeys.
 - Added a 'Brightness' driver with simulated control and OSD popup.
-- Added a 'Battery' driver
+- Added a 'Battery' indicator to the taskbar with ACPI device detection hooks.
 - Implemented a dynamic ToolTip system for the taskbar.
-- Added a system top bar for status indicators (Volume, Battery, Date/Time).
+- Added a system top bar with the Start menu being moved to there and status indicators (Volume, Battery, Date/Time). The start menu button has been renamed to Nebula.
+- Optimized boot screen rendering to achieve 30+ FPS.
 - Added a better boot screen.
 - Added system startup and shutdown sounds.
+- Major UI improvements
 
 ## v0.0.3-dev (03-22-2026)
 - Added proper System Information detection (CPUID for Brand String).

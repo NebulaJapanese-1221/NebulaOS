@@ -296,6 +296,61 @@ impl Framebuffer {
             }
         }
     }
+
+    /// Draws a line between two points using Bresenham's algorithm.
+    pub fn draw_line(&mut self, x1: isize, y1: isize, x2: isize, y2: isize, color: u32) {
+        let mut x = x1;
+        let mut y = y1;
+        let dx = (x2 - x1).abs();
+        let dy = (y2 - y1).abs();
+        let sx = if x1 < x2 { 1 } else { -1 };
+        let sy = if y1 < y2 { 1 } else { -1 };
+        let mut err = dx - dy;
+
+        loop {
+            if x >= 0 && y >= 0 {
+                self.set_pixel(x as usize, y as usize, color);
+            }
+            if x == x2 && y == y2 { break; }
+            let e2 = 2 * err;
+            if e2 > -dy {
+                err -= dy;
+                x += sx;
+            }
+            if e2 < dx {
+                err += dx;
+                y += sy;
+            }
+        }
+    }
+
+    /// Draws a circle using the midpoint circle algorithm.
+    pub fn draw_circle(&mut self, xc: isize, yc: isize, radius: isize, color: u32) {
+        let mut x = 0;
+        let mut y = radius;
+        let mut d = 3 - 2 * radius;
+
+        self.draw_circle_points(xc, yc, x, y, color);
+        while y >= x {
+            x += 1;
+            if d > 0 {
+                y -= 1;
+                d = d + 4 * (x - y) + 10;
+            } else {
+                d = d + 4 * x + 6;
+            }
+            self.draw_circle_points(xc, yc, x, y, color);
+        }
+    }
+
+    fn draw_circle_points(&mut self, xc: isize, yc: isize, x: isize, y: isize, color: u32) {
+        let pts = [(xc+x, yc+y), (xc-x, yc+y), (xc+x, yc-y), (xc-x, yc-y), (xc+y, yc+x), (xc-y, yc+x), (xc+y, yc-x), (xc-y, yc-x)];
+        for (px, py) in pts {
+            if px >= 0 && py >= 0 {
+                self.set_pixel(px as usize, py as usize, color);
+            }
+        }
+    }
 }
 
 /// Global instance of the framebuffer driver.

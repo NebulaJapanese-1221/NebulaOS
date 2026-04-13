@@ -9,28 +9,31 @@ pub fn shutdown() {
     // Disable interrupts to prevent other tasks from drawing over the screen
     unsafe { asm!("cli", options(nomem, nostack)); }
 
-    // Draw "Shutting Down" screen
-    {
-        let mut fb = FRAMEBUFFER.lock();
-        if let Some(info) = fb.info.as_ref() {
-            // Manually clone dims to release lock on info if needed, though here we hold fb lock
-            let width = info.width;
-            let height = info.height;
-            fb.clear(0x00_00_00_00); // Black screen
-            let msg = "Shutting Down...";
-            let x = (width / 2).saturating_sub((msg.len() * 8) / 2);
-            let y = height / 2;
-            font::draw_string(&mut fb, x as isize, y as isize, msg, 0x00_FFFFFF, None);
-            fb.present();
-        }
-    }
-
     // Play shutdown sound
     {
         let speaker = crate::drivers::speaker::SPEAKER.lock();
         speaker.play_shutdown_sound();
     }
-    for _ in 0..5_000_000 { unsafe { asm!("nop") } } // Wait for sound to play
+
+    // Animate "Shutting Down" screen while the sound plays
+    for _ in 0..60 {
+        let mut fb = FRAMEBUFFER.lock();
+        if let Some(info) = fb.info.as_ref() {
+            let width = info.width;
+            let height = info.height;
+            fb.clear(0x00_050515);
+            
+            let msg = "NebulaOS is powering off...";
+            let x = (width / 2).saturating_sub((msg.len() * 8) / 2);
+            font::draw_string(&mut fb, x as isize, (height / 2) as isize - 40, msg, 0x00_AAAAAA, None);
+            
+            // Draw the spinner animation
+            crate::kernel::draw_spinner(&mut fb, (width / 2) as isize, (height / 2) as isize);
+            fb.present();
+        }
+        drop(fb);
+        for _ in 0..40000 { unsafe { asm!("nop") } } // Calibrated delay for ~30 FPS
+    }
 
     // This will attempt to perform an ACPI shutdown.
     // It may not work on all hardware or emulators, but it is more portable.

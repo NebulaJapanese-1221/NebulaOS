@@ -185,6 +185,8 @@ pub struct WindowManager {
     osd_timeout: usize,
     brightness_osd_timeout: usize,
     tooltip: Option<(alloc::string::String, isize, isize)>,
+    volume_popup_open: bool,
+    dragging_volume_slider: bool,
 }
 
 impl WindowManager {
@@ -213,6 +215,8 @@ impl WindowManager {
             osd_timeout: 0,
             brightness_osd_timeout: 0,
             tooltip: None,
+            volume_popup_open: false,
+            dragging_volume_slider: false,
         }
     }
 
@@ -256,9 +260,8 @@ impl WindowManager {
             if *current_dt != new_time { // Only redraw if time actually changed
                 *current_dt = new_time;
                 if let Some(info) = FRAMEBUFFER.lock().info.as_ref() {
-                    let taskbar_height: usize = 40;
-                    let time_area_width: isize = (8 * 8) + 20;
-                    let rect = Rect { x: info.width as isize - time_area_width, y: info.height as isize - taskbar_height as isize, width: time_area_width as usize, height: taskbar_height };
+                    let clock_width = (19 * 8) + 10;
+                    let rect = Rect { x: info.width as isize - clock_width as isize - 5, y: 0, width: clock_width, height: TOP_BAR_HEIGHT };
                     self.mark_dirty(rect);
                 }
             }
@@ -304,13 +307,13 @@ impl WindowManager {
         // Tooltip logic for Battery Indicator
         let mut new_tooltip = None;
         let top_bar_y = 0;
-        let bat_x = screen_width - 335;
-        let bat_hit_rect = Rect { x: bat_x, y: top_bar_y, width: 80, height: TOP_BAR_HEIGHT as usize };
+        let bat_x = screen_width - 700; // Even wider spacing to prevent collisions
+        let bat_hit_rect = Rect { x: bat_x, y: top_bar_y, width: 180, height: TOP_BAR_HEIGHT as usize };
 
         if bat_hit_rect.contains(self.input.mouse_x, self.input.mouse_y) {
             let info = crate::drivers::battery::BATTERY.lock().get_info();
             let text = format!("Health: {}%  Cycles: {}", info.health, info.cycle_count);
-            new_tooltip = Some((text, bat_x, taskbar_y - 25));
+            new_tooltip = Some((text, bat_x, TOP_BAR_HEIGHT as isize));
         }
 
         if self.tooltip != new_tooltip {
@@ -378,6 +381,25 @@ impl WindowManager {
                     self.drag_rect = Some(Rect { x: new_x, y: new_y, width: win.width, height: win.height });
                 }
             }
+            // Volume Popup Interaction (Hover/Dragging)
+            else if self.volume_popup_open {
+                let width = screen_width as usize;
+                let vol_x = width as isize - 450;
+                let popup_rect = Rect { x: vol_x - 10, y: TOP_BAR_HEIGHT as isize, width: 80, height: 150 };
+                
+                if popup_rect.contains(x, y) {
+                    self.mark_dirty(popup_rect);
+                }
+
+                if self.dragging_volume_slider && self.input.left_button_pressed {
+                    let bar_y_start = TOP_BAR_HEIGHT as isize + 30;
+                    let bar_height = 100;
+                    let rel_y = (y - bar_y_start).clamp(0, bar_height as isize);
+                    let new_percent = 100 - (rel_y * 100 / bar_height as isize) as u8;
+                    crate::drivers::speaker::SPEAKER.lock().set_volume(new_percent);
+                    self.mark_dirty(popup_rect);
+                }
+            }
                 }
                 InputEvent::Scroll { delta } => {
                 if let Some(target_id) = self.click_target_id {
@@ -397,7 +419,7 @@ impl WindowManager {
                     // Sync state for handle method
                     self.input.mouse_x = x;
                     self.input.mouse_y = y;
-                    self.handle_mouse_button_event(button, down, screen_height);
+                    self.handle_mouse_button_event(button, down, screen_width, screen_height);
                 }
                 InputEvent::KeyPress { key } => {
                     // Check for Alt+Tab (simulated logic as we rely on get_char)
@@ -646,7 +668,7 @@ impl WindowManager {
         }
     }
 
-    fn handle_mouse_button_event(&mut self, button: MouseButton, down: bool, screen_height: isize) {
+    fn handle_mouse_button_event(&mut self, button: MouseButton, down: bool, screen_width: isize, screen_height: isize) {
         if let (MouseButton::Right, true) = (button, down) {
             let taskbar_height: usize = 40;
             let taskbar_y = screen_height - taskbar_height as isize;
@@ -679,16 +701,51 @@ impl WindowManager {
             let locale_guard = localisation::CURRENT_LOCALE.lock();
             let locale = locale_guard.as_ref().unwrap();
 
-            // 0. Check for clicks on the TOP BAR (Functional UI)
+            let width = screen_width as usize;
+            let vol_x = width as isize - 450;
+            let popup_rect = Rect { x: vol_x - 10, y: TOP_BAR_HEIGHT as isize, width: 80, height: 150 };
+
+            // Close volume popup if clicking outside
+            if self.volume_popup_open && !popup_rect.contains(self.input.mouse_x, self.input.mouse_y) && self.input.mouse_y >= TOP_BAR_HEIGHT as isize {
+                self.volume_popup_open = false;
+                self.mark_dirty(popup_rect);
+                FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
+            } else if self.volume_popup_open {
+                if popup_rect.contains(self.input.mouse_x, self.input.mouse_y) {
+                    // Handle button click inside popup
+                    let mute_btn_rect = Rect { x: vol_x - 5, y: TOP_BAR_HEIGHT as isize + 5, width: 70, height: 22 };
+                    if mute_btn_rect.contains(self.input.mouse_x, self.input.mouse_y) {
+                        crate::drivers::speaker::SPEAKER.lock().toggle_mute();
+                        self.mark_dirty(popup_rect);
+                        return;
+                    }
+                    
+                    // Start dragging if clicking the slider area (below the mute button)
+                    if self.input.mouse_y >= TOP_BAR_HEIGHT as isize + 30 {
+                        self.dragging_volume_slider = true;
+                        // Trigger first update immediately on click
+                    }
+                }
+            }
+
+            // 0. Check for clicks on the TOP BAR
             if self.input.mouse_y < TOP_BAR_HEIGHT as isize {
-                let width = FRAMEBUFFER.lock().info.as_ref().map(|i| i.width).unwrap_or(800);
+                // Nebula Menu Click (Updated width)
+                if self.input.mouse_x < 80 {
+                    self.start_menu_open = !self.start_menu_open;
+                    self.volume_popup_open = false;
+                    self.mark_dirty(Rect { x: 0, y: 0, width: 200, height: 400 });
+                    return;
+                }
                 
-                // Volume Click: Mute Toggle
-                let vol_x = width as isize - 225;
+                // Volume Area Click (Toggles the popup)
                 if self.input.mouse_x >= vol_x - 40 && self.input.mouse_x < vol_x + 60 {
-                    crate::drivers::speaker::SPEAKER.lock().toggle_mute();
-                    self.osd_timeout = 60;
-                    self.mark_dirty(Rect { x: 0, y: 0, width, height: TOP_BAR_HEIGHT });
+                    self.volume_popup_open = !self.volume_popup_open;
+                    self.start_menu_open = false;
+                    self.mark_dirty(popup_rect);
+                    if !self.volume_popup_open {
+                        FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
+                    }
                     return;
                 }
 
@@ -793,9 +850,9 @@ impl WindowManager {
                     self.mark_dirty(Rect { x: 0, y: taskbar_y, width: 800, height: 40 });
                 }
 
-            } else if self.start_menu_open && self.input.mouse_x < 200 && self.input.mouse_y < taskbar_y{
-                // --- Start Menu Item Click Logic ---
-                let menu_y = screen_height - 40 - 345;
+            } else if self.start_menu_open && self.input.mouse_x < 200 && self.input.mouse_y >= TOP_BAR_HEIGHT as isize {
+                // --- Nebula Menu Item Click Logic ---
+                let menu_y = TOP_BAR_HEIGHT as isize;
                 let menu_x = 0;
                 let menu_width = 200;
                 let item_width = menu_width - 20;
@@ -809,7 +866,7 @@ impl WindowManager {
                 let shutdown_button = Button::new(menu_x + 10, menu_y + 345 - 45, item_width, 30, locale.btn_shutdown());
                 let reboot_button = Button::new(menu_x + 10, menu_y + 345 - 85, item_width, 30, locale.btn_reboot());
 
-                self.mark_dirty(Rect { x: 0, y: menu_y, width: 200, height: 345 }); // Mark menu dirty on click
+                self.mark_dirty(Rect { x: 0, y: menu_y, width: 200, height: 345 });
                 if settings_button.contains(self.input.mouse_x, self.input.mouse_y) {
                     // Clicked "Settings"
                     let settings_open = self.windows.iter().any(|w| w.title == locale.app_settings());
@@ -1038,6 +1095,8 @@ impl WindowManager {
                 }
                 self.drag_win_id = None;
                 self.drag_rect = None;
+            } else if self.dragging_volume_slider {
+                self.dragging_volume_slider = false;
             } else { // Only process content click if not dragging
                 if let Some(target_id) = self.click_target_id {
                     let mut event_coords = None;
@@ -1149,9 +1208,8 @@ impl WindowManager {
                         
                         let color = ((r_val as u32) << 16) | ((g_val as u32) << 8) | (b_val as u32);
                         
-                        for x in r.x..(r.x + r.width as isize) {
-                            local_fb.set_pixel(x as usize, y as usize, color);
-                        }
+                        // Optimized: Use draw_rect (slice::fill) instead of pixel-by-pixel loop
+                        draw_rect(&mut local_fb, r.x, y, r.width, 1, color, Some(*dirty_rect));
                     }
                     
                     // Draw version string on desktop (bottom right, above taskbar)
@@ -1179,13 +1237,13 @@ impl WindowManager {
                 }
             }
 
-            // 3. Draw Top Bar (System Status)
+            // 3. Draw Top Bar (System Status & Nebula Menu) - Duplicate call removed
             self.draw_top_bar(&mut local_fb, *dirty_rect);
 
             // 4. Draw Taskbar (Window Management)
             self.draw_taskbar(&mut local_fb, self.input.mouse_x, self.input.mouse_y, *dirty_rect);
 
-            // 5. Draw Start Menu if open
+            // 5. Draw Nebula Menu if open
             if self.start_menu_open {
                 self.draw_start_menu(&mut local_fb, self.input.mouse_x, self.input.mouse_y, *dirty_rect);
             }
@@ -1207,6 +1265,11 @@ impl WindowManager {
             // Draw Brightness OSD
             if self.brightness_osd_timeout > 0 {
                 self.draw_brightness_osd(&mut local_fb, *dirty_rect);
+            }
+
+            // 5.5 Draw Volume Popup
+            if self.volume_popup_open {
+                self.draw_volume_popup(&mut local_fb, *dirty_rect);
             }
 
             // Draw Drag Overlay
@@ -1355,17 +1418,8 @@ impl WindowManager {
             draw_rect(fb, 0, taskbar_y, width, taskbar_height, bg_color, Some(clip));
             draw_rect(fb, 0, taskbar_y, width, 1, border_color, Some(clip)); // Top highlight
 
-            let start_button_width = 120;
-            // Give feedback if menu is open
-            let locale_guard = localisation::CURRENT_LOCALE.lock();
-            let locale = locale_guard.as_ref().unwrap();
-            let mut start_button = Button::new(0, taskbar_y, start_button_width, taskbar_height, locale.start());
-            start_button.bg_color = if self.start_menu_open { 0x00_40_40_40 } else { 0x00_30_30_30 };
-            start_button.text_color = 0x00_FF_FF_FF;
-            start_button.draw(fb, mouse_x, mouse_y, Some(clip));
-
             // Draw Window List
-            let mut x_offset = start_button_width as isize + 10;
+            let mut x_offset = 10;
             let button_width = 100;
             for win in &self.windows {
                 // Truncate title to fit
@@ -1457,30 +1511,72 @@ impl WindowManager {
     }
 
     fn draw_start_menu(&self, fb: &mut framebuffer::Framebuffer, mouse_x: isize, mouse_y: isize, clip: Rect) {
-        let height = if let Some(ref info) = fb.info {
-            info.height
-        } else {
-            return;
-        };
+        if fb.info.is_none() { return; }
 
             let menu_width = 200;
             let menu_height = 345;
-            let taskbar_height = 40;
+            let menu_y = TOP_BAR_HEIGHT as isize; // Drop DOWN from top bar
             let menu_x = 0;
-            let menu_y = (height - taskbar_height - menu_height) as isize;
             let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
+            let radius = 12isize;
             
             let bg_color = if high_contrast { 0x00_00_00_00 } else { 0x00_C0_C0_C0 };
-            let border_color = if high_contrast { 0x00_FF_FF_FF } else { 0x00_C0_C0_C0 };
+            let border_color = if high_contrast { 0x00_FF_FF_FF } else { 0x00_40_40_40 };
 
-            draw_rect(fb, menu_x, menu_y, menu_width, menu_height, bg_color, Some(clip));
-            
-            if high_contrast {
-                draw_rect(fb, menu_x, menu_y, menu_width, 1, border_color, Some(clip)); // Top
-                draw_rect(fb, menu_x, menu_y, 1, menu_height, border_color, Some(clip)); // Left
-                draw_rect(fb, menu_x + menu_width as isize - 1, menu_y, 1, menu_height, border_color, Some(clip)); // Right
-                draw_rect(fb, menu_x, menu_y + menu_height as isize - 1, menu_width, 1, border_color, Some(clip)); // Bottom
+            // 1. Draw Filled Rounded Background
+            // We draw three rectangles to form the core "plus" shape of the menu
+            draw_rect(fb, menu_x, menu_y + radius, menu_width, (menu_height as isize - 2 * radius) as usize, bg_color, Some(clip));
+            draw_rect(fb, menu_x + radius, menu_y, (menu_width as isize - 2 * radius) as usize, radius as usize, bg_color, Some(clip));
+            draw_rect(fb, menu_x + radius, menu_y + menu_height as isize - radius, (menu_width as isize - 2 * radius) as usize, radius as usize, bg_color, Some(clip));
+
+            // Fill the four corners by drawing concentric arcs using the draw_circle primitive
+            for r in 0..radius {
+                // Top-Left quadrant
+                if let Some(c) = clip.intersection(&Rect { x: menu_x, y: menu_y, width: radius as usize, height: radius as usize }) {
+                    fb.set_clip(c.x as usize, c.y as usize, c.width, c.height);
+                    fb.draw_circle(menu_x + radius, menu_y + radius, r, bg_color);
+                }
+                // Top-Right quadrant
+                if let Some(c) = clip.intersection(&Rect { x: menu_x + menu_width as isize - radius, y: menu_y, width: radius as usize, height: radius as usize }) {
+                    fb.set_clip(c.x as usize, c.y as usize, c.width, c.height);
+                    fb.draw_circle(menu_x + menu_width as isize - radius - 1, menu_y + radius, r, bg_color);
+                }
+                // Bottom-Left
+                if let Some(c) = clip.intersection(&Rect { x: menu_x, y: menu_y + menu_height as isize - radius, width: radius as usize, height: radius as usize }) {
+                    fb.set_clip(c.x as usize, c.y as usize, c.width, c.height);
+                    fb.draw_circle(menu_x + radius, menu_y + menu_height as isize - radius - 1, r, bg_color);
+                }
+                // Bottom-Right
+                if let Some(c) = clip.intersection(&Rect { x: menu_x + menu_width as isize - radius, y: menu_y + menu_height as isize - radius, width: radius as usize, height: radius as usize }) {
+                    fb.set_clip(c.x as usize, c.y as usize, c.width, c.height);
+                    fb.draw_circle(menu_x + menu_width as isize - radius - 1, menu_y + menu_height as isize - radius - 1, r, bg_color);
+                }
             }
+            fb.clear_clip();
+
+            // 2. Draw Rounded Outline
+            // Straight edges
+            fb.draw_line(menu_x + radius, menu_y, menu_x + menu_width as isize - radius, menu_y, border_color);
+            fb.draw_line(menu_x + radius, menu_y + menu_height as isize - 1, menu_x + menu_width as isize - radius, menu_y + menu_height as isize - 1, border_color);
+            fb.draw_line(menu_x, menu_y + radius, menu_x, menu_y + menu_height as isize - radius, border_color);
+            fb.draw_line(menu_x + menu_width as isize - 1, menu_y + radius, menu_x + menu_width as isize - 1, menu_y + menu_height as isize - radius, border_color);
+
+            // Corner arcs (using the same quadrant-clipping technique)
+            let corner_coords = [
+                (menu_x + radius, menu_y + radius, menu_x, menu_y), // TL
+                (menu_x + menu_width as isize - radius - 1, menu_y + radius, menu_x + menu_width as isize - radius, menu_y), // TR
+                (menu_x + radius, menu_y + menu_height as isize - radius - 1, menu_x, menu_y + menu_height as isize - radius), // BL
+                (menu_x + menu_width as isize - radius - 1, menu_y + menu_height as isize - radius - 1, menu_x + menu_width as isize - radius, menu_y + menu_height as isize - radius) // BR
+            ];
+
+            for (cx, cy, cl_x, cl_y) in corner_coords {
+                if let Some(c) = clip.intersection(&Rect { x: cl_x, y: cl_y, width: radius as usize, height: radius as usize }) {
+                    fb.set_clip(c.x as usize, c.y as usize, c.width, c.height);
+                    fb.draw_circle(cx, cy, radius, border_color);
+                }
+            }
+            fb.clear_clip();
+
             let locale_guard = localisation::CURRENT_LOCALE.lock();
             let locale = locale_guard.as_ref().unwrap();
             let item_width = menu_width - 20;
@@ -1604,6 +1700,69 @@ impl WindowManager {
             let bar_color = if muted { 0x00_44_44_44 } else { 0x00_00_FF_00 };
             draw_rect(fb, x + 10, y + 35, 180 * percent as usize / 100, 15, bar_color, Some(clip));
         }
+    }
+
+    fn draw_volume_popup(&self, fb: &mut framebuffer::Framebuffer, clip: Rect) {
+        let width = fb.info.as_ref().map(|i| i.width).unwrap_or(800);
+        let vol_x = width as isize - 450;
+        let x = vol_x - 10;
+        let y = TOP_BAR_HEIGHT as isize;
+        let w = 80;
+        let h = 150;
+        let popup_rect = Rect { x, y, width: w, height: h };
+
+        if !clip.intersects(&popup_rect) { return; }
+
+        let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
+        let bg_color = if high_contrast { 0x00_00_00_00 } else { 0x00_20_20_20 };
+        let border_color = if high_contrast { 0x00_FF_FF_FF } else { 0x00_40_40_40 };
+
+        draw_rect(fb, x, y, w, h, bg_color, Some(clip));
+        // Border
+        draw_rect(fb, x, y, w, 1, 0x00_FFFFFF, Some(clip)); // Top
+        draw_rect(fb, x, y, 1, h, 0x00_FFFFFF, Some(clip)); // Left
+        draw_rect(fb, x + w as isize - 1, y, 1, h, border_color, Some(clip)); // Right
+        draw_rect(fb, x, y + h as isize - 1, w, 1, border_color, Some(clip)); // Bottom
+
+        let speaker = crate::drivers::speaker::SPEAKER.lock();
+        let vol = speaker.master_volume;
+        let is_muted = speaker.muted;
+        let percent = 100 - (vol as u32 * 100 / 63);
+        drop(speaker);
+
+        // Vertical Bar
+        let bar_x = x + 30;
+        let bar_y = y + 30;
+        let bar_w = 20;
+        let bar_h = 100;
+        
+        draw_rect(fb, bar_x, bar_y, bar_w, bar_h, 0x00_10_10_10, Some(clip)); // BG
+        let fill_h = (bar_h * percent as usize) / 100;
+        let color = if is_muted { 0x00_44_44_44 } else { 0x00_00_AA_00 };
+        let fill_top_y = bar_y + (bar_h - fill_h) as isize;
+        draw_rect(fb, bar_x, fill_top_y, bar_w, fill_h, color, Some(clip));
+
+        // Draw Volume Handle (Slider Thumb)
+        let handle_size: isize = 12;
+        let handle_x = bar_x + (bar_w as isize / 2) - (handle_size / 2);
+        let handle_y = fill_top_y - (handle_size / 2);
+        
+        let handle_rect = Rect { x: handle_x, y: handle_y, width: handle_size as usize, height: handle_size as usize };
+        let is_hovering = handle_rect.contains(self.input.mouse_x, self.input.mouse_y);
+        let color_main = if is_hovering { 0x00_FFFF00 } else { 0x00_FFFFFF };
+        let color_inner = if is_hovering { 0x00_AAAA00 } else { 0x00_AAAAAA };
+
+        draw_rect(fb, handle_x, handle_y, handle_size as usize, handle_size as usize, color_main, Some(clip));
+        draw_rect(fb, handle_x + 2, handle_y + 2, (handle_size - 4) as usize, (handle_size - 4) as usize, color_inner, Some(clip));
+
+        let mute_label = if is_muted { "Unmute" } else { "Mute" };
+        let mut mute_btn = Button::new(x + 5, y + 5, 70, 22, mute_label);
+        mute_btn.bg_color = if is_muted { 0x00_C0_40_40 } else { 0x00_60_60_60 };
+        mute_btn.text_color = 0x00_FFFFFF;
+        mute_btn.draw(fb, self.input.mouse_x, self.input.mouse_y, Some(clip));
+
+        let p_str = format!("{}%", percent);
+        font::draw_string(fb, x + 25, y + 135, p_str.as_str(), 0x00_CCCCCC, Some(clip));
     }
 
     fn draw_brightness_osd(&self, fb: &mut framebuffer::Framebuffer, clip: Rect) {
@@ -1810,27 +1969,27 @@ pub fn draw_battery_indicator(fb: &mut framebuffer::Framebuffer, x: isize, y: is
 }
 
 pub fn draw_rect(fb: &mut framebuffer::Framebuffer, x: isize, y: isize, width: usize, height: usize, color: u32, clip: Option<Rect>) {    
-    if let Some(fb_info) = fb.info.as_ref() {
-        let screen_rect = Rect { x: 0, y: 0, width: fb_info.width, height: fb_info.height };
+    if let (Some(info), Some(buffer)) = (fb.info.as_ref(), fb.draw_buffer.as_mut()) {
+        let screen_rect = Rect { x: 0, y: 0, width: info.width, height: info.height };
         let mut target_rect = Rect { x, y, width, height };
 
-        // Clip to provided clip rect
         if let Some(c) = clip {
             if let Some(clipped) = target_rect.intersection(&c) {
                 target_rect = clipped;
             } else {
-                return; // Completely clipped out
+                return;
             }
         }
 
-        // Use intersection to cleanly clip to screen bounds
         if let Some(clipped) = target_rect.intersection(&screen_rect) {
-            let end_y = clipped.y + clipped.height as isize;
-            let end_x = clipped.x + clipped.width as isize;
-            for py in clipped.y .. end_y {
-                for px in clipped.x .. end_x {
-                    fb.set_pixel(px as usize, py as usize, color);
-                }
+            // Optimized: Calculate pointer offsets once and use a faster loop
+            let start_x = clipped.x as usize;
+            let start_y = clipped.y as usize;
+            let end_y = start_y + clipped.height;
+            
+            for py in start_y..end_y {
+                let offset = py * info.width + start_x;
+                buffer[offset..offset + clipped.width].fill(color);
             }
         }
     }
