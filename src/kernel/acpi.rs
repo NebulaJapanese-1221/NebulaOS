@@ -18,22 +18,13 @@ const AML_BYTE_PREFIX: u8 = 0x0A; // ByteConst
 const AML_WORD_PREFIX: u8 = 0x0B; // WordConst
 const AML_DWORD_PREFIX: u8 = 0x0C; // DWordConst
 const AML_OP_REGION_OP: u8 = 0x80; // ExtOpPrefix + OpRegion
-const AML_QWORD_PREFIX: u8 = 0x0E; // QWordConst
 const AML_PACKAGE_OP: u8 = 0x12; // PackageOp
 const AML_METHOD_OP: u8 = 0x14; // MethodOp
-const AML_NAME_OP: u8 = 0x08; // NameOp
-const AML_SCOPE_OP: u8 = 0x10; // ScopeOp
-const AML_DEVICE_OP: u8 = 0x82; // ExtOpPrefix + DeviceOp
 const AML_RETURN_OP: u8 = 0xA4; // ReturnOp
 const AML_FIELD_OP: u8 = 0x81;  // ExtOpPrefix + FieldOp
 const AML_ZERO_OP: u8 = 0x00; // ZeroOp
 const AML_ONE_OP: u8 = 0x01; // OneOp
 const AML_ONES_OP: u8 = 0xFF; // OnesOp
-
-// ACPI Name Objects (4-char names)
-const ACPI_NAME_SB: u32 = 0x5F42535C; // \_SB
-const ACPI_NAME_PCI0: u32 = 0x30494350; // PCI0
-const ACPI_NAME_BAT0: u32 = 0x30544142; // BAT0
 
 #[repr(C, packed)]
 struct Rsdp {

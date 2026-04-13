@@ -8,8 +8,6 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 /// Flag indicating if the background rendering task is active.
 pub static RENDER_TASK_ACTIVE: AtomicBool = AtomicBool::new(false);
 
-/// The current measured frames per second.
-pub static FPS: AtomicUsize = AtomicUsize::new(0);
 /// The latency of the last VRAM blit in TSC cycles.
 pub static BLIT_LATENCY: AtomicUsize = AtomicUsize::new(0);
 /// Heartbeat incremented by the background rendering task.
@@ -33,6 +31,8 @@ pub struct Framebuffer {
     pub draw_buffer: Option<Vec<u32>>,
     /// An intermediate buffer that holds the frame ready for VRAM blitting.
     pub ready_buffer: Option<Vec<u32>>,
+    /// The third buffer used for active VRAM blitting to prevent blocking the GUI thread.
+    pub blit_buffer: Option<Vec<u32>>,
     /// A dedicated scratch buffer for large pixel operations (like fading or row processing).
     /// Using this prevents stack overflows during complex GUI operations.
     pub scratch_buffer: Option<Vec<u32>>,
@@ -49,7 +49,7 @@ pub struct Framebuffer {
 impl Framebuffer {
     pub const fn new() -> Self {
         Framebuffer { 
-            info: None, draw_buffer: None, ready_buffer: None, scratch_buffer: None,
+            info: None, draw_buffer: None, ready_buffer: None, blit_buffer: None, scratch_buffer: None,
             frame_ready: AtomicBool::new(false),
             dirty_x1: 0, dirty_y1: 0, dirty_x2: 0, dirty_y2: 0,
             clip_rect: None 
@@ -79,6 +79,10 @@ impl Framebuffer {
             }
             self.ready_buffer = Some(Vec::with_capacity(buffer_size));
             if let Some(ref mut buffer) = self.ready_buffer {
+                buffer.resize(buffer_size, 0);
+            }
+            self.blit_buffer = Some(Vec::with_capacity(buffer_size));
+            if let Some(ref mut buffer) = self.blit_buffer {
                 buffer.resize(buffer_size, 0);
             }
             self.scratch_buffer = Some(Vec::with_capacity(buffer_size));
@@ -224,7 +228,16 @@ impl Framebuffer {
         let h = self.dirty_y2.saturating_sub(y);
 
         if w > 0 && h > 0 {
-            self.blit_rect_to_vram(x, y, w, h, true);
+            // Triple Buffering: Swap Ready and Blit buffers instantly
+            // This allows the GUI to start the next 'present' immediately
+            let mut temp = self.ready_buffer.take();
+            core::mem::swap(&mut temp, &mut self.blit_buffer);
+            self.ready_buffer = temp;
+
+            // Perform the slow VRAM write using the stable blit_buffer
+            if let (Some(ref info), Some(ref buffer)) = (&self.info, &self.blit_buffer) {
+                self.blit_rect_to_vram_internal(info, buffer, x, y, w, h);
+            }
         }
 
         // Reset dirty rect for next frame
@@ -241,11 +254,16 @@ impl Framebuffer {
         true
     }
 
-    /// Internal helper to copy a rectangle to VRAM.
+    /// Internal helper to copy a rectangle to VRAM from a specific source buffer.
     fn blit_rect_to_vram(&self, x: usize, y: usize, width: usize, height: usize, from_ready: bool) {
         let source = if from_ready { &self.ready_buffer } else { &self.draw_buffer };
-        if let (Some(ref info), Some(ref buffer)) = (&self.info, source) {
-            let vram_ptr = info.address as *mut u8;
+        if let (Some(info), Some(buffer)) = (self.info.as_ref(), source.as_ref()) {
+            self.blit_rect_to_vram_internal(info, buffer, x, y, width, height);
+        }
+    }
+
+    fn blit_rect_to_vram_internal(&self, info: &FramebufferInfo, buffer: &[u32], x: usize, y: usize, width: usize, height: usize) {
+        let vram_ptr = info.address as *mut u8;
 
             if info.bpp == 32 {
                 let src_ptr = buffer.as_ptr() as *const u8;

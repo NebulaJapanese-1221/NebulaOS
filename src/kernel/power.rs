@@ -84,13 +84,13 @@ pub fn reboot() -> ! {
 
         // Method 1: PCI Reset (Port 0xCF9) - Very reliable on modern systems
         io::outb(0xCF9, 0x06);
-        for _ in 0..1000 { unsafe { asm!("nop") } }
+        for _ in 0..1000 { asm!("nop") }
 
         // Method 2: Keyboard Controller Reset (Port 0x64)
         for _ in 0..10 {
-            while (io::inb(0x64) & 2) != 0 { unsafe { asm!("nop") } }
+            while (io::inb(0x64) & 2) != 0 { asm!("nop") }
             io::outb(0x64, 0xFE);
-            for _ in 0..10000 { unsafe { asm!("nop") } }
+            for _ in 0..10000 { asm!("nop") }
         }
 
         // Method 3: Triple Fault (Fallback)

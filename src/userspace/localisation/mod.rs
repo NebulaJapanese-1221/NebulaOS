@@ -12,7 +12,6 @@ pub trait Localisation: Send + Sync {
     fn app_calculator(&self) -> &'static str;
     fn app_paint(&self) -> &'static str;
     fn app_system_info(&self) -> &'static str;
-    fn ctx_new_terminal(&self) -> &'static str;
     fn ctx_properties(&self) -> &'static str;
     fn ctx_refresh(&self) -> &'static str;
     fn btn_shutdown(&self) -> &'static str;
@@ -26,8 +25,6 @@ pub trait Localisation: Send + Sync {
     fn option_high_contrast(&self) -> &'static str;
     fn option_large_text(&self) -> &'static str;
     fn info_version(&self) -> &'static str;
-    fn info_kernel(&self) -> &'static str;
-    fn info_target(&self) -> &'static str;
     fn info_resolution(&self) -> &'static str;
     fn info_memory(&self) -> &'static str;
     fn info_uptime(&self) -> &'static str;
@@ -48,7 +45,6 @@ impl Localisation for EnUs {
     fn app_calculator(&self) -> &'static str { "Calculator" }
     fn app_paint(&self) -> &'static str { "Paint" }
     fn app_system_info(&self) -> &'static str { "System Info" }
-    fn ctx_new_terminal(&self) -> &'static str { "New Terminal" }
     fn ctx_properties(&self) -> &'static str { "Properties" }
     fn ctx_refresh(&self) -> &'static str { "Refresh" }
     fn btn_shutdown(&self) -> &'static str { "Shutdown" }
@@ -62,8 +58,6 @@ impl Localisation for EnUs {
     fn option_high_contrast(&self) -> &'static str { "High Contrast" }
     fn option_large_text(&self) -> &'static str { "Large Text" }
     fn info_version(&self) -> &'static str { "Version:" }
-    fn info_kernel(&self) -> &'static str { "Kernel:" }
-    fn info_target(&self) -> &'static str { "Target:" }
     fn info_resolution(&self) -> &'static str { "Resolution:" }
     fn info_memory(&self) -> &'static str { "Memory:" }
     fn info_uptime(&self) -> &'static str { "Uptime:" }
@@ -83,7 +77,6 @@ impl Localisation for ja_jp::JaJp {
     fn app_calculator(&self) -> &'static str { ja_jp::APP_CALCULATOR }
     fn app_paint(&self) -> &'static str { ja_jp::APP_PAINT }
     fn app_system_info(&self) -> &'static str { ja_jp::APP_SYSTEM_INFO }
-    fn ctx_new_terminal(&self) -> &'static str { ja_jp::CTX_NEW_TERMINAL }
     fn ctx_properties(&self) -> &'static str { ja_jp::CTX_PROPERTIES }
     fn ctx_refresh(&self) -> &'static str { ja_jp::CTX_REFRESH }
     fn btn_shutdown(&self) -> &'static str { ja_jp::BTN_SHUTDOWN }
@@ -97,8 +90,6 @@ impl Localisation for ja_jp::JaJp {
     fn option_high_contrast(&self) -> &'static str { ja_jp::OPTION_HIGH_CONTRAST }
     fn option_large_text(&self) -> &'static str { ja_jp::OPTION_LARGE_TEXT }
     fn info_version(&self) -> &'static str { ja_jp::INFO_VERSION }
-    fn info_kernel(&self) -> &'static str { ja_jp::INFO_KERNEL }
-    fn info_target(&self) -> &'static str { ja_jp::INFO_TARGET }
     fn info_resolution(&self) -> &'static str { ja_jp::INFO_RESOLUTION }
     fn info_memory(&self) -> &'static str { ja_jp::INFO_MEMORY }
     fn info_uptime(&self) -> &'static str { ja_jp::INFO_UPTIME }

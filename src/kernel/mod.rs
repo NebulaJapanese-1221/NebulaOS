@@ -41,7 +41,7 @@ const SPINNER_COLORS: [u32; 12] = [
 
 pub(crate) fn draw_spinner(fb: &mut crate::drivers::framebuffer::Framebuffer, cx: isize, cy: isize) {
     let frame = if BOOT_ANIM_RUNNING.load(Ordering::Relaxed) {
-        BOOT_ANIM_FRAME.fetch_add(3, Ordering::Relaxed) // Increment by 3 for even faster rotation
+        BOOT_ANIM_FRAME.fetch_add(2, Ordering::Relaxed) // Slower, smoother rotation
     } else {
         BOOT_ANIM_FRAME.load(Ordering::Relaxed)
     };

@@ -7,7 +7,7 @@
 - Added a 'Brightness' system with simulated control and OSD popup.
 - Added a 'Battery' indicator to the taskbar with ACPI device detection hooks.
 - Implemented a dynamic ToolTip system for the taskbar.
-- Added a system top bar with the Start menu being moved to there and status indicators (Volume, Battery, Date/Time). The start menu button has been renamed to Nebula.
+- Added a system top bar with the Start menu being moved to there and status indicators (Battery and Date/Time).
 - Added a better boot screen.
 - Added system startup and shutdown sounds.
 - Major UI improvements

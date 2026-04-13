@@ -15,7 +15,6 @@ pub const APP_PAINT: &str = "ペイント";
 pub const APP_SYSTEM_INFO: &str = "システム情報";
 
 // Context Menu
-pub const CTX_NEW_TERMINAL: &str = "新しいターミナル";
 pub const CTX_PROPERTIES: &str = "属性";
 pub const CTX_REFRESH: &str = "更新";
 
@@ -35,8 +34,6 @@ pub const LABEL_PRESETS: &str = "プリセット:";
 pub const OPTION_HIGH_CONTRAST: &str = "高コントラスト";
 pub const OPTION_LARGE_TEXT: &str = "大きな文字";
 pub const INFO_VERSION: &str = "バージョン:";
-pub const INFO_KERNEL: &str = "カーネル:";
-pub const INFO_TARGET: &str = "ターゲット:";
 pub const INFO_RESOLUTION: &str = "解像度:";
 pub const INFO_MEMORY: &str = "メモリ:";
 pub const INFO_UPTIME: &str = "稼働時間:";
