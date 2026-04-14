@@ -30,6 +30,7 @@ pub static DESKTOP_GRADIENT_END: AtomicU32 = AtomicU32::new(0x00_50_80_B0);
 pub static FULL_REDRAW_REQUESTED: AtomicBool = AtomicBool::new(false);
 pub static HIGH_CONTRAST: AtomicBool = AtomicBool::new(false);
 pub static LARGE_TEXT: AtomicBool = AtomicBool::new(false);
+pub static MOUSE_SENSITIVITY: AtomicU32 = AtomicU32::new(10); // 1.0x scale
 
 #[derive(Clone)]
 pub struct Window {
@@ -123,8 +124,10 @@ impl InputManager {
         self.event_queue.clear();
 
         while let Some(packet) = mouse::get_packet() {
-            let dx = packet.x as isize;
-            let dy = -(packet.y as isize); // PS/2 Y-axis is inverted
+            let sens = MOUSE_SENSITIVITY.load(Ordering::Relaxed) as isize;
+            let dx = (packet.x as isize * sens) / 10;
+            let dy = (-(packet.y as isize) * sens) / 10; // PS/2 Y-axis is inverted
+            
             self.mouse_x = (self.mouse_x + dx).clamp(0, max_w - 1);
             self.mouse_y = (self.mouse_y + dy).clamp(0, max_h - 1);
 
@@ -268,27 +271,15 @@ impl WindowManager {
             drop(current_dt); // Release lock early
         }
 
-        // Handle Nebula Menu Animation
+        // Handle Start Menu animation
         if self.menu_anim_progress != self.menu_anim_target {
-            let diff = if self.menu_anim_target > self.menu_anim_progress {
-                self.menu_anim_target - self.menu_anim_progress
-            } else {
-                self.menu_anim_progress - self.menu_anim_target
-            };
-
-            // Ease-out: move 1/3 of the remaining distance, with a minimum step of 4 to ensure completion
-            let step = (diff / 3).max(4);
-
             if self.menu_anim_progress < self.menu_anim_target {
-                self.menu_anim_progress = (self.menu_anim_progress + step).min(100);
+                self.menu_anim_progress = (self.menu_anim_progress + 10).min(self.menu_anim_target);
             } else {
-                self.menu_anim_progress = self.menu_anim_progress.saturating_sub(step);
+                self.menu_anim_progress = self.menu_anim_progress.saturating_sub(10).max(self.menu_anim_target);
             }
-            
-            // Invalidate the menu area to redraw the slide
-            self.mark_dirty(Rect { x: 0, y: TOP_BAR_HEIGHT as isize, width: 210, height: 355 });
-            
             self.start_menu_open = self.menu_anim_progress > 0;
+            self.mark_dirty(Rect { x: 0, y: TOP_BAR_HEIGHT as isize, width: 210, height: 400 });
         }
 
         // Handle Brightness OSD timeout
@@ -1099,30 +1090,47 @@ impl WindowManager {
         let screen_rect = Rect { x: 0, y: 0, width: screen_width as usize, height: screen_height as usize };
 
         for dirty_rect in &final_rects {
-            if let Some(r) = dirty_rect.intersection(&screen_rect) {
+            // Occlusion Culling: If a maximized window is on top, don't draw the background.
+            let background_occluded = self.windows.iter()
+                .rev()
+                .any(|w| w.maximized && !w.minimized && w.rect().intersects(dirty_rect));
+
+            if !background_occluded && dirty_rect.intersects(&screen_rect) {
+                let r = dirty_rect.intersection(&screen_rect).unwrap();
                 let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
                 let start_c = if high_contrast { 0 } else { DESKTOP_GRADIENT_START.load(Ordering::Relaxed) };
                 let end_c = if high_contrast { 0 } else { DESKTOP_GRADIENT_END.load(Ordering::Relaxed) };
                 
-                let (r1, g1, b1) = (((start_c >> 16) & 0xFF) as isize, ((start_c >> 8) & 0xFF) as isize, (start_c & 0xFF) as isize);
-                let (r2, g2, b2) = (((end_c >> 16) & 0xFF) as isize, ((end_c >> 8) & 0xFF) as isize, (end_c & 0xFF) as isize);
-                let (rd, gd, bd) = (r2 - r1, g2 - g1, b2 - b1);
-
+                // Optimized Gradient: Pre-calculate colors per scanline
                 for y in r.y..(r.y + r.height as isize) {
-                    let color = if high_contrast { 0 } else {
-                        let rv = r1 + (rd * y) / screen_height;
-                        let gv = g1 + (gd * y) / screen_height;
-                        let bv = b1 + (bd * y) / screen_height;
-                        ((rv as u32) << 16) | ((gv as u32) << 8) | (bv as u32)
+                    let color = if high_contrast { 0 } else { 
+                        self.interpolate_gradient(start_c, end_c, y, screen_height) 
                     };
-                    
-                    // Direct buffer access is significantly faster than draw_rect calls
                     if let Some(buf) = local_fb.draw_buffer.as_mut() {
                         let offset = (y as usize * screen_width as usize) + r.x as usize;
                         buf[offset..offset + r.width].fill(color);
                     }
                 }
-            } else {
+            }
+
+            // 2. Draw Windows with subtle shadows
+            for &win_id in &self.z_order {
+                if let Some(win) = self.windows.iter().find(|w| w.id == win_id) {
+                    if win.minimized { continue; }
+                    let win_rect = win.rect();
+                    
+                    // Draw simple 1px shadow for "Advanced" look
+                    if !win.maximized && dirty_rect.intersects(&Rect { x: win.x + 2, y: win.y + 2, width: win.width, height: win.height }) {
+                        draw_rect(&mut local_fb, win.x + 2, win.y + 2, win.width, win.height, 0x00_101010, Some(*dirty_rect));
+                    }
+
+                    if dirty_rect.intersects(&win_rect) {
+                        self.draw_window(&mut local_fb, win, self.input.mouse_x, self.input.mouse_y, *dirty_rect);
+                    }
+                }
+            }
+
+            if !dirty_rect.intersects(&screen_rect) {
                 draw_rect(&mut local_fb, dirty_rect.x, dirty_rect.y, dirty_rect.width, dirty_rect.height, 0x00_5A_9D_A5, Some(*dirty_rect));
             }
 
@@ -1186,28 +1194,51 @@ impl WindowManager {
         // to fix lag caused by blocking on slow VRAM hardware.
         let mut fb = FRAMEBUFFER.lock();
         
-        if let (Some(ref info), Some(ref src_buf), Some(ref mut dest_buf)) = (&fb.info, &local_fb.draw_buffer, &mut fb.draw_buffer) {
+        let fb_info = fb.info;
+        if let (Some(info), Some(src_buf)) = (fb_info, local_fb.draw_buffer.as_ref()) {
+            // Step 2a: Copy pixels to the driver's backbuffer. 
+            // We scope the mutable borrow of dest_buf so it's released before we call present_rect.
+            if let Some(dest_buf) = fb.draw_buffer.as_mut() {
+                for dirty_rect in &final_rects {
+                    let x = dirty_rect.x.max(0) as usize;
+                    let y = dirty_rect.y.max(0) as usize;
+                    let width = dirty_rect.width.min(info.width.saturating_sub(x));
+                    let height = dirty_rect.height.min(info.height.saturating_sub(y));
+
+                    if width == 0 || height == 0 { continue; }
+
+                    for i in 0..height {
+                        let offset = (y + i) * info.width + x;
+                        dest_buf[offset..offset + width].copy_from_slice(&src_buf[offset..offset + width]);
+                    }
+                }
+            }
+
+            // Step 2b: Inform the driver that these regions are ready to be blitted to VRAM.
             for dirty_rect in final_rects {
                 let x = dirty_rect.x.max(0) as usize;
                 let y = dirty_rect.y.max(0) as usize;
                 let width = dirty_rect.width.min(info.width.saturating_sub(x));
                 let height = dirty_rect.height.min(info.height.saturating_sub(y));
 
-                if width == 0 || height == 0 { continue; }
-
-                for i in 0..height {
-                    let offset = (y + i) * info.width + x;
-                    dest_buf[offset..offset + width].copy_from_slice(&src_buf[offset..offset + width]);
-                    }
-                fb.present_rect(x, y, width, height);
+                if width > 0 && height > 0 {
+                    fb.present_rect(x, y, width, height);
                 }
             }
         }
-
         // Restore buffer ownership to self for next frame
         if let Some(buf) = local_fb.draw_buffer.take() {
             self.backbuffer = buf;
         }
+    }
+
+    fn interpolate_gradient(&self, start: u32, end: u32, y: isize, height: isize) -> u32 {
+        let (r1, g1, b1) = (((start >> 16) & 0xFF) as isize, ((start >> 8) & 0xFF) as isize, (start & 0xFF) as isize);
+        let (r2, g2, b2) = (((end >> 16) & 0xFF) as isize, ((end >> 8) & 0xFF) as isize, (end & 0xFF) as isize);
+        let rv = r1 + ((r2 - r1) * y) / height;
+        let gv = g1 + ((g2 - g1) * y) / height;
+        let bv = b1 + ((b2 - b1) * y) / height;
+        ((rv as u32) << 16) | ((gv as u32) << 8) | (bv as u32)
     }
 
     fn draw_window(&self, fb: &mut framebuffer::Framebuffer, win: &Window, mouse_x: isize, mouse_y: isize, clip: Rect) {
@@ -1368,7 +1399,7 @@ impl WindowManager {
         font::draw_string(fb, clock_x, 5, datetime_s.as_str(), 0x00_FFFFFF, Some(clip));
     }
 
-    fn draw_start_menu(&self, fb: &mut framebuffer::Framebuffer, mouse_x: isize, mouse_y: isize, clip: Rect) {
+    fn draw_start_menu(&self, fb: &mut framebuffer::Framebuffer, _mouse_x: isize, _mouse_y: isize, clip: Rect) {
         if fb.info.is_none() { return; }
 
             let menu_width = 200;
@@ -1376,57 +1407,18 @@ impl WindowManager {
             
             // Calculate sliding Y position
             let target_y = TOP_BAR_HEIGHT as isize;
-            let start_y = target_y - menu_height as isize;
-            let menu_y = start_y + (menu_height as isize * self.menu_anim_progress as isize / 100);
+            let menu_y = target_y - (menu_height as isize * (100 - self.menu_anim_progress) as isize / 100);
             let menu_x = 0;
             let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
-            let radius = 12;
             
             let bg_color = if high_contrast { 0x00_00_00_00 } else { 0x00_C0_C0_C0 };
             let border_color = if high_contrast { 0x00_FF_FF_FF } else { 0x00_40_40_40 };
 
-            // 0. Draw Drop Shadow using draw_line
-            // We draw 4 lines on the right and bottom to create a soft-ish edge.
-            if !high_contrast {
-                fb.set_clip(clip.x as usize, clip.y as usize, clip.width, clip.height);
-                for i in 1..=4 {
-                    let s_color = 0x00_10_10_10; // Very dark gray shadow
-                    // Right Shadow line
-                    fb.draw_line(menu_x + menu_width as isize + i, menu_y + radius + i, 
-                                 menu_x + menu_width as isize + i, menu_y + menu_height as isize + i - radius, s_color);
-                    // Bottom Shadow line
-                    fb.draw_line(menu_x + radius + i, menu_y + menu_height as isize + i, 
-                                 menu_x + menu_width as isize + i - radius, menu_y + menu_height as isize + i, s_color);
-                }
-                fb.clear_clip();
-            }
+            // 1. Draw Background (Flat design, no "effects")
+            draw_rect(fb, menu_x, menu_y, menu_width, menu_height, bg_color, Some(clip));
 
-            // 1. Draw Rounded Background
-            draw_rounded_rect(fb, menu_x, menu_y, menu_width, menu_height, radius, bg_color, Some(clip));
-
-            // 2. Draw Rounded Outline
-            // Straight edges
-            fb.draw_line(menu_x + radius, menu_y, menu_x + menu_width as isize - radius, menu_y, border_color);
-            fb.draw_line(menu_x + radius, menu_y + menu_height as isize - 1, menu_x + menu_width as isize - radius, menu_y + menu_height as isize - 1, border_color);
-            fb.draw_line(menu_x, menu_y + radius, menu_x, menu_y + menu_height as isize - radius, border_color);
-            fb.draw_line(menu_x + menu_width as isize - 1, menu_y + radius, menu_x + menu_width as isize - 1, menu_y + menu_height as isize - radius, border_color);
-
-            // Corner arcs (using the same quadrant-clipping technique)
-            let corner_coords = [
-                (menu_x + radius, menu_y + radius, menu_x, menu_y), // TL
-                (menu_x + menu_width as isize - radius - 1, menu_y + radius, menu_x + menu_width as isize - radius, menu_y), // TR
-                (menu_x + radius, menu_y + menu_height as isize - radius - 1, menu_x, menu_y + menu_height as isize - radius), // BL
-                (menu_x + menu_width as isize - radius - 1, menu_y + menu_height as isize - radius - 1, menu_x + menu_width as isize - radius, menu_y + menu_height as isize - radius) // BR
-            ];
-
-            for (cx, cy, cl_x, cl_y) in corner_coords {
-                if let Some(c) = clip.intersection(&Rect { x: cl_x, y: cl_y, width: radius as usize, height: radius as usize }) {
-                    fb.set_clip(c.x as usize, c.y as usize, c.width, c.height);
-                    fb.draw_circle(cx, cy, radius, border_color);
-                }
-            }
-            fb.clear_clip();
-
+            // 2. Outlines removed to simplify UI as requested
+            
             let locale_guard = localisation::CURRENT_LOCALE.lock();
             let locale = locale_guard.as_ref().unwrap();
             let item_width = menu_width - 20;
@@ -1444,9 +1436,9 @@ impl WindowManager {
             ];
 
             for (text, y_off, color) in labels {
-                let mut btn = Button::new(menu_x + 10, menu_y + y_off, item_width, 30, text);
-                btn.bg_color = color;
-                btn.draw(fb, mouse_x, mouse_y, Some(clip));
+                // Flat items (no hover, no 3D bevel)
+                draw_rect(fb, menu_x + 10, menu_y + y_off, item_width, 30, color, Some(clip));
+                font::draw_string(fb, menu_x + 20, menu_y + y_off + 7, text, 0x00_000000, Some(clip));
             }
     }
 

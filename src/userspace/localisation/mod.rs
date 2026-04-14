@@ -19,9 +19,15 @@ pub trait Localisation: Send + Sync {
     fn settings_tab_system(&self) -> &'static str;
     fn settings_tab_a11y(&self) -> &'static str;
     fn settings_tab_theme(&self) -> &'static str;
+    fn settings_tab_display(&self) -> &'static str;
+    fn settings_tab_mouse(&self) -> &'static str;
     fn label_bg_color(&self) -> &'static str;
     fn label_preview(&self) -> &'static str;
     fn label_presets(&self) -> &'static str;
+    fn label_mouse_speed(&self) -> &'static str;
+    fn label_brightness(&self) -> &'static str;
+    fn btn_apply(&self) -> &'static str;
+    fn btn_cancel(&self) -> &'static str;
     fn option_high_contrast(&self) -> &'static str;
     fn option_large_text(&self) -> &'static str;
     fn info_version(&self) -> &'static str;
@@ -52,9 +58,15 @@ impl Localisation for EnUs {
     fn settings_tab_system(&self) -> &'static str { "System" }
     fn settings_tab_a11y(&self) -> &'static str { "Accessibility" }
     fn settings_tab_theme(&self) -> &'static str { "Theme" }
+    fn settings_tab_display(&self) -> &'static str { "Display" }
+    fn settings_tab_mouse(&self) -> &'static str { "Mouse" }
     fn label_bg_color(&self) -> &'static str { "Background Color:" }
     fn label_preview(&self) -> &'static str { "Preview:" }
     fn label_presets(&self) -> &'static str { "Presets:" }
+    fn label_mouse_speed(&self) -> &'static str { "Mouse Speed:" }
+    fn label_brightness(&self) -> &'static str { "Brightness:" }
+    fn btn_apply(&self) -> &'static str { "Apply" }
+    fn btn_cancel(&self) -> &'static str { "Cancel" }
     fn option_high_contrast(&self) -> &'static str { "High Contrast" }
     fn option_large_text(&self) -> &'static str { "Large Text" }
     fn info_version(&self) -> &'static str { "Version:" }
@@ -84,9 +96,15 @@ impl Localisation for ja_jp::JaJp {
     fn settings_tab_system(&self) -> &'static str { ja_jp::SETTINGS_TAB_SYSTEM }
     fn settings_tab_a11y(&self) -> &'static str { ja_jp::SETTINGS_TAB_A11Y }
     fn settings_tab_theme(&self) -> &'static str { ja_jp::SETTINGS_TAB_THEME }
+    fn settings_tab_display(&self) -> &'static str { ja_jp::SETTINGS_TAB_DISPLAY }
+    fn settings_tab_mouse(&self) -> &'static str { ja_jp::SETTINGS_TAB_MOUSE }
     fn label_bg_color(&self) -> &'static str { ja_jp::LABEL_BG_COLOR }
     fn label_preview(&self) -> &'static str { ja_jp::LABEL_PREVIEW }
     fn label_presets(&self) -> &'static str { ja_jp::LABEL_PRESETS }
+    fn label_mouse_speed(&self) -> &'static str { ja_jp::LABEL_MOUSE_SPEED }
+    fn label_brightness(&self) -> &'static str { ja_jp::LABEL_BRIGHTNESS }
+    fn btn_apply(&self) -> &'static str { ja_jp::BTN_APPLY }
+    fn btn_cancel(&self) -> &'static str { ja_jp::BTN_CANCEL }
     fn option_high_contrast(&self) -> &'static str { ja_jp::OPTION_HIGH_CONTRAST }
     fn option_large_text(&self) -> &'static str { ja_jp::OPTION_LARGE_TEXT }
     fn info_version(&self) -> &'static str { ja_jp::INFO_VERSION }

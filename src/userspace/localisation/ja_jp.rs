@@ -26,10 +26,18 @@ pub const BTN_REBOOT: &str = "再起動";
 pub const SETTINGS_TAB_SYSTEM: &str = "システム";
 pub const SETTINGS_TAB_A11Y: &str = "補助機能"; // "Assistive Functions" (fits better than Katakana)
 pub const SETTINGS_TAB_THEME: &str = "テーマ";
+pub const SETTINGS_TAB_SOUND: &str = "サウンド";
+pub const SETTINGS_TAB_DISPLAY: &str = "ディスプレイ";
+pub const SETTINGS_TAB_MOUSE: &str = "マウス";
 
 pub const LABEL_BG_COLOR: &str = "背景色:";
 pub const LABEL_PREVIEW: &str = "プレビュー:";
 pub const LABEL_PRESETS: &str = "プリセット:";
+pub const LABEL_VOLUME: &str = "音量:";
+pub const LABEL_MOUSE_SPEED: &str = "ポインターの速度:";
+pub const LABEL_BRIGHTNESS: &str = "明るさ:";
+pub const BTN_APPLY: &str = "適用";
+pub const BTN_CANCEL: &str = "キャンセル";
 
 pub const OPTION_HIGH_CONTRAST: &str = "高コントラスト";
 pub const OPTION_LARGE_TEXT: &str = "大きな文字";

@@ -133,18 +133,27 @@ impl Framebuffer {
     /// `data` is a slice of u32 pixels (ARGB/RGBA).
     /// Assumes 0x00 in the alpha channel (highest byte) is fully transparent.
     pub fn draw_bitmap(&mut self, x: usize, y: usize, width: usize, height: usize, data: &[u32]) {
-        if let (Some(ref info), Some(ref mut buffer)) = (&self.info, &mut self.draw_buffer) {
+        if let (Some(info), Some(buffer)) = (self.info.as_ref(), self.draw_buffer.as_mut()) {
             for j in 0..height {
-                for i in 0..width {
-                    let color = data[j * width + i];
-                    // Skip transparent pixels (assuming alpha is high bits, 0 = transparent)
-                    if (color >> 24) == 0 { continue; }
-                    
-                    let px = x + i;
-                    let py = y + j;
-                    
-                    if px < info.width && py < info.height {
-                        buffer[py * info.width + px] = color;
+                let py = y + j;
+                if py >= info.height { break; }
+                
+                let src_row = &data[j * width..(j + 1) * width];
+                let dest_offset = py * info.width + x;
+                
+                // Check if row is fully opaque (common for many UI assets)
+                if src_row.iter().all(|&p| (p >> 24) == 0xFF) {
+                    let copy_len = width.min(info.width.saturating_sub(x));
+                    buffer[dest_offset..dest_offset + copy_len].copy_from_slice(&src_row[..copy_len]);
+                } else {
+                    // Per-pixel alpha for complex icons
+                    for i in 0..width {
+                        let px = x + i;
+                        if px >= info.width { break; }
+                        let color = src_row[i];
+                        if (color >> 24) != 0 {
+                            buffer[dest_offset + i] = color;
+                        }
                     }
                 }
             }
@@ -165,13 +174,14 @@ impl Framebuffer {
         }
 
         if let (Some(ref scratch), Some(ref mut draw)) = (&self.scratch_buffer, &mut self.draw_buffer) {
+            // Use fixed-point math to avoid division in the hot loop
+            let scale = (step << 8) / max; 
             for i in 0..scratch.len() {
                 let pixel = scratch[i];
-                let a = pixel & 0xFF000000;
-                let r = (((pixel >> 16) & 0xFF) * step) / max;
-                let g = (((pixel >> 8) & 0xFF) * step) / max;
-                let b = ((pixel & 0xFF) * step) / max;
-                draw[i] = a | (r << 16) | (g << 8) | b;
+                let r = (((pixel >> 16) & 0xFF) * scale) >> 8;
+                let g = (((pixel >> 8) & 0xFF) * scale) >> 8;
+                let b = ((pixel & 0xFF) * scale) >> 8;
+                draw[i] = (pixel & 0xFF000000) | (r << 16) | (g << 8) | b;
             }
         }
     }
@@ -235,7 +245,7 @@ impl Framebuffer {
             self.ready_buffer = temp;
 
             // Perform the slow VRAM write using the stable blit_buffer
-            if let (Some(ref info), Some(ref buffer)) = (&self.info, &self.blit_buffer) {
+            if let (Some(info), Some(buffer)) = (self.info.as_ref(), self.blit_buffer.as_ref().map(|v| v.as_slice())) {
                 self.blit_rect_to_vram_internal(info, buffer, x, y, w, h);
             }
         }
@@ -256,8 +266,12 @@ impl Framebuffer {
 
     /// Internal helper to copy a rectangle to VRAM from a specific source buffer.
     fn blit_rect_to_vram(&self, x: usize, y: usize, width: usize, height: usize, from_ready: bool) {
-        let source = if from_ready { &self.ready_buffer } else { &self.draw_buffer };
-        if let (Some(info), Some(buffer)) = (self.info.as_ref(), source.as_ref()) {
+        let source = if from_ready { 
+            self.ready_buffer.as_ref().map(|v| v.as_slice()) 
+        } else { 
+            self.draw_buffer.as_ref().map(|v| v.as_slice()) 
+        };
+        if let (Some(info), Some(buffer)) = (self.info.as_ref(), source) {
             self.blit_rect_to_vram_internal(info, buffer, x, y, width, height);
         }
     }
@@ -265,50 +279,49 @@ impl Framebuffer {
     fn blit_rect_to_vram_internal(&self, info: &FramebufferInfo, buffer: &[u32], x: usize, y: usize, width: usize, height: usize) {
         let vram_ptr = info.address as *mut u8;
 
-            if info.bpp == 32 {
-                let src_ptr = buffer.as_ptr() as *const u8;
-                let row_len_bytes = width * 4;
-                for i in 0..height {
-                    let cy = y + i;
-                    let src_offset = (cy * info.width + x) * 4;
-                    let dst_offset = cy * info.pitch + x * 4;
+        if info.bpp == 32 {
+            let src_ptr = buffer.as_ptr() as *const u8;
+            let row_len_bytes = width * 4;
+            for i in 0..height {
+                let cy = y + i;
+                let src_offset = (cy * info.width + x) * 4;
+                let dst_offset = cy * info.pitch + x * 4;
+                unsafe {
+                    ptr::copy_nonoverlapping(src_ptr.add(src_offset), vram_ptr.add(dst_offset), row_len_bytes);
+                }
+            }
+        } else if info.bpp == 24 {
+            for i in 0..height {
+                let cy = y + i;
+                let src_row_base = cy * info.width + x;
+                let dst_row_base = cy * info.pitch + x * 3;
+                for j in 0..width {
+                    let pixel = buffer[src_row_base + j];
                     unsafe {
-                        ptr::copy_nonoverlapping(src_ptr.add(src_offset), vram_ptr.add(dst_offset), row_len_bytes);
+                        let p_ptr = vram_ptr.add(dst_row_base + j * 3);
+                        // Standard 24-bit is BGR
+                        *p_ptr = (pixel & 0xFF) as u8;           // Blue
+                        *p_ptr.add(1) = ((pixel >> 8) & 0xFF) as u8;  // Green
+                        *p_ptr.add(2) = ((pixel >> 16) & 0xFF) as u8; // Red
                     }
                 }
-            } else if info.bpp == 24 {
-                for i in 0..height {
-                    let cy = y + i;
-                    let src_row_base = cy * info.width + x;
-                    let dst_row_base = cy * info.pitch + x * 3;
-                    for j in 0..width {
-                        let pixel = buffer[src_row_base + j];
-                        unsafe {
-                            let p_ptr = vram_ptr.add(dst_row_base + j * 3);
-                            // Standard 24-bit is BGR
-                            *p_ptr = (pixel & 0xFF) as u8;           // Blue
-                            *p_ptr.add(1) = ((pixel >> 8) & 0xFF) as u8;  // Green
-                            *p_ptr.add(2) = ((pixel >> 16) & 0xFF) as u8; // Red
-                        }
-                    }
-                }
-            } else if info.bpp == 16 {
-                // 16-bit support: Typically RGB565 (5 bits Red, 6 bits Green, 5 bits Blue)
-                for i in 0..height {
-                    let cy = y + i;
-                    let src_row_base = cy * info.width + x;
-                    let dst_row_base = cy * info.pitch + x * 2;
-                    for j in 0..width {
-                        let pixel = buffer[src_row_base + j];
-                        let r = ((pixel >> 16) & 0xFF) as u16;
-                        let g = ((pixel >> 8) & 0xFF) as u16;
-                        let b = (pixel & 0xFF) as u16;
-                        // Format: RRRRRGGGGGGBBBBB
-                        let rgb565 = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
-                        unsafe {
-                            let p_ptr = vram_ptr.add(dst_row_base + j * 2) as *mut u16;
-                            ptr::write_volatile(p_ptr, rgb565);
-                        }
+            }
+        } else if info.bpp == 16 {
+            // 16-bit support: Typically RGB565 (5 bits Red, 6 bits Green, 5 bits Blue)
+            for i in 0..height {
+                let cy = y + i;
+                let src_row_base = cy * info.width + x;
+                let dst_row_base = cy * info.pitch + x * 2;
+                for j in 0..width {
+                    let pixel = buffer[src_row_base + j];
+                    let r = ((pixel >> 16) & 0xFF) as u16;
+                    let g = ((pixel >> 8) & 0xFF) as u16;
+                    let b = (pixel & 0xFF) as u16;
+                    // Format: RRRRRGGGGGGBBBBB
+                    let rgb565 = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+                    unsafe {
+                        let p_ptr = vram_ptr.add(dst_row_base + j * 2) as *mut u16;
+                        ptr::write_volatile(p_ptr, rgb565);
                     }
                 }
             }

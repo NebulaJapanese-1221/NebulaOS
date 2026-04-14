@@ -1,4 +1,4 @@
-# NebulaOS v0.0.3-dev2
+# NebulaOS
 
 NebulaOS is a x86 based hobby operating system written in Rust.
 
@@ -24,8 +24,10 @@ Included in the userspace:
 To build and run NebulaOS using QEMU:
 
 ```bash
-cargo run
+make run
 ```
+For Windows (Requires Windows Subsystem for Linux): 
+make run
 
 *Requires QEMU and a nightly Rust toolchain.*
 
