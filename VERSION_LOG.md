@@ -9,6 +9,8 @@
 - Implemented a dynamic ToolTip system for the taskbar.
 - Added a system top bar with the Start menu being moved to there and status indicators (Battery and Date/Time).
 - Added a better boot screen.
+- Added adjustable Mouse Sensitivity in Settings with sub-pixel accumulation logic.
+- Added tooltips for status bar indicators including the Date/Time clock.
 - Added system startup and shutdown sounds.
 - Major UI improvements
 

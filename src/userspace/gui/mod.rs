@@ -103,6 +103,8 @@ pub struct InputManager {
     pub alt_pressed: bool,
     pub ctrl_pressed: bool,
     pub shift_pressed: bool,
+    pub fractional_x: isize,
+    pub fractional_y: isize,
     pub event_queue: Vec<InputEvent>,
 }
 
@@ -116,6 +118,8 @@ impl InputManager {
             alt_pressed: false,
             ctrl_pressed: false,
             shift_pressed: false,
+            fractional_x: 0,
+            fractional_y: 0,
             event_queue: Vec::new(),
         }
     }
@@ -125,8 +129,18 @@ impl InputManager {
 
         while let Some(packet) = mouse::get_packet() {
             let sens = MOUSE_SENSITIVITY.load(Ordering::Relaxed) as isize;
-            let dx = (packet.x as isize * sens) / 10;
-            let dy = (-(packet.y as isize) * sens) / 10; // PS/2 Y-axis is inverted
+            
+            // Calculate total accumulated movement (current packet + previous remainder)
+            let tx = (packet.x as isize * sens) + self.fractional_x;
+            let ty = (-(packet.y as isize) * sens) + self.fractional_y;
+            
+            // Extract whole pixels to move
+            let dx = tx / 10;
+            let dy = ty / 10;
+            
+            // Store the remainder for the next packet
+            self.fractional_x = tx % 10;
+            self.fractional_y = ty % 10;
             
             self.mouse_x = (self.mouse_x + dx).clamp(0, max_w - 1);
             self.mouse_y = (self.mouse_y + dy).clamp(0, max_h - 1);
@@ -309,11 +323,17 @@ impl WindowManager {
         let group_width = 254;
         let bat_x = (screen_width - group_width) / 2;
         let bat_hit_rect = Rect { x: bat_x, y: top_bar_y, width: 80, height: TOP_BAR_HEIGHT as usize };
+        let clock_x = bat_x + 92;
+        let clock_hit_rect = Rect { x: clock_x, y: top_bar_y, width: 162, height: TOP_BAR_HEIGHT as usize };
 
         if bat_hit_rect.contains(self.input.mouse_x, self.input.mouse_y) {
             let info = crate::drivers::battery::BATTERY.lock().get_info();
             let text = format!("Health: {}%  Cycles: {}", info.health, info.cycle_count);
             new_tooltip = Some((text, bat_x, TOP_BAR_HEIGHT as isize));
+        } else if clock_hit_rect.contains(self.input.mouse_x, self.input.mouse_y) {
+            let time = CURRENT_DATETIME.lock();
+            let text = format!("Today: {:04}/{:02}/{:02} (UTC)", time.year, time.month, time.day);
+            new_tooltip = Some((text, clock_x - 40, TOP_BAR_HEIGHT as isize));
         }
 
         if self.tooltip != new_tooltip {

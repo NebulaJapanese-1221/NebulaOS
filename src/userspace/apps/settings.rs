@@ -5,7 +5,7 @@ use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::ToString;
 use core::sync::atomic::Ordering;
-use crate::userspace::gui::{DESKTOP_GRADIENT_START, DESKTOP_GRADIENT_END, FULL_REDRAW_REQUESTED, HIGH_CONTRAST, LARGE_TEXT};
+use crate::userspace::gui::{DESKTOP_GRADIENT_START, DESKTOP_GRADIENT_END, FULL_REDRAW_REQUESTED, HIGH_CONTRAST, LARGE_TEXT, MOUSE_SENSITIVITY};
 use crate::userspace::localisation::{self, Language};
 use crate::kernel::cpu::CPU_BRAND;
 
@@ -15,6 +15,7 @@ enum Tab {
     Accessibility,
     Theme,
     Language,
+    Mouse,
 }
 
 #[derive(Clone)]
@@ -42,6 +43,7 @@ impl Settings {
             (Tab::Accessibility, locale.settings_tab_a11y()),
             (Tab::Theme, locale.settings_tab_theme()),
             (Tab::Language, locale.settings_tab_language()),
+            (Tab::Mouse, locale.settings_tab_mouse()),
         ];
 
         let count = tab_labels.len();
@@ -204,6 +206,23 @@ impl Settings {
                 btn_en.draw(fb, 0, 0, None);
                 btn_ja.draw(fb, 0, 0, None);
             },
+            Tab::Mouse => {
+                font::draw_string(fb, content_x, content_y, locale.settings_tab_mouse(), 0x00_FF_FF_FF, None);
+                
+                let slider_y = content_y + (font_height as isize + 4) + 20;
+                font::draw_string(fb, content_x, slider_y, locale.label_mouse_speed(), 0x00_FF_FF_FF, None);
+                
+                let slider_x = content_x + 120;
+                let slider_w = 150;
+                let slider_h = 2;
+                let sens = MOUSE_SENSITIVITY.load(Ordering::Relaxed);
+
+                // Track
+                crate::userspace::gui::draw_rect(fb, slider_x, slider_y + 6, slider_w, slider_h, 0x00_80_80_80, None);
+                // Handle (Range 1 to 50, where 10 is 1.0x)
+                let handle_x = slider_x + (((sens as usize - 1) * slider_w) / 49) as isize;
+                crate::userspace::gui::draw_rect(fb, handle_x - 4, slider_y, 8, 14, 0x00_00_AA_FF, None);
+            }
         }
     }
 }
@@ -226,11 +245,12 @@ impl App for Settings {
             AppEvent::MouseClick { x, y, width, .. } => {
                 // 1. Tab selection
                 if *y >= 0 && *y < bar_height as isize {
-                    let tab_width = *width / 4;
+                    let tab_width = *width / 5;
                     if *x < tab_width as isize { self.current_tab = Tab::System; }
                     else if *x < (tab_width * 2) as isize { self.current_tab = Tab::Accessibility; }
                     else if *x < (tab_width * 3) as isize { self.current_tab = Tab::Theme; }
-                    else { self.current_tab = Tab::Language; }
+                    else if *x < (tab_width * 4) as isize { self.current_tab = Tab::Language; }
+                    else { self.current_tab = Tab::Mouse; }
                     return;
                 }
 
@@ -284,6 +304,13 @@ impl App for Settings {
                                 FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
                             }
                         }
+                        Tab::Mouse => {
+                            let slider_y = (font_height as isize + 4) + 20;
+                            if rel_y >= slider_y && rel_y <= slider_y + 14 && rel_x >= 120 && rel_x <= 270 {
+                                let new_sens = 1 + ((rel_x - 120) * 49 / 150) as u32;
+                                MOUSE_SENSITIVITY.store(new_sens, Ordering::Relaxed);
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -323,6 +350,12 @@ impl App for Settings {
                         if rel_y >= slider_y - 10 && rel_y <= slider_y + 24 && rel_x >= 100 && rel_x <= 250 {
                             let new_level = ((rel_x - 100) * 100 / 150) as u8;
                             crate::drivers::brightness::set_master_brightness(new_level);
+                        }
+                    } else if self.current_tab == Tab::Mouse {
+                        let slider_y = (font_height as isize + 4) + 20;
+                        if rel_y >= slider_y - 10 && rel_y <= slider_y + 24 && rel_x >= 120 && rel_x <= 270 {
+                            let new_sens = 1 + ((rel_x - 120) * 49 / 150) as u32;
+                            MOUSE_SENSITIVITY.store(new_sens, Ordering::Relaxed);
                         }
                     }
                 }
