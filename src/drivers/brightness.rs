@@ -2,10 +2,12 @@
 //! Currently simulates brightness control and provides an interface for future ACPI integration.
 
 use spin::Mutex;
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicBool, Ordering};
 
 /// Global atomic to store the current brightness level (0-100).
 pub static BRIGHTNESS_LEVEL: AtomicU8 = AtomicU8::new(100);
+/// Flag used to notify the GUI that an OSD update is required.
+pub static BRIGHTNESS_UPDATED: AtomicBool = AtomicBool::new(false);
 
 pub struct BrightnessDriver {
     // Placeholder for ACPI related data if needed in the future
@@ -28,6 +30,7 @@ impl BrightnessDriver {
     pub fn set_brightness(&mut self, level: u8) {
         let clamped_level = level.clamp(0, 100);
         BRIGHTNESS_LEVEL.store(clamped_level, Ordering::Relaxed);
+        BRIGHTNESS_UPDATED.store(true, Ordering::Relaxed);
         
         // In a real implementation, this would involve calling an ACPI method.
         crate::kernel::acpi::acpi_set_backlight_level(clamped_level);

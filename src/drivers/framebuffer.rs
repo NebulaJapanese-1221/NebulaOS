@@ -5,6 +5,12 @@ use spin::Mutex;
 use core::ptr;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+#[cfg(target_arch = "x86")]
+#[allow(unused_imports)]
+use core::arch::x86::*;
+#[cfg(target_arch = "x86_64")]
+use core::arch::x86_64::*;
+
 /// Flag indicating if the background rendering task is active.
 pub static RENDER_TASK_ACTIVE: AtomicBool = AtomicBool::new(false);
 

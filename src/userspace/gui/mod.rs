@@ -24,7 +24,7 @@ use crate::userspace::localisation::Localisation;
 pub use crate::userspace::fonts::font;
 
 const MAX_WINDOWS: usize = 10;
-const TOP_BAR_HEIGHT: usize = 26;
+pub const TOP_BAR_HEIGHT: usize = 26;
 
 pub static DESKTOP_GRADIENT_START: AtomicU32 = AtomicU32::new(0x00_10_20_40);
 pub static DESKTOP_GRADIENT_END: AtomicU32 = AtomicU32::new(0x00_50_80_B0);
@@ -253,6 +253,14 @@ impl WindowManager {
         self.dirty_rects.push(rect);
     }
 
+    fn mark_dirty_outline(&mut self, rect: Rect) {
+        const BW: usize = 4; // Border width to refresh (padded for the 2px outline)
+        self.mark_dirty(Rect { x: rect.x - 2, y: rect.y - 2, width: rect.width + 4, height: BW }); // Top
+        self.mark_dirty(Rect { x: rect.x - 2, y: rect.y + rect.height as isize - 2, width: rect.width + 4, height: BW }); // Bottom
+        self.mark_dirty(Rect { x: rect.x - 2, y: rect.y - 2, width: BW, height: rect.height + 4 }); // Left
+        self.mark_dirty(Rect { x: rect.x + rect.width as isize - 2, y: rect.y - 2, width: BW, height: rect.height + 4 }); // Right
+    }
+
     fn get_cursor_rect(&self) -> Rect {
         Rect { x: self.input.mouse_x, y: self.input.mouse_y, width: 12, height: 17 }
     }
@@ -279,10 +287,8 @@ impl WindowManager {
             if *current_dt != new_time { // Only redraw if time actually changed
                 *current_dt = new_time;
                 if let Some(info) = FRAMEBUFFER.lock().info.as_ref() {
-                    let group_width = 254; // Battery(72) + Gap(20) + Clock(162)
-                    let bat_x = (info.width as isize - group_width) / 2;
-                    let clock_x = bat_x + 92; // Offset by battery width + gap
-                    let rect = Rect { x: clock_x, y: 0, width: 162, height: TOP_BAR_HEIGHT };
+                    // Mark the entire right status area dirty to accommodate potential layout shifts
+                    let rect = Rect { x: info.width as isize - 250, y: 0, width: 250, height: TOP_BAR_HEIGHT };
                     self.mark_dirty(rect);
                 }
             }
@@ -298,7 +304,20 @@ impl WindowManager {
             }
             self.start_menu_open = self.menu_anim_progress > 0;
             // Mark the sweep area dirty to ensure the slide is smooth and leaves no ghosts
-            self.mark_dirty(Rect { x: 0, y: TOP_BAR_HEIGHT as isize, width: 210, height: 350 });
+            self.mark_dirty(Rect { x: 0, y: 0, width: 210, height: 400 });
+        }
+
+        // Check for brightness changes (to trigger OSD popup)
+        if crate::drivers::brightness::BRIGHTNESS_UPDATED.swap(false, Ordering::Relaxed) {
+            self.brightness_osd_timeout = 60;
+            if let Some(info) = FRAMEBUFFER.lock().info.as_ref() {
+                 let osd_w = 200; let osd_h = 60;
+                 self.mark_dirty(Rect { 
+                     x: (info.width as isize - osd_w)/2, 
+                     y: (info.height as isize - osd_h)/2, 
+                     width: osd_w as usize, height: osd_h as usize 
+                 });
+            }
         }
 
         // Handle Brightness OSD timeout
@@ -325,20 +344,29 @@ impl WindowManager {
         // Tooltip logic for Battery Indicator
         let mut new_tooltip = None;
         let top_bar_y = 0;
-        let group_width = 254;
-        let bat_x = (screen_width - group_width) / 2;
-        let bat_hit_rect = Rect { x: bat_x, y: top_bar_y, width: 80, height: TOP_BAR_HEIGHT as usize };
-        let clock_x = bat_x + 92;
-        let clock_hit_rect = Rect { x: clock_x, y: top_bar_y, width: 162, height: TOP_BAR_HEIGHT as usize };
 
-        if bat_hit_rect.contains(self.input.mouse_x, self.input.mouse_y) {
-            let info = crate::drivers::battery::BATTERY.lock().get_info();
-            let text = format!("Health: {}%  Cycles: {}", info.health, info.cycle_count);
-            new_tooltip = Some((text, bat_x, TOP_BAR_HEIGHT as isize));
-        } else if clock_hit_rect.contains(self.input.mouse_x, self.input.mouse_y) {
+        let battery_info = crate::drivers::battery::BATTERY.lock().get_info();
+        
+        // Calculate dynamic hitboxes based on presence
+        let mut current_hit_x = screen_width - 10;
+
+        if battery_info.health > 0 {
+            let bat_x = current_hit_x - 75;
+            let bat_hit_rect = Rect { x: bat_x, y: top_bar_y, width: 75, height: TOP_BAR_HEIGHT as usize };
+            if bat_hit_rect.contains(self.input.mouse_x, self.input.mouse_y) {
+                let text = format!("Health: {}%  Cycles: {}", battery_info.health, battery_info.cycle_count);
+                new_tooltip = Some((text, bat_x - 120, TOP_BAR_HEIGHT as isize));
+            }
+            current_hit_x -= 85; // Move next hitbox to the left of battery
+        }
+
+        let clock_x = current_hit_x - 70;
+        let clock_hit_rect = Rect { x: clock_x, y: top_bar_y, width: 70, height: TOP_BAR_HEIGHT as usize };
+
+        if new_tooltip.is_none() && clock_hit_rect.contains(self.input.mouse_x, self.input.mouse_y) {
             let time = CURRENT_DATETIME.lock();
             let text = format!("Today: {:04}/{:02}/{:02} (UTC)", time.year, time.month, time.day);
-            new_tooltip = Some((text, clock_x - 40, TOP_BAR_HEIGHT as isize));
+            new_tooltip = Some((text, clock_x - 120, TOP_BAR_HEIGHT as isize));
         }
 
         if self.tooltip != new_tooltip {
@@ -353,9 +381,9 @@ impl WindowManager {
         let start_interaction_id = self.resize_win_id;
         let start_interaction_rect = start_interaction_id.and_then(|id| self.get_window_rect(id));
 
-        if let Some(rect) = self.drag_rect {
-            self.mark_dirty(rect);
-        }
+            if let Some(rect) = self.drag_rect {
+                self.mark_dirty_outline(rect);
+            }
 
         // Poll all drivers and buffer events
         self.input.update(screen_width, screen_height);
@@ -374,27 +402,26 @@ impl WindowManager {
                     self.input.mouse_y = y;
 
                     if let Some(id) = self.resize_win_id {
-                if let Some(win) = self.windows.iter_mut().find(|w| w.id == id) {
-
+                if let Some(win) = self.windows.iter().find(|w| w.id == id) {
+                    let mut r = self.drag_rect.unwrap_or(win.rect());
                     let min_width: isize = 80;
                     let min_height: isize = 40;
 
                     if self.resize_direction == ResizeDirection::Right || self.resize_direction == ResizeDirection::TopRight || self.resize_direction == ResizeDirection::BottomRight {
-                        let new_width = (win.width as isize + dx).max(min_width);
-                        win.width = new_width as usize;
+                        r.width = (r.width as isize + dx).max(min_width) as usize;
                     }
                     if self.resize_direction == ResizeDirection::Bottom || self.resize_direction == ResizeDirection::BottomLeft || self.resize_direction == ResizeDirection::BottomRight {
-                        let new_height = (win.height as isize + dy).max(min_height);
-                        win.height = new_height as usize;
+                        r.height = (r.height as isize + dy).max(min_height) as usize;
                     }
                     if self.resize_direction == ResizeDirection::Left || self.resize_direction == ResizeDirection::TopLeft || self.resize_direction == ResizeDirection::BottomLeft {
-                        let new_width = win.width as isize - dx;
-                        if new_width >= min_width { win.x += dx; win.width = new_width as usize; }
+                        let new_width = r.width as isize - dx;
+                        if new_width >= min_width { r.x += dx; r.width = new_width as usize; }
                     }
                     if self.resize_direction == ResizeDirection::Top || self.resize_direction == ResizeDirection::TopLeft || self.resize_direction == ResizeDirection::TopRight {
-                        let new_height = win.height as isize - dy;
-                        if new_height >= min_height { win.y += dy; win.height = new_height as usize; }
+                        let new_height = r.height as isize - dy;
+                        if new_height >= min_height { r.y += dy; r.height = new_height as usize; }
                     }
+                    self.drag_rect = Some(r);
                 }
             }
             // If dragging, update window position based on the new final mouse position
@@ -552,9 +579,9 @@ impl WindowManager {
                 }
             }
 
-            if let Some(rect) = self.drag_rect {
-                self.mark_dirty(rect);
-            }
+        if let Some(rect) = self.drag_rect {
+            self.mark_dirty_outline(rect);
+        }
 
             // Send MouseMove event to the active window if we are clicking/dragging on it
             if let Some(target_id) = self.click_target_id {
@@ -962,6 +989,7 @@ impl WindowManager {
                         self.resize_win_id = Some(win_id);
                         self.resize_direction = resize_dir;
                         self.drag_win_id = None;
+                        self.drag_rect = self.get_window_rect(win_id);
                     } else {
                         // Now that it's at the front, check for drag/close.
                         // Get window properties immutably first to avoid borrow conflicts.
@@ -1040,9 +1068,20 @@ impl WindowManager {
             }
         } else if let (MouseButton::Left, false) = (button, down) {
 
-            if self.resize_win_id.is_some() {
+            if let Some(win_id) = self.resize_win_id {
+                if let Some(rect) = self.drag_rect {
+                    if let Some(old_rect) = self.get_window_rect(win_id) {
+                        self.mark_dirty(old_rect);
+                    }
+                    if let Some(win) = self.windows.iter_mut().find(|w| w.id == win_id) {
+                        win.x = rect.x; win.y = rect.y;
+                        win.width = rect.width; win.height = rect.height;
+                    }
+                    self.mark_dirty(rect);
+                }
                 self.resize_win_id = None;
                 self.resize_direction = ResizeDirection::None;
+                self.drag_rect = None;
             } else if let Some(win_id) = self.drag_win_id {
                 // Drag finished - Commit move
                 if let Some(rect) = self.drag_rect {
@@ -1372,7 +1411,7 @@ impl WindowManager {
         draw_rect(fb, win.x, win.y + title_height as isize, win.width, 1, border_dark, Some(clip)); // Header separator
     }
 
-    fn draw_taskbar(&self, fb: &mut framebuffer::Framebuffer, mouse_x: isize, mouse_y: isize, clip: Rect) {
+    fn draw_taskbar(&self, fb: &mut framebuffer::Framebuffer, _mouse_x: isize, _mouse_y: isize, clip: Rect) {
         let (width, height) = if let Some(ref info) = fb.info {
             (info.width, info.height)
         } else {
@@ -1397,27 +1436,19 @@ impl WindowManager {
             let mut x_offset = 10;
             let button_width = 100;
             for win in &self.windows {
+                if x_offset + button_width as isize > width as isize - 10 { break; } // Prevent off-screen spill
+                
                 // Truncate title to fit
                 let title = if font::string_width(win.title) > button_width - 8 {
-                    let mut current_width = 0;
-                    let mut end_char_idx = 0;
-                    for (i, c) in win.title.char_indices() {
-                        let char_width = if c.is_ascii() { 8 } else { 16 };
-                        if current_width + char_width > button_width - 16 { // -16 for "..."
-                            break;
-                        }
-                        current_width += char_width;
-                        end_char_idx = i + c.len_utf8();
-                    }
-                    alloc::format!("{}...", &win.title[..end_char_idx])
+                    "Window..." // Static fallback for extreme speed
                 } else {
-                    win.title.to_string()
+                    win.title
                 };
 
-                let mut button = Button::new(x_offset, taskbar_y + 2, button_width, taskbar_height - 4, title);
-                button.bg_color = if win.minimized { 0x00_30_30_30 } else { 0x00_50_50_50 };
-                button.text_color = 0x00_FF_FF_FF;
-                button.draw(fb, mouse_x, mouse_y, Some(clip));
+                let bg = if win.minimized { 0x00_30_30_30 } else { 0x00_50_50_50 };
+                draw_rect(fb, x_offset, taskbar_y + 2, button_width, taskbar_height - 4, bg, Some(clip));
+                font::draw_string(fb, x_offset + 4, taskbar_y + 12, title, 0x00_FFFFFF, Some(clip));
+                
                 x_offset += button_width as isize + 5;
             }
     }
@@ -1443,14 +1474,20 @@ impl WindowManager {
             start_btn.draw(fb, self.input.mouse_x, self.input.mouse_y, Some(clip));
         }
 
-        // Centered status icons (Status Island)
-        let group_width = 254;
-        let bat_x = (width as isize - group_width) / 2;
-        let clock_x = bat_x + 92; // Offset by battery width (72) + padding (20)
-
-        draw_battery_indicator(fb, bat_x, 7, clip);
+        // Right side status icons - Dynamic Positioning
+        let battery_info = crate::drivers::battery::BATTERY.lock().get_info();
+        let clock_text_width = font::string_width(clock_text);
         
-        font::draw_string(fb, clock_x, 5, clock_text, 0x00_FFFFFF, Some(clip));
+        let mut cursor_x = width as isize - 10;
+
+        if battery_info.health > 0 {
+            cursor_x -= 75; // Battery indicator width
+            draw_battery_indicator(fb, cursor_x, 7, clip);
+            cursor_x -= 10; // Spacing between battery and clock
+        }
+
+        cursor_x -= clock_text_width as isize;
+        font::draw_string(fb, cursor_x, 5, clock_text, 0x00_FFFFFF, Some(clip));
     }
 
     fn draw_start_menu_optimized(&self, fb: &mut framebuffer::Framebuffer, _mouse_x: isize, _mouse_y: isize, mut clip: Rect, locale: Option<&alloc::sync::Arc<dyn Localisation>>) {
@@ -1789,6 +1826,7 @@ impl WindowManager {
 /// Draws a battery icon and percentage on the taskbar.
 pub fn draw_battery_indicator(fb: &mut framebuffer::Framebuffer, x: isize, y: isize, clip: Rect) {
     let info = crate::drivers::battery::BATTERY.lock().get_info();
+    if info.health == 0 { return; }
     
     let width = 30;
     let height = 12;

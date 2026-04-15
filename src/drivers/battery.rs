@@ -19,12 +19,12 @@ pub struct BatteryInfo {
 }
 
 /// Global state for the battery.
-static BATTERY_LEVEL: AtomicU8 = AtomicU8::new(100);
+static BATTERY_LEVEL: AtomicU8 = AtomicU8::new(0);
 static IS_CHARGING: AtomicBool = AtomicBool::new(false);
-static DESIGN_CAPACITY: AtomicU32 = AtomicU32::new(1000); // mWh
-static FULL_CHARGE_CAPACITY: AtomicU32 = AtomicU32::new(1000);
+static DESIGN_CAPACITY: AtomicU32 = AtomicU32::new(0); // mWh
+static FULL_CHARGE_CAPACITY: AtomicU32 = AtomicU32::new(0);
 static CYCLE_COUNT: AtomicU32 = AtomicU32::new(0);
-static REMAINING_CAPACITY: AtomicU32 = AtomicU32::new(1000);
+static REMAINING_CAPACITY: AtomicU32 = AtomicU32::new(0);
 
 pub struct BatteryDriver;
 
@@ -51,7 +51,7 @@ impl BatteryDriver {
         let health = if design > 0 {
             ((full * 100) / design).min(100) as u8
         } else {
-            100
+            0
         };
         
         let state = if level >= 100 && !charging {

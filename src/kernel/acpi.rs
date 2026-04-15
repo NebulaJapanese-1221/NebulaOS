@@ -487,7 +487,7 @@ pub fn acpi_shutdown() {
 
 /// Sets the backlight level by writing to the discovered EC register.
 pub fn acpi_set_backlight_level(level: u8) {
-    if EC_PRESENT.load(Ordering::Relaxed) {
+    if EC_PRESENT.load(Ordering::Relaxed) && crate::drivers::ec::is_initialized() {
         let reg = EC_REG_BACKLIGHT.load(Ordering::Relaxed);
         if reg != 0 {
             // Scale 0-100 level to 0-255 for the EC register (common range for Dell/Standard laptops)

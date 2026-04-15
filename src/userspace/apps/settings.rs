@@ -134,7 +134,7 @@ impl Settings {
 
                 // Brightness Slider
                 let slider_y = content_y + (font_height as isize + 4) * 3 + 20;
-                font::draw_string(fb, content_x, slider_y, "Brightness", 0x00_FF_FF_FF, None);
+                font::draw_string(fb, content_x, slider_y, locale.label_brightness(), 0x00_FF_FF_FF, None);
                 
                 let slider_x = content_x + 100;
                 let slider_w = 150;

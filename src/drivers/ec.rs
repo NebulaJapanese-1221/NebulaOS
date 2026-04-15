@@ -4,6 +4,7 @@
 //! Communication is typically done via I/O ports 0x62 (command/status) and 0x66 (data).
 
 use crate::kernel::io;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 // EC I/O Ports
 const EC_COMMAND_PORT: u16 = 0x66;
@@ -14,6 +15,8 @@ const EC_STATUS_IBF: u8 = 0x02; // Input Buffer Full (EC is busy, cannot accept 
 
 // EC Commands (written to EC_COMMAND_PORT)
 const EC_CMD_WRITE: u8 = 0x81;
+
+static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Waits until the EC's input buffer is empty, meaning it's ready to accept a command or data.
 fn ec_wait_for_ibf() {
@@ -39,7 +42,13 @@ pub fn ec_write_byte(address: u8, value: u8) {
     unsafe { io::outb(EC_DATA_PORT, value); }
 }
 
+/// Returns true if the EC driver has been initialized.
+pub fn is_initialized() -> bool {
+    INITIALIZED.load(Ordering::Relaxed)
+}
+
 /// Initializes the EC driver.
 pub fn init() {
     crate::serial_println!("[EC] Initialized EC driver (assuming standard ports).");
+    INITIALIZED.store(true, Ordering::Relaxed);
 }
