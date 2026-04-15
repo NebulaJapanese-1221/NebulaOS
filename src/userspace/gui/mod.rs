@@ -200,6 +200,7 @@ pub struct WindowManager {
     resize_direction: ResizeDirection,
     cursor_style: CursorStyle,
     backbuffer: Vec<u32>,
+    gradient_cache: Vec<u32>,
     drag_rect: Option<Rect>,
     task_switcher_open: bool,
     task_switcher_index: usize,
@@ -229,6 +230,7 @@ impl WindowManager {
             resize_direction: ResizeDirection::None,
             cursor_style: CursorStyle::Arrow,
             backbuffer: Vec::new(),
+            gradient_cache: Vec::new(),
             drag_rect: None,
             task_switcher_open: false,
             task_switcher_index: 0,
@@ -340,6 +342,17 @@ impl WindowManager {
         } else {
             (800, 600) // Fallback
         };
+
+        // Optimization: Rebuild gradient cache if colors or resolution changed
+        let start_c = DESKTOP_GRADIENT_START.load(Ordering::Relaxed);
+        let end_c = DESKTOP_GRADIENT_END.load(Ordering::Relaxed);
+        if self.gradient_cache.len() != screen_height as usize {
+            self.gradient_cache.resize(screen_height as usize, 0);
+            for y in 0..screen_height {
+                self.gradient_cache[y as usize] = self.interpolate_gradient(start_c, end_c, y, screen_height);
+            }
+            FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
+        }
 
         // Tooltip logic for Battery Indicator
         let mut new_tooltip = None;

@@ -1,5 +1,5 @@
 use crate::drivers::framebuffer;
-use crate::userspace::gui::{self, Window, button::Button};
+use crate::userspace::gui::{self, Window, button::Button, rect::Rect};
 use super::app::{App, AppEvent};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -76,7 +76,7 @@ impl Paint {
 }
 
 impl App for Paint {
-    fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window) {
+    fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window, _dirty_rect: Rect) {
         // Toolbar area
         let toolbar_height = 40;
         gui::draw_rect(fb, win.x, win.y + 20, win.width, toolbar_height, 0x00_30_30_30, None);

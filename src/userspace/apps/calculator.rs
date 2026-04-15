@@ -1,5 +1,5 @@
 use crate::drivers::framebuffer;
-use crate::userspace::gui::{self, font, Window, button::Button};
+use crate::userspace::gui::{self, font, Window, button::Button, rect::Rect};
 use super::app::{App, AppEvent};
 use alloc::boxed::Box;
 
@@ -137,7 +137,7 @@ impl Calculator {
 }
 
 impl App for Calculator {
-    fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window) {
+    fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window, _dirty_rect: Rect) {
         let font_height = if gui::LARGE_TEXT.load(core::sync::atomic::Ordering::Relaxed) { 32 } else { 16 };
         let content_y = win.y + font_height as isize + 6;
         let width = win.width as isize;

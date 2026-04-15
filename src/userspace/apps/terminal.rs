@@ -3,7 +3,7 @@ use alloc::format;
 use alloc::vec::Vec;
 use alloc::boxed::Box;
 use crate::drivers::framebuffer;
-use crate::userspace::gui::{self, font, Window};
+use crate::userspace::gui::{self, font, Window, rect::Rect};
 use super::app::{App, AppEvent};
 
 #[derive(Clone)]
@@ -143,7 +143,7 @@ impl Terminal {
 }
 
 impl App for Terminal {
-    fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window) {
+    fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window, _dirty_rect: Rect) {
         gui::draw_rect(fb, win.x, win.y + 20, win.width, win.height - 20, 0x00_000000, None);
 
         let start_x = win.x + 5;

@@ -1,6 +1,6 @@
 use alloc::string::String;
 use crate::drivers::framebuffer;
-use crate::userspace::gui::{self, font, Window};
+use crate::userspace::gui::{self, font, Window, rect::Rect};
 use super::app::{App, AppEvent};
 use alloc::boxed::Box;
 
@@ -51,7 +51,7 @@ impl TextEditor {
 }
 
 impl App for TextEditor {
-    fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window) {
+    fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window, _dirty_rect: Rect) {
         let content_x = win.x + 5;
         let mut current_x = content_x;
         let mut current_y = win.y + 25 - self.scroll_offset;

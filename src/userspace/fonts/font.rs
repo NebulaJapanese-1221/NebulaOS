@@ -154,7 +154,6 @@ pub fn draw_char(fb: &mut Framebuffer, x: isize, y: isize, character: char, colo
         if char_idx >= FONT.len() { return 0; }
 
         let width = 8 * scale;
-        let height = 16 * scale;
 
         let glyph = &FONT[char_idx];
 
