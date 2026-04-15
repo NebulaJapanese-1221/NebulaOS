@@ -18,6 +18,7 @@ use self::rect::Rect;
 pub mod button;
 use self::button::Button;
 use crate::userspace::localisation;
+use crate::userspace::localisation::Localisation;
 
 // Re-export fonts from their new location so existing references to gui::font work
 pub use crate::userspace::fonts::font;
@@ -62,6 +63,9 @@ pub enum WindowContent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CursorStyle {
     Arrow,
+    Hand,
+    IBeam,
+    Crosshair,
     ResizeNS, // North-South
     ResizeEW, // East-West
     ResizeNESW, // North-East South-West
@@ -285,7 +289,7 @@ impl WindowManager {
             drop(current_dt); // Release lock early
         }
 
-        // Handle Start Menu animation
+        // Handle Start Menu animation (Slide effect)
         if self.menu_anim_progress != self.menu_anim_target {
             if self.menu_anim_progress < self.menu_anim_target {
                 self.menu_anim_progress = (self.menu_anim_progress + 10).min(self.menu_anim_target);
@@ -293,7 +297,8 @@ impl WindowManager {
                 self.menu_anim_progress = self.menu_anim_progress.saturating_sub(10).max(self.menu_anim_target);
             }
             self.start_menu_open = self.menu_anim_progress > 0;
-            self.mark_dirty(Rect { x: 0, y: TOP_BAR_HEIGHT as isize, width: 210, height: 400 });
+            // Mark the sweep area dirty to ensure the slide is smooth and leaves no ghosts
+            self.mark_dirty(Rect { x: 0, y: TOP_BAR_HEIGHT as isize, width: 210, height: 350 });
         }
 
         // Handle Brightness OSD timeout
@@ -400,11 +405,6 @@ impl WindowManager {
                             let new_y = self.input.mouse_y - self.drag_offset_y;
                     self.drag_rect = Some(Rect { x: new_x, y: new_y, width: win.width, height: win.height });
                 }
-            }
-            // Start Menu Hover
-            else if self.menu_anim_progress == 100 && x < 210 && y >= TOP_BAR_HEIGHT as isize {
-                // Redraw menu to update item hover states
-                self.mark_dirty(Rect { x: 0, y: TOP_BAR_HEIGHT as isize, width: 210, height: 355 });
             }
                 }
                 InputEvent::Scroll { delta } => {
@@ -594,8 +594,35 @@ impl WindowManager {
         }
     }
 
-    fn update_cursor_style(&mut self, _screen_width: isize, _screen_height: isize) {
+    fn update_cursor_style(&mut self, _screen_width: isize, screen_height: isize) {
         let mut new_style = CursorStyle::Arrow;
+
+        // 1. Check for interactive UI elements (Hand Cursor)
+        let is_over_top_bar = self.input.mouse_y < TOP_BAR_HEIGHT as isize;
+        let is_over_start_menu = self.start_menu_open && self.input.mouse_x < 210 && self.input.mouse_y >= TOP_BAR_HEIGHT as isize;
+        let is_over_taskbar = self.input.mouse_y >= screen_height - 40;
+
+        if is_over_top_bar || is_over_start_menu || is_over_taskbar {
+            new_style = CursorStyle::Hand;
+        }
+
+        // 2. Check Window buttons and resize borders
+        if let Some(&top_win_id) = self.z_order.last() {
+            if let Some(win) = self.windows.iter().find(|w| w.id == top_win_id) {
+                if !win.minimized {
+                    let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
+                    let title_height = font_height + 6;
+                    
+                    // Check if over window control buttons (Close, Max, Min)
+                    if self.input.mouse_y >= win.y && self.input.mouse_y < win.y + title_height as isize {
+                        if self.input.mouse_x >= win.x + win.width as isize - 70 {
+                            new_style = CursorStyle::Hand;
+                        }
+                    }
+                }
+            }
+        }
+
         const BORDER_SIZE: isize = 5;
 
         // Check top-most window first for hover effect, but only if not currently resizing
@@ -619,6 +646,24 @@ impl WindowManager {
                             new_style = CursorStyle::ResizeEW;
                         } else if (on_top && in_x_body) || (on_bottom && in_y_body) {
                             new_style = CursorStyle::ResizeNS;
+                        } else if in_x_body && in_y_body {
+                            let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
+                            let title_height = font_height + 6;
+
+                            // If inside window but not on border/buttons, check for text apps
+                            if self.input.mouse_y >= win.y + title_height as isize {
+                                let locale_lock = localisation::CURRENT_LOCALE.lock();
+                                if let Some(locale) = locale_lock.as_ref() {
+                                    if win.title == locale.app_terminal() || win.title == locale.app_text_editor() {
+                                        new_style = CursorStyle::IBeam;
+                                    } else if win.title == locale.app_paint() {
+                                        let toolbar_height = 40;
+                                        if self.input.mouse_y >= win.y + title_height as isize + toolbar_height {
+                                            new_style = CursorStyle::Crosshair;
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -662,8 +707,11 @@ impl WindowManager {
             let taskbar_height: usize = 40;
             let taskbar_y = screen_height - taskbar_height as isize;
             let start_button_width = 120;
-            let locale_guard = localisation::CURRENT_LOCALE.lock();
-            let locale = locale_guard.as_ref().unwrap();
+            
+            // FIX: Clone the Arc and drop the lock immediately to prevent deadlocks
+            // when calling into apps (like Settings) that also need the locale.
+            let locale_arc = localisation::CURRENT_LOCALE.lock().clone();
+            let locale = locale_arc.as_ref().expect("Locale not initialized");
 
             let width = screen_width as usize;
 
@@ -684,8 +732,6 @@ impl WindowManager {
                     return;
                 }
             }
-
-            let start_button = Button::new(0, taskbar_y, start_button_width, taskbar_height, locale.start());
 
             if self.context_menu_open {
                 let menu_rect = Rect { x: self.context_menu_x, y: self.context_menu_y, width: 150, height: 100 };
@@ -717,18 +763,8 @@ impl WindowManager {
                 }
             }
 
-            // 1. Check for click on start button
-            if start_button.contains(self.input.mouse_x, self.input.mouse_y) {
-                // Toggle Start Menu
-                let was_open = self.start_menu_open;
-                self.start_menu_open = !self.start_menu_open;
-                self.drag_win_id = None;
-                if was_open || self.start_menu_open {
-                     let menu_height: usize = 345; // Increased slightly to fit items better
-                     let menu_width: usize = 200;
-                     self.mark_dirty(Rect { x: 0, y: taskbar_y - menu_height as isize, width: menu_width, height: menu_height });
-                }
-            } else if self.input.mouse_y >= taskbar_y && self.input.mouse_x >= start_button_width as isize {
+            // 1. Taskbar interactions
+            if self.input.mouse_y >= taskbar_y && self.input.mouse_x >= start_button_width as isize {
                 // Taskbar Window List Click
                 // Start after the start button + padding
                 let mut x_offset = 10;
@@ -996,9 +1032,9 @@ impl WindowManager {
                 } else {
                     // Clicked on desktop
                     self.click_target_id = None;
-                    if self.start_menu_open {
-                        self.mark_dirty(Rect { x: 0, y: TOP_BAR_HEIGHT as isize, width: 210, height: 355 });
-                        self.start_menu_open = false;
+                    if self.menu_anim_target == 100 {
+                        // Trigger slide-up animation when clicking desktop
+                        self.menu_anim_target = 0;
                     }
                 }
             }
@@ -1053,7 +1089,11 @@ impl WindowManager {
     fn draw_dirty(&mut self) {
         if self.dirty_rects.is_empty() { return; }
 
-        let raw_dirty_rects = core::mem::take(&mut self.dirty_rects);
+        // Performance Safety: Limit raw rects to process to prevent O(N^2) merge hangs
+        let mut raw_dirty_rects = core::mem::take(&mut self.dirty_rects);
+        if raw_dirty_rects.len() > 50 {
+            raw_dirty_rects.truncate(50);
+        }
         
         // Smart Merging: Only merge rectangles that actually intersect.
         // This prevents creating massive redraw areas for distant updates (preventing lag),
@@ -1109,6 +1149,19 @@ impl WindowManager {
         let (screen_width, screen_height) = if let Some(info) = &local_fb.info { (info.width as isize, info.height as isize) } else { (0, 0) };
         let screen_rect = Rect { x: 0, y: 0, width: screen_width as usize, height: screen_height as usize };
 
+        // Performance optimization: Cache shared UI context once per frame 
+        // to avoid redundant mutex locking and string formatting inside the hot dirty-rect loop.
+        let locale_arc = localisation::CURRENT_LOCALE.lock().clone();
+        let locale = locale_arc.as_ref();
+
+        let clock_str = {
+            let t = CURRENT_DATETIME.lock();
+            format!("{:02}:{:02}:{:02}", t.hour, t.minute, t.second)
+        };
+
+        let top_bar_rect = Rect { x: 0, y: 0, width: screen_width as usize, height: TOP_BAR_HEIGHT };
+        let taskbar_rect = Rect { x: 0, y: screen_height - 40, width: screen_width as usize, height: 40 };
+
         for dirty_rect in &final_rects {
             // Occlusion Culling: If a maximized window is on top, don't draw the background.
             let background_occluded = self.windows.iter()
@@ -1150,34 +1203,23 @@ impl WindowManager {
                 }
             }
 
-            if !dirty_rect.intersects(&screen_rect) {
-                draw_rect(&mut local_fb, dirty_rect.x, dirty_rect.y, dirty_rect.width, dirty_rect.height, 0x00_5A_9D_A5, Some(*dirty_rect));
+            // 3. Top Bar (System Status & Nebula Menu) - Only draw if rect intersects the top region
+            if dirty_rect.intersects(&top_bar_rect) {
+                self.draw_top_bar_optimized(&mut local_fb, *dirty_rect, locale, &clock_str);
             }
 
-            // 2. Draw Windows
-            for &win_id in &self.z_order {
-                if let Some(win) = self.windows.iter().find(|w| w.id == win_id) {
-                    if win.minimized { continue; }
-                    let win_rect = Rect { x: win.x, y: win.y, width: win.width, height: win.height };
-                    if dirty_rect.intersects(&win_rect) {
-                        self.draw_window(&mut local_fb, win, self.input.mouse_x, self.input.mouse_y, *dirty_rect);
-                    }
-                }
+            // 4. Taskbar (Window Management) - Only draw if rect intersects the bottom region
+            if dirty_rect.intersects(&taskbar_rect) {
+                self.draw_taskbar(&mut local_fb, self.input.mouse_x, self.input.mouse_y, *dirty_rect);
             }
-
-            // 3. Draw Top Bar (System Status & Nebula Menu) - Duplicate call removed
-            self.draw_top_bar(&mut local_fb, *dirty_rect);
-
-            // 4. Draw Taskbar (Window Management)
-            self.draw_taskbar(&mut local_fb, self.input.mouse_x, self.input.mouse_y, *dirty_rect);
 
             // 5. Draw Nebula Menu if open
-            if self.start_menu_open {
-                self.draw_start_menu(&mut local_fb, self.input.mouse_x, self.input.mouse_y, *dirty_rect);
+            if self.start_menu_open && dirty_rect.intersects(&Rect { x: 0, y: TOP_BAR_HEIGHT as isize, width: 210, height: 350 }) {
+                self.draw_start_menu_optimized(&mut local_fb, self.input.mouse_x, self.input.mouse_y, *dirty_rect, locale);
             }
 
             if self.context_menu_open {
-                self.draw_context_menu(&mut local_fb, self.input.mouse_x, self.input.mouse_y, *dirty_rect);
+                self.draw_context_menu_optimized(&mut local_fb, self.input.mouse_x, self.input.mouse_y, *dirty_rect, locale);
             }
 
             // Draw Task Switcher
@@ -1261,6 +1303,15 @@ impl WindowManager {
         ((rv as u32) << 16) | ((gv as u32) << 8) | (bv as u32)
     }
 
+    fn draw_win_btn(&self, fb: &mut framebuffer::Framebuffer, x: isize, y: isize, text: &str, color: u32, mouse_x: isize, mouse_y: isize, clip: Rect) {
+        let rect = Rect { x, y, width: 16, height: 16 };
+        if !clip.intersects(&rect) { return; }
+        let is_hovered = rect.contains(mouse_x, mouse_y);
+        let bg = if is_hovered { 0x00_00_50_A0 } else { color };
+        draw_rect(fb, x, y, 16, 16, bg, Some(clip));
+        font::draw_string(fb, x + 4, y + 1, text, 0x00_FFFFFF, Some(clip));
+    }
+
     fn draw_window(&self, fb: &mut framebuffer::Framebuffer, win: &Window, mouse_x: isize, mouse_y: isize, clip: Rect) {
         let is_active = self.z_order.last() == Some(&win.id);
         let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
@@ -1308,20 +1359,10 @@ impl WindowManager {
 
         // Window control buttons
         let btn_y = win.y + 3;
-        let mut close_button = Button::new(win.x + win.width as isize - 20, btn_y, 16, 16, "x");
-        close_button.bg_color = 0x00_C0_40_40;
-        close_button.text_color = 0x00_FFFFFF;
-        close_button.draw(fb, mouse_x, mouse_y, Some(clip));
-
-        let mut max_button = Button::new(win.x + win.width as isize - 40, btn_y, 16, 16, "+");
-        max_button.bg_color = title_color;
-        max_button.text_color = 0x00_FFFFFF;
-        max_button.draw(fb, mouse_x, mouse_y, Some(clip));
-
-        let mut min_button = Button::new(win.x + win.width as isize - 60, btn_y, 16, 16, "-");
-        min_button.bg_color = title_color;
-        min_button.text_color = 0x00_FFFFFF;
-        min_button.draw(fb, mouse_x, mouse_y, Some(clip));
+        // Optimized button drawing to avoid expensive heap allocations for simple window controls
+        self.draw_win_btn(fb, win.x + win.width as isize - 20, btn_y, "x", 0x00_C0_40_40, mouse_x, mouse_y, clip);
+        self.draw_win_btn(fb, win.x + win.width as isize - 40, btn_y, "+", title_color, mouse_x, mouse_y, clip);
+        self.draw_win_btn(fb, win.x + win.width as isize - 60, btn_y, "-", title_color, mouse_x, mouse_y, clip);
 
         // Draw Bevel Frame (On top of everything)
         draw_rect(fb, win.x, win.y, win.width, 1, border_bright, Some(clip)); // Top
@@ -1381,12 +1422,8 @@ impl WindowManager {
             }
     }
 
-    fn draw_top_bar(&self, fb: &mut framebuffer::Framebuffer, clip: Rect) {
-        let (width, _) = if let Some(ref info) = fb.info {
-            (info.width, info.height)
-        } else {
-            return;
-        };
+    fn draw_top_bar_optimized(&self, fb: &mut framebuffer::Framebuffer, clip: Rect, locale: Option<&alloc::sync::Arc<dyn Localisation>>, clock_text: &str) {
+        let width = if let Some(ref info) = fb.info { info.width } else { return };
 
         let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
         let bg_color = if high_contrast { 0x00_00_00_00 } else { 0x00_1A_1A_1A };
@@ -1397,14 +1434,14 @@ impl WindowManager {
         draw_rect(fb, 0, TOP_BAR_HEIGHT as isize - 1, width, 1, border_color, Some(clip));
 
         // Start Menu Button
-        let locale_guard = localisation::CURRENT_LOCALE.lock();
-        let locale = locale_guard.as_ref().unwrap();
-        let start_text = locale.start();
-        let btn_width = font::string_width(start_text) + 20;
-        let mut start_btn = Button::new(2, 2, btn_width, TOP_BAR_HEIGHT - 4, start_text);
-        if !high_contrast { start_btn.bg_color = 0x00_44_44_44; } 
-        start_btn.text_color = 0x00_FFFFFF;
-        start_btn.draw(fb, self.input.mouse_x, self.input.mouse_y, Some(clip));
+        if let Some(l) = locale {
+            let start_text = l.start();
+            let btn_width = font::string_width(start_text) + 20;
+            let mut start_btn = Button::new(2, 2, btn_width, TOP_BAR_HEIGHT - 4, start_text);
+            if !high_contrast { start_btn.bg_color = 0x00_44_44_44; } 
+            start_btn.text_color = 0x00_FFFFFF;
+            start_btn.draw(fb, self.input.mouse_x, self.input.mouse_y, Some(clip));
+        }
 
         // Centered status icons (Status Island)
         let group_width = 254;
@@ -1413,53 +1450,52 @@ impl WindowManager {
 
         draw_battery_indicator(fb, bat_x, 7, clip);
         
-        // Draw clock
-        let time = CURRENT_DATETIME.lock();
-        let datetime_s = format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", time.year, time.month, time.day, time.hour, time.minute, time.second);
-        font::draw_string(fb, clock_x, 5, datetime_s.as_str(), 0x00_FFFFFF, Some(clip));
+        font::draw_string(fb, clock_x, 5, clock_text, 0x00_FFFFFF, Some(clip));
     }
 
-    fn draw_start_menu(&self, fb: &mut framebuffer::Framebuffer, _mouse_x: isize, _mouse_y: isize, clip: Rect) {
+    fn draw_start_menu_optimized(&self, fb: &mut framebuffer::Framebuffer, _mouse_x: isize, _mouse_y: isize, mut clip: Rect, locale: Option<&alloc::sync::Arc<dyn Localisation>>) {
         if fb.info.is_none() { return; }
 
-            let menu_width = 200;
-            let menu_height = 345;
-            
-            // Calculate sliding Y position
-            let target_y = TOP_BAR_HEIGHT as isize;
-            let menu_y = target_y - (menu_height as isize * (100 - self.menu_anim_progress) as isize / 100);
-            let menu_x = 0;
-            let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
-            
-            let bg_color = if high_contrast { 0x00_00_00_00 } else { 0x00_C0_C0_C0 };
-            let border_color = if high_contrast { 0x00_FF_FF_FF } else { 0x00_40_40_40 };
+        // Ensure the menu is clipped to appear "under" the top bar
+        let menu_visible_area = Rect { x: 0, y: TOP_BAR_HEIGHT as isize, width: 210, height: 1000 };
+        if let Some(c) = clip.intersection(&menu_visible_area) {
+            clip = c;
+        } else { return; }
 
-            // 1. Draw Background (Flat design, no "effects")
-            draw_rect(fb, menu_x, menu_y, menu_width, menu_height, bg_color, Some(clip));
+        let menu_width = 200;
+        let menu_height = 345;
+        
+        // Calculate sliding Y position
+        let target_y = TOP_BAR_HEIGHT as isize;
+        let menu_y = target_y - (menu_height as isize * (100 - self.menu_anim_progress) as isize / 100);
+        let menu_x = 0;
+        let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
+        
+        let bg_color = if high_contrast { 0x00_00_00_00 } else { 0x00_C0_C0_C0 };
 
-            // 2. Outlines removed to simplify UI as requested
-            
-            let locale_guard = localisation::CURRENT_LOCALE.lock();
-            let locale = locale_guard.as_ref().unwrap();
+        // 1. Draw Background (Flat design, no "effects")
+        draw_rect(fb, menu_x, menu_y, menu_width, menu_height, bg_color, Some(clip));
+
+        // 2. Outlines removed to simplify UI as requested
+        
+        if let Some(l) = locale {
             let item_width = menu_width - 20;
-            
-            // Optimized loop to avoid heap allocations for Button strings per frame
             let labels = [
-                (locale.app_text_editor(), 15, 0x00_C0_C0_C0),
-                (locale.app_calculator(), 55, 0x00_C0_C0_C0),
-                (locale.app_paint(), 95, 0x00_C0_C0_C0),
-                (locale.app_settings(), 135, 0x00_C0_C0_C0),
-                (locale.app_terminal(), 175, 0x00_C0_C0_C0),
+                (l.app_text_editor(), 15, 0x00_C0_C0_C0),
+                (l.app_calculator(), 55, 0x00_C0_C0_C0),
+                (l.app_paint(), 95, 0x00_C0_C0_C0),
+                (l.app_settings(), 135, 0x00_C0_C0_C0),
+                (l.app_terminal(), 175, 0x00_C0_C0_C0),
                 ("Task Manager", 215, 0x00_C0_C0_C0),
-                (locale.btn_reboot(), menu_height as isize - 85, 0x00_FF_A0_40),
-                (locale.btn_shutdown(), menu_height as isize - 45, 0x00_FF_60_60),
+                (l.btn_reboot(), menu_height as isize - 85, 0x00_FF_A0_40),
+                (l.btn_shutdown(), menu_height as isize - 45, 0x00_FF_60_60),
             ];
 
             for (text, y_off, color) in labels {
-                // Flat items (no hover, no 3D bevel)
                 draw_rect(fb, menu_x + 10, menu_y + y_off, item_width, 30, color, Some(clip));
                 font::draw_string(fb, menu_x + 20, menu_y + y_off + 7, text, 0x00_000000, Some(clip));
             }
+        }
     }
 
     fn draw_tooltip(&self, fb: &mut framebuffer::Framebuffer, text: &str, x: isize, y: isize, clip: Rect) {
@@ -1478,7 +1514,7 @@ impl WindowManager {
         font::draw_string(fb, x + 5, y + 2, text, 0x00_000000, Some(clip));
     }
 
-    fn draw_context_menu(&self, fb: &mut framebuffer::Framebuffer, mouse_x: isize, mouse_y: isize, clip: Rect) {
+    fn draw_context_menu_optimized(&self, fb: &mut framebuffer::Framebuffer, mouse_x: isize, mouse_y: isize, clip: Rect, locale: Option<&alloc::sync::Arc<dyn Localisation>>) {
         let menu_x = self.context_menu_x;
         let menu_y = self.context_menu_y;
         let width = 150;
@@ -1495,11 +1531,11 @@ impl WindowManager {
         draw_rect(fb, menu_x + width as isize - 1, menu_y, 1, height, dark, Some(clip));
         draw_rect(fb, menu_x, menu_y + height as isize - 1, width, 1, dark, Some(clip));
 
-        let locale_guard = localisation::CURRENT_LOCALE.lock();
-        let locale = locale_guard.as_ref().unwrap();
-        let item_width = width - 10;
-        Button::new(menu_x + 5, menu_y + 5, item_width, 25, locale.ctx_refresh()).draw(fb, mouse_x, mouse_y, Some(clip));
-        Button::new(menu_x + 5, menu_y + 35, item_width, 25, locale.ctx_properties()).draw(fb, mouse_x, mouse_y, Some(clip));
+        if let Some(l) = locale {
+            let item_width = width - 10;
+            Button::new(menu_x + 5, menu_y + 5, item_width, 25, l.ctx_refresh()).draw(fb, mouse_x, mouse_y, Some(clip));
+            Button::new(menu_x + 5, menu_y + 35, item_width, 25, l.ctx_properties()).draw(fb, mouse_x, mouse_y, Some(clip));
+        }
     }
 
     fn draw_task_switcher(&self, fb: &mut framebuffer::Framebuffer, clip: Rect) {
@@ -1570,7 +1606,14 @@ impl WindowManager {
             return;
         };
 
-            // Standard Arrow Cursor Bitmap (12x17)
+        let (mut draw_x, mut draw_y) = (x, y);
+        if self.cursor_style == CursorStyle::Crosshair {
+            // Center the crosshair on the mouse coordinates
+            draw_x -= 6;
+            draw_y -= 8;
+        }
+
+        // Standard Arrow Cursor Bitmap (12x17)
             // 0 = Transparent, 1 = Black Border, 2 = White Fill
             let cursor_bitmap = match self.cursor_style {
                 CursorStyle::Arrow => [
@@ -1606,6 +1649,63 @@ impl WindowManager {
                     [0, 0, 1, 2, 2, 2, 1, 0, 0, 0, 0, 0],
                     [0, 0, 0, 1, 2, 1, 0, 0, 0, 0, 0, 0],
                     [0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                ],
+                CursorStyle::Hand => [
+                    [0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 1, 2, 2, 1, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 1, 2, 2, 1, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 1, 2, 2, 1, 0, 1, 1, 1, 0, 0],
+                    [0, 0, 1, 2, 2, 1, 1, 2, 2, 2, 1, 0],
+                    [0, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 1],
+                    [1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1],
+                    [1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1],
+                    [1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1],
+                    [1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1],
+                    [1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1],
+                    [0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0],
+                    [0, 0, 1, 2, 2, 2, 2, 2, 2, 1, 0, 0],
+                    [0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                ],
+                CursorStyle::IBeam => [
+                    [1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                ],
+                CursorStyle::Crosshair => [
+                    [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1],
+                    [1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1],
+                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
                     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
                     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
                     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -1675,8 +1775,8 @@ impl WindowManager {
                     if pixel == 0 { continue; }
 
                     let color = if pixel == 1 { 0x00_00_00_00 } else { 0x00_FF_FF_FF };
-                    let px = x + dx as isize;
-                    let py = y + dy as isize;
+                    let px = draw_x + dx as isize;
+                    let py = draw_y + dy as isize;
 
                     if clip.contains(px, py) && px >= 0 && py >= 0 && px < width && py < height {
                         fb.set_pixel(px as usize, py as usize, color);
