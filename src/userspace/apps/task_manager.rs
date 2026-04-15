@@ -165,8 +165,9 @@ impl App for TaskManager {
         }
     }
 
-    fn handle_event(&mut self, _event: &AppEvent) {
+    fn handle_event(&mut self, _event: &AppEvent, _win: &Window) -> Option<Rect> {
         // No interaction required for now
+        None
     }
 
     fn box_clone(&self) -> Box<dyn App> {

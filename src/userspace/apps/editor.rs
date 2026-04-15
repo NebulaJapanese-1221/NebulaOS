@@ -80,12 +80,13 @@ impl App for TextEditor {
         }
     }
 
-    fn handle_event(&mut self, event: &AppEvent) {
+    fn handle_event(&mut self, event: &AppEvent, _win: &Window) -> Option<Rect> {
         if let AppEvent::KeyPress { key } = event {
             self.process_key(*key);
         } else if let AppEvent::Scroll { delta, width: _, height } = event {
             self.scroll(*delta, *height);
         }
+        None
     }
 
     fn box_clone(&self) -> Box<dyn App> {

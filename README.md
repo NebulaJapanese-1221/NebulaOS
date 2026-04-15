@@ -32,7 +32,7 @@ make run
 *Requires QEMU and a nightly Rust toolchain.*
 
 ## Current Bugs
-[None]
+[Many]
 
 ## 📜 License
 

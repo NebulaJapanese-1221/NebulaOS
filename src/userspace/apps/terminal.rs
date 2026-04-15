@@ -143,8 +143,12 @@ impl Terminal {
 }
 
 impl App for Terminal {
-    fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window, _dirty_rect: Rect) {
-        gui::draw_rect(fb, win.x, win.y + 20, win.width, win.height - 20, 0x00_000000, None);
+    fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window, dirty_rect: Rect) {
+        // 1. Only clear the background within the dirty region
+        let content_rect = Rect { x: win.x, y: win.y + 20, width: win.width, height: win.height - 20 };
+        if let Some(fill_area) = dirty_rect.intersection(&content_rect) {
+            gui::draw_rect(fb, fill_area.x, fill_area.y, fill_area.width, fill_area.height, 0x00_000000, None);
+        }
 
         let start_x = win.x + 5;
         let mut y = win.y + 25;
@@ -156,21 +160,54 @@ impl App for Terminal {
         let skip = if self.history.len() > history_lines { self.history.len() - history_lines } else { 0 };
 
         for line in self.history.iter().skip(skip) {
-            font::draw_string(fb, start_x, y, line, 0x00_CCCCCC, None);
+            // 2. Only draw history lines if they intersect the dirty rect
+            let line_bounds = Rect { x: win.x, y, width: win.width, height: line_height };
+            if dirty_rect.intersects(&line_bounds) {
+                font::draw_string(fb, start_x, y, line, 0x00_CCCCCC, Some(dirty_rect));
+            }
             y += line_height as isize;
         }
 
+        // 3. Draw Input Line (the most frequent update while typing)
         let input_line = alloc::format!("{}{}", self.prompt, self.input_buffer);
         if y < (win.y + win.height as isize - line_height as isize) {
-             font::draw_string(fb, start_x, y, input_line.as_str(), 0x00_FFFFFF, None);
-             let cursor_x = start_x + font::string_width(&input_line) as isize;
-             gui::draw_rect(fb, cursor_x, y, 8, line_height as usize, 0x00_FFFFFF, None);
+            let input_bounds = Rect { x: win.x, y, width: win.width, height: line_height };
+            if dirty_rect.intersects(&input_bounds) {
+                font::draw_string(fb, start_x, y, input_line.as_str(), 0x00_FFFFFF, Some(dirty_rect));
+                let cursor_x = start_x + font::string_width(&input_line) as isize;
+                // Only draw cursor if it's within the dirty area
+                gui::draw_rect(fb, cursor_x, y, 8, line_height as usize, 0x00_FFFFFF, Some(dirty_rect));
+            }
         }
     }
 
-    fn handle_event(&mut self, event: &AppEvent) {
+    fn handle_event(&mut self, event: &AppEvent, win: &Window) -> Option<Rect> {
         if let AppEvent::KeyPress { key } = event {
+            let line_height = 16;
+            let max_lines = (win.height - 30) / line_height;
+            let history_lines = if max_lines > 0 { max_lines - 1 } else { 0 };
+            
+            // Calculate where the input line currently is on the screen
+            let displayed_history = self.history.len().min(history_lines);
+            let input_y = win.y + 25 + (displayed_history as isize * line_height as isize);
+            
+            let input_rect = Rect {
+                x: win.x,
+                y: input_y,
+                width: win.width,
+                height: line_height as usize,
+            };
+
             self.process_key(*key);
+
+            // If we hit enter or the history just filled up, refresh the whole window
+            if *key == '\n' || self.history.len() > history_lines {
+                None
+            } else {
+                Some(input_rect)
+            }
+        } else {
+            None
         }
     }
 

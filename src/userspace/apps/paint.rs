@@ -122,7 +122,7 @@ impl App for Paint {
         clear_btn.draw(fb, 0, 0, None);
     }
 
-    fn handle_event(&mut self, event: &AppEvent) {
+    fn handle_event(&mut self, event: &AppEvent, _win: &Window) -> Option<Rect> {
         match event {
              AppEvent::MouseMove { x, y, width, height } | AppEvent::MouseClick { x, y, width, height } => {
                  let toolbar_height = 40;
@@ -154,6 +154,7 @@ impl App for Paint {
              }
              _ => {}
         }
+        None
     }
 
     fn box_clone(&self) -> Box<dyn App> { Box::new(self.clone()) }

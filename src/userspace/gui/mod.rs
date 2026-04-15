@@ -450,13 +450,10 @@ impl WindowManager {
                 InputEvent::Scroll { delta } => {
                 if let Some(target_id) = self.click_target_id {
                     if let Some(idx) = self.windows.iter().position(|w| w.id == target_id) {
-                        let width = self.windows[idx].width;
-                        let height = self.windows[idx].height;
+                        let win = self.windows[idx].clone();
                         if let WindowContent::App(app) = &mut self.windows[idx].content {
-                                    app.handle_event(&AppEvent::Scroll { delta: delta * 3, width, height });
-                            if let Some(rect) = self.get_window_rect(target_id) {
-                                self.mark_dirty(rect);
-                            }
+                            let dirty = app.handle_event(&AppEvent::Scroll { delta: delta * 3, width: win.width, height: win.height }, &win);
+                            self.mark_dirty(dirty.unwrap_or_else(|| win.rect()));
                         }
                     }
                 }
@@ -541,14 +538,11 @@ impl WindowManager {
                         } else {
                             // Normal key handling
                              if let Some(&top_win_id) = self.z_order.last() {
-                                if let Some(rect) = self.get_window_rect(top_win_id) {
-                                    self.mark_dirty(rect);
-                                }
-
-                                if let Some(win) = self.windows.iter_mut().find(|w| w.id == top_win_id) {
-                                    if let WindowContent::App(app) = &mut win.content {
-                                        app.handle_event(&AppEvent::KeyPress { key });
-                                    }
+                                let win = self.windows.iter().find(|w| w.id == top_win_id).unwrap().clone();
+                                let win_mut = self.windows.iter_mut().find(|w| w.id == top_win_id).unwrap();
+                                if let WindowContent::App(app) = &mut win_mut.content {
+                                    let dirty = app.handle_event(&AppEvent::KeyPress { key }, &win);
+                                    self.mark_dirty(dirty.unwrap_or_else(|| win.rect()));
                                 }
                             }
                         }
@@ -606,12 +600,14 @@ impl WindowManager {
                             let w = &self.windows[idx];
                             (w.x, w.y, w.width, w.height)
                         };
+                        let win_snap = self.windows[idx].clone();
                         
                         if let WindowContent::App(app) = &mut self.windows[idx].content {
                             let rel_x = self.input.mouse_x - win_x;
                             let rel_y = self.input.mouse_y - (win_y + title_height as isize);
                             if rel_x >= 0 && rel_x < win_w as isize && rel_y >= 0 && rel_y < win_h.saturating_sub(title_height) as isize {
-                                app.handle_event(&AppEvent::MouseMove { x: rel_x, y: rel_y, width: win_w, height: win_h });
+                                let dirty = app.handle_event(&AppEvent::MouseMove { x: rel_x, y: rel_y, width: win_w, height: win_h }, &win_snap);
+                                if let Some(r) = dirty { self.mark_dirty(r); }
                             }
                         }
                     }
@@ -1112,12 +1108,11 @@ impl WindowManager {
                     }
 
                     if let Some((rel_x, rel_y)) = event_coords {
-                        if let Some(rect) = self.get_window_rect(target_id) {
-                            self.mark_dirty(rect);
-                        }
+                        let win_snap = self.windows.iter().find(|w| w.id == target_id).unwrap().clone();
                         if let Some(win) = self.windows.iter_mut().find(|w| w.id == target_id) {
                              if let WindowContent::App(app) = &mut win.content {
-                                app.handle_event(&AppEvent::MouseClick { x: rel_x, y: rel_y, width: win.width, height: win.height });
+                                let dirty = app.handle_event(&AppEvent::MouseClick { x: rel_x, y: rel_y, width: win.width, height: win.height }, &win_snap);
+                                self.mark_dirty(dirty.unwrap_or_else(|| win_snap.rect()));
                             }
                         }
                     }

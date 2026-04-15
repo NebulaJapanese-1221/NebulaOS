@@ -236,7 +236,7 @@ impl App for Settings {
         self.draw_content(fb, win, dirty_rect);
     }
 
-    fn handle_event(&mut self, event: &AppEvent) {
+    fn handle_event(&mut self, event: &AppEvent, _win: &Window) -> Option<Rect> {
         let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
         let bar_height = font_height + 9;
         let content_pane_y_start = bar_height as isize + 5;
@@ -363,6 +363,7 @@ impl App for Settings {
             }
             _ => {}
         }
+        None
     }
 
     fn box_clone(&self) -> Box<dyn App> {

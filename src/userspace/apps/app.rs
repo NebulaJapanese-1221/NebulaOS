@@ -11,7 +11,7 @@ pub enum AppEvent {
 
 pub trait App: Send {
     fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window, dirty_rect: Rect);
-    fn handle_event(&mut self, event: &AppEvent);
+    fn handle_event(&mut self, event: &AppEvent, win: &Window) -> Option<Rect>;
     fn box_clone(&self) -> Box<dyn App>;
 }
 
