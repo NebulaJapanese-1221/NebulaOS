@@ -1,5 +1,5 @@
 use crate::drivers::framebuffer;
-use crate::userspace::gui::Window;
+use crate::userspace::gui::{Window, rect::Rect};
 use alloc::boxed::Box;
 
 pub enum AppEvent {
@@ -10,7 +10,7 @@ pub enum AppEvent {
 }
 
 pub trait App: Send {
-    fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window);
+    fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window, dirty_rect: Rect);
     fn handle_event(&mut self, event: &AppEvent);
     fn box_clone(&self) -> Box<dyn App>;
 }

@@ -1,10 +1,14 @@
 //! A simple 8x16 font renderer.
 
 use crate::drivers::framebuffer::Framebuffer;
-use super::rect::Rect;
+use crate::userspace::gui::rect::Rect;
 use super::font_jp::FONT_JP;
 use super::LARGE_TEXT;
 use core::sync::atomic::Ordering;
+use spin::Mutex;
+
+/// A small cache for Japanese glyph lookups to avoid expensive linear scans of FONT_JP.
+static JP_GLYPH_CACHE: Mutex<[Option<(char, &'static [u16; 16])>; 8]> = Mutex::new([None; 8]);
 
 // This font is a public domain 8x16 VGA font.
 static FONT: [[u8; 16]; 128] = [
@@ -152,59 +156,70 @@ pub fn draw_char(fb: &mut Framebuffer, x: isize, y: isize, character: char, colo
         let width = 8 * scale;
         let height = 16 * scale;
 
-        if let Some(c) = clip {
-            if !c.intersects(&Rect { x, y, width, height }) { return width; }
-        }
+        let glyph = &FONT[char_idx];
 
-        let glyph = FONT[char_idx];
-
-        for (row_idx, row) in glyph.iter().enumerate() {
-            for col_idx in 0..8 {
-                if (row >> (7 - col_idx)) & 1 == 1 {
-                    for dy in 0..scale {
-                        for dx in 0..scale {
-                            let px = x + (col_idx as isize * scale as isize) + dx as isize;
-                            let py = y + (row_idx as isize * scale as isize) + dy as isize;
-                            
-                            let visible = if let Some(c) = clip { c.contains(px, py) } else { true };
-
-                            if visible && px >= 0 && py >= 0 {
-                                fb.set_pixel(px as usize, py as usize, color);
-                            }
-                        }
+        // Optimized ASCII drawing using pre-calculated bitmask logic and Run-Length Encoding.
+        // This converts the bitmask into optimized rect-fill calls.
+        for (row_idx, &row_bits) in glyph.iter().enumerate() {
+            if row_bits == 0 { continue; }
+            let mut col = 0;
+            while col < 8 {
+                if (row_bits & (0x80 >> col)) != 0 {
+                    let mut run = 1;
+                    while col + run < 8 && (row_bits & (0x80 >> (col + run))) != 0 {
+                        run += 1;
                     }
+                    crate::userspace::gui::draw_rect(
+                        fb, 
+                        x + (col as isize * scale as isize), 
+                        y + (row_idx as isize * scale as isize), 
+                        run * scale, 
+                        scale, 
+                        color, 
+                        clip
+                    );
+                    col += run;
+                } else {
+                    col += 1;
                 }
             }
         }
         width
     } else {
         // Japanese / Full-width character
-        let glyph_data = FONT_JP.iter().find(|(c, _)| *c == character)
-            .or_else(|| FONT_JP.iter().find(|(c, _)| *c == '？'))
-            .unwrap_or(&FONT_JP[0]); // Absolute fallback
+        // MRU Cache lookup for Japanese glyphs to avoid the O(N) scan of the font table.
+        let glyph_rows = {
+            let mut cache = JP_GLYPH_CACHE.lock();
+            let mut found = None;
+            for entry in cache.iter() {
+                if let Some((c, g)) = entry { if *c == character { found = Some(*g); break; } }
+            }
+            if let Some(g) = found { g } else {
+                let data = FONT_JP.iter().find(|(c, _)| *c == character)
+                    .or_else(|| FONT_JP.iter().find(|(c, _)| *c == '？'))
+                    .unwrap_or(&FONT_JP[0]);
+                // Shift cache to insert new MRU element
+                for i in (1..8).rev() { cache[i] = cache[i-1]; }
+                cache[0] = Some((character, &data.1));
+                &data.1
+            }
+        };
 
         let width = 16 * scale;
-        let height = 16 * scale;
 
-        if let Some(c) = clip {
-            if !c.intersects(&Rect { x, y, width, height }) { return width; }
-        }
-
-        for (row_idx, row) in glyph_data.1.iter().enumerate() {
-            for col_idx in 0..16 {
-                if (row >> (15 - col_idx)) & 1 == 1 {
-                    for dy in 0..scale {
-                        for dx in 0..scale {
-                            let px = x + (col_idx as isize * scale as isize) + dx as isize;
-                            let py = y + (row_idx as isize * scale as isize) + dy as isize;
-
-                            let visible = if let Some(c) = clip { c.contains(px, py) } else { true };
-
-                            if visible && px >= 0 && py >= 0 {
-                                fb.set_pixel(px as usize, py as usize, color);
-                            }
-                        }
+        for (row_idx, &row_bits) in glyph_rows.iter().enumerate() {
+            if row_bits == 0 { continue; }
+            let mut col = 0;
+            while col < 16 {
+                if (row_bits & (0x8000 >> col)) != 0 {
+                    let mut run = 1;
+                    while col + run < 16 && (row_bits & (0x8000 >> (col + run))) != 0 {
+                        run += 1;
                     }
+                    crate::userspace::gui::draw_rect(fb, x + (col as isize * scale as isize), y + (row_idx as isize * scale as isize), run * scale, scale, color, clip);
+                    col += run;
+                } else {
+                    col += 1;
                 }
             }
         }

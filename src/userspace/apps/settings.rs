@@ -30,7 +30,7 @@ impl Settings {
         }
     }
 
-    fn draw_tabs(&self, fb: &mut framebuffer::Framebuffer, win: &Window) {
+    fn draw_tabs(&self, fb: &mut framebuffer::Framebuffer, win: &Window, dirty_rect: Rect) {
         let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
         let title_height = font_height + 6;
         let bar_height = font_height + 9;
@@ -51,24 +51,25 @@ impl Settings {
         
         for (i, (tab, label)) in tab_labels.iter().enumerate() {
             let x = win.x + (i * tab_width) as isize;            
+            // Skip drawing tab if not in dirty rect
+            if !dirty_rect.intersects(&Rect { x, y: start_y, width: tab_width, height: bar_height }) { continue; }
+
             let is_active = self.current_tab == *tab;
             let bg_color = if is_active { 0x00_50_50_60 } else { 0x00_30_30_30 };
             
-            let btn = Button {
-                rect: Rect { x, y: start_y, width: tab_width, height: bar_height },
-                text: label.to_string(),
-                bg_color,
-                text_color: 0x00_FF_FF_FF,
-            };
-            btn.draw(fb, 0, 0, Some(win.rect())); // Mouse hover not supported in this context yet
-            
+            // Optimization: Draw tabs using fast-path rects instead of expensive rounded Buttons
+            crate::userspace::gui::draw_rect(fb, x, start_y, tab_width, bar_height, bg_color, Some(win.rect()));
+            let tx = x + (tab_width as isize - font::string_width(label) as isize) / 2;
+            let ty = start_y + (bar_height as isize - 16) / 2;
+            font::draw_string(fb, tx, ty, label, 0x00_FFFFFF, Some(win.rect()));
+
         if is_active {
                 crate::userspace::gui::draw_rect(fb, x, start_y + bar_height as isize - 2, tab_width, 2, 0x00_00_AA_FF, None);
             }
         }
     }
 
-    fn draw_content(&self, fb: &mut framebuffer::Framebuffer, win: &Window) {
+    fn draw_content(&self, fb: &mut framebuffer::Framebuffer, win: &Window, _dirty_rect: Rect) {
         let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
         let title_height = font_height + 6;
         let content_y = win.y + title_height as isize + (font_height as isize + 9) + 5; // Title + TabBar + Padding
@@ -228,11 +229,11 @@ impl Settings {
 }
 
 impl App for Settings {
-    fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window) {
+    fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window, dirty_rect: Rect) {
         // Only redraw if there have been changes.
     
-        self.draw_tabs(fb, win);
-        self.draw_content(fb, win);
+        self.draw_tabs(fb, win, dirty_rect);
+        self.draw_content(fb, win, dirty_rect);
     }
 
     fn handle_event(&mut self, event: &AppEvent) {

@@ -1,5 +1,5 @@
 use crate::drivers::framebuffer;
-use crate::userspace::gui::{self, font, Window};
+use crate::userspace::gui::{self, font, Window, rect::Rect};
 use super::app::{App, AppEvent};
 use alloc::boxed::Box;
 use alloc::format;
@@ -36,7 +36,7 @@ impl TaskManager {
 }
 
 impl App for TaskManager {
-    fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window) {
+    fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window, dirty_rect: Rect) {
         // Draw background
         gui::draw_rect(fb, win.x, win.y + 20, win.width, win.height - 20, 0x00_00_00_00, None);
 
@@ -117,8 +117,11 @@ impl App for TaskManager {
                 }
             }
         }
-        // Blit memory graph
-        fb.draw_bitmap(x as usize, y as usize, graph_width, graph_height, &state.graph_buffer);
+        
+        // Optimized: Only blit bitmap if the graph area is actually dirty
+        if dirty_rect.intersects(&Rect { x, y, width: graph_width, height: graph_height }) {
+            fb.draw_bitmap(x as usize, y as usize, graph_width, graph_height, &state.graph_buffer);
+        }
 
         let last_mem = state.mem_history.last().copied().unwrap_or(0);
         font::draw_string(fb, x + 5, y + 5, &format!("{} / {} MB", last_mem, mem_scale_max), 0x00_FFFFFF, None);

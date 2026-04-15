@@ -843,23 +843,17 @@ impl WindowManager {
 
             } else if self.menu_anim_progress == 100 && self.input.mouse_x < 200 && self.input.mouse_y >= TOP_BAR_HEIGHT as isize {
                 // --- Nebula Menu Item Click Logic ---
+                // Optimization: Use coordinate math to detect clicks instead of allocating 
+                // multiple Button and String objects, which prevents system crashes/hangs.
                 let menu_y = TOP_BAR_HEIGHT as isize;
-                let menu_x = 0;
-                let menu_width = 200;
-                let item_width = menu_width - 20;
+                let rel_y = self.input.mouse_y - menu_y;
+                let item_idx = if rel_y >= 15 && rel_y < 245 && (rel_y - 15) % 40 < 30 {
+                    Some((rel_y - 15) / 40)
+                } else { None };
 
-                let editor_button = Button::new(menu_x + 10, menu_y + 15, item_width, 30, locale.app_text_editor());
-                let calc_button = Button::new(menu_x + 10, menu_y + 55, item_width, 30, locale.app_calculator());
-                let paint_button = Button::new(menu_x + 10, menu_y + 95, item_width, 30, locale.app_paint());
-                let settings_button = Button::new(menu_x + 10, menu_y + 135, item_width, 30, locale.app_settings());
-                let terminal_button = Button::new(menu_x + 10, menu_y + 175, item_width, 30, locale.app_terminal());
-                let taskmgr_button = Button::new(menu_x + 10, menu_y + 215, item_width, 30, "Task Manager");
-                let shutdown_button = Button::new(menu_x + 10, menu_y + 345 - 45, item_width, 30, locale.btn_shutdown());
-                let reboot_button = Button::new(menu_x + 10, menu_y + 345 - 85, item_width, 30, locale.btn_reboot());
+                self.mark_dirty(Rect { x: 0, y: menu_y, width: 200, height: 350 });
 
-                self.mark_dirty(Rect { x: 0, y: menu_y, width: 210, height: 355 });
-                if settings_button.contains(self.input.mouse_x, self.input.mouse_y) {
-                    // Clicked "Settings"
+                if item_idx == Some(3) { // Settings
                     let settings_open = self.windows.iter().any(|w| w.title == locale.app_settings());
                     if !settings_open {
                         self.add_window(Window {
@@ -873,8 +867,7 @@ impl WindowManager {
                 }
                 self.menu_anim_target = 0; // Trigger slide-up after click
                 
-                if taskmgr_button.contains(self.input.mouse_x, self.input.mouse_y) {
-                    // Clicked "Task Manager"
+                if item_idx == Some(5) { // Task Manager
                     self.add_window(Window {
                         id: 0, x: 150, y: 150, width: 300, height: 400,
                         color: 0x00_00_40_40,
@@ -884,8 +877,7 @@ impl WindowManager {
                     });
                 }
 
-                if terminal_button.contains(self.input.mouse_x, self.input.mouse_y) {
-                    // Clicked "Terminal"
+                if item_idx == Some(4) { // Terminal
                     self.add_window(Window {
                         id: 0, x: 100, y: 100, width: 480, height: 320,
                         color: 0x00_1E_1E_1E,
@@ -895,16 +887,15 @@ impl WindowManager {
                     });
                 }
 
-                if shutdown_button.contains(self.input.mouse_x, self.input.mouse_y) {
+                if rel_y >= 300 && rel_y < 330 { // Shutdown
                     crate::kernel::power::shutdown();
                 }
 
-                if reboot_button.contains(self.input.mouse_x, self.input.mouse_y) {
+                if rel_y >= 260 && rel_y < 290 { // Reboot
                     crate::kernel::power::reboot();
                 }
 
-                if calc_button.contains(self.input.mouse_x, self.input.mouse_y) {
-                    // Clicked "Calculator"
+                if item_idx == Some(1) { // Calculator
                     self.add_window(Window {
                         id: 0, x: 50, y: 350, width: 200, height: 220,
                         color: 0x00_20_20_20,
@@ -914,8 +905,7 @@ impl WindowManager {
                     });
                 }
 
-                if paint_button.contains(self.input.mouse_x, self.input.mouse_y) {
-                    // Clicked "Paint"
+                if item_idx == Some(2) { // Paint
                     self.add_window(Window {
                         id: 0, x: 180, y: 100, width: 400, height: 300,
                         color: 0x00_20_20_20,
@@ -925,8 +915,7 @@ impl WindowManager {
                     });
                 }
 
-                if editor_button.contains(self.input.mouse_x, self.input.mouse_y) {
-                    // Clicked "Text Editor"
+                if item_idx == Some(0) { // Text Editor
                     self.add_window(Window {
                         id: 0, x: 150, y: 150, width: 400, height: 300,
                         color: 0x00_1E_1E_1E, // Very dark gray
@@ -1210,14 +1199,10 @@ impl WindowManager {
             if !background_occluded && dirty_rect.intersects(&screen_rect) {
                 let r = dirty_rect.intersection(&screen_rect).unwrap();
                 let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
-                let start_c = if high_contrast { 0 } else { DESKTOP_GRADIENT_START.load(Ordering::Relaxed) };
-                let end_c = if high_contrast { 0 } else { DESKTOP_GRADIENT_END.load(Ordering::Relaxed) };
                 
                 // Optimized Gradient: Pre-calculate colors per scanline
                 for y in r.y..(r.y + r.height as isize) {
-                    let color = if high_contrast { 0 } else { 
-                        self.interpolate_gradient(start_c, end_c, y, screen_height) 
-                    };
+                    let color = if high_contrast { 0 } else { self.gradient_cache[y as usize] };
                     if let Some(buf) = local_fb.draw_buffer.as_mut() {
                         let offset = (y as usize * screen_width as usize) + r.x as usize;
                         buf[offset..offset + r.width].fill(color);
@@ -1379,7 +1364,7 @@ impl WindowManager {
         if let Some(r) = clip.intersection(&content_rect).and_then(|r| r.intersection(&screen_rect)) {
             fb.set_clip(r.x as usize, r.y as usize, r.width, r.height);
             if let WindowContent::App(app) = &win.content {
-                app.draw(fb, win);
+                app.draw(fb, win, r);
             }
             fb.clear_clip();
         }
@@ -1490,7 +1475,7 @@ impl WindowManager {
         font::draw_string(fb, cursor_x, 5, clock_text, 0x00_FFFFFF, Some(clip));
     }
 
-    fn draw_start_menu_optimized(&self, fb: &mut framebuffer::Framebuffer, _mouse_x: isize, _mouse_y: isize, mut clip: Rect, locale: Option<&alloc::sync::Arc<dyn Localisation>>) {
+    fn draw_start_menu_optimized(&self, fb: &mut framebuffer::Framebuffer, mouse_x: isize, mouse_y: isize, mut clip: Rect, locale: Option<&alloc::sync::Arc<dyn Localisation>>) {
         if fb.info.is_none() { return; }
 
         // Ensure the menu is clipped to appear "under" the top bar
@@ -1528,9 +1513,29 @@ impl WindowManager {
                 (l.btn_shutdown(), menu_height as isize - 45, 0x00_FF_60_60),
             ];
 
+            let light = 0x00_E0_E0_E0;
+            let shadow = 0x00_40_40_40;
+
             for (text, y_off, color) in labels {
-                draw_rect(fb, menu_x + 10, menu_y + y_off, item_width, 30, color, Some(clip));
-                font::draw_string(fb, menu_x + 20, menu_y + y_off + 7, text, 0x00_000000, Some(clip));
+                let item_x = menu_x + 10;
+                let item_y = menu_y + y_off;
+                let is_hovered = mouse_x >= item_x && mouse_x < item_x + item_width as isize && 
+                                 mouse_y >= item_y && mouse_y < item_y + 30;
+
+                // Dirty-rect optimization: Skip drawing this item if it doesn't intersect 
+                // the region being refreshed.
+                if !clip.intersects(&Rect { x: item_x, y: item_y, width: item_width, height: 30 }) { continue; }
+
+                let bg = if is_hovered { 0x00_D0_D0_D0 } else { color };
+
+                draw_rect(fb, item_x, item_y, item_width, 30, bg, Some(clip));
+                // Draw Bevel
+                draw_rect(fb, item_x, item_y, item_width, 1, light, Some(clip)); // Top
+                draw_rect(fb, item_x, item_y, 1, 30, light, Some(clip)); // Left
+                draw_rect(fb, item_x + item_width as isize - 1, item_y, 1, 30, shadow, Some(clip)); // Right
+                draw_rect(fb, item_x, item_y + 29, item_width, 1, shadow, Some(clip)); // Bottom
+
+                font::draw_string(fb, item_x + 10, item_y + 7, text, 0x00_000000, Some(clip));
             }
         }
     }
