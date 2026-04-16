@@ -7,6 +7,7 @@ pub enum AppEvent {
     MouseMove { x: isize, y: isize, width: usize, height: usize },
     KeyPress { key: char },
     Scroll { delta: isize, width: usize, height: usize },
+    Tick { tick_count: usize },
 }
 
 pub trait App: Send {

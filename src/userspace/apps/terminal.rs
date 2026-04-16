@@ -11,6 +11,8 @@ pub struct Terminal {
     pub history: Vec<String>,
     pub input_buffer: String,
     pub prompt: String,
+    pub cursor_visible: bool,
+    pub last_blink_tick: usize,
 }
 
 impl Terminal {
@@ -19,6 +21,8 @@ impl Terminal {
             history: Vec::new(),
             input_buffer: String::new(),
             prompt: String::from("/> "),
+            cursor_visible: true,
+            last_blink_tick: 0,
         };
         term.history.push(String::from("NebulaOS Terminal"));
         term
@@ -174,15 +178,18 @@ impl App for Terminal {
             let input_bounds = Rect { x: win.x, y, width: win.width, height: line_height };
             if dirty_rect.intersects(&input_bounds) {
                 font::draw_string(fb, start_x, y, input_line.as_str(), 0x00_FFFFFF, Some(dirty_rect));
-                let cursor_x = start_x + font::string_width(&input_line) as isize;
-                // Only draw cursor if it's within the dirty area
-                gui::draw_rect(fb, cursor_x, y, 8, line_height as usize, 0x00_FFFFFF, Some(dirty_rect));
+                if self.cursor_visible {
+                    let cursor_x = start_x + font::string_width(&input_line) as isize;
+                    // Only draw cursor if it's within the dirty area
+                    gui::draw_rect(fb, cursor_x, y, 8, line_height as usize, 0x00_FFFFFF, Some(dirty_rect));
+                }
             }
         }
     }
 
     fn handle_event(&mut self, event: &AppEvent, win: &Window) -> Option<Rect> {
-        if let AppEvent::KeyPress { key } = event {
+        match event {
+            AppEvent::KeyPress { key } => {
             let line_height = 16;
             let max_lines = (win.height - 30) / line_height;
             let history_lines = if max_lines > 0 { max_lines - 1 } else { 0 };
@@ -199,6 +206,8 @@ impl App for Terminal {
             };
 
             self.process_key(*key);
+            self.cursor_visible = true; // Ensure cursor is visible while typing
+            self.last_blink_tick = 0;   // Reset blink phase
 
             // If we hit enter or the history just filled up, refresh the whole window
             if *key == '\n' || self.history.len() > history_lines {
@@ -206,8 +215,25 @@ impl App for Terminal {
             } else {
                 Some(input_rect)
             }
-        } else {
-            None
+            }
+            AppEvent::Tick { tick_count } => {
+                if *tick_count > self.last_blink_tick + 500 {
+                    self.cursor_visible = !self.cursor_visible;
+                    self.last_blink_tick = *tick_count;
+
+                    let line_height = 16;
+                    let max_lines = (win.height - 30) / line_height;
+                    let history_lines = if max_lines > 0 { max_lines - 1 } else { 0 };
+                    let displayed_history = self.history.len().min(history_lines);
+                    let input_y = win.y + 25 + (displayed_history as isize * line_height as isize);
+                    let input_line = format!("{}{}", self.prompt, self.input_buffer);
+                    let cursor_x = win.x + 5 + font::string_width(&input_line) as isize;
+
+                    return Some(Rect { x: cursor_x, y: input_y, width: 8, height: line_height as usize });
+                }
+                None
+            }
+            _ => None
         }
     }
 

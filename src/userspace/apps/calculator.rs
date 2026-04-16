@@ -215,15 +215,15 @@ impl App for Calculator {
         }
     }
 
-    fn handle_event(&mut self, event: &AppEvent) {
+    fn handle_event(&mut self, event: &AppEvent, _win: &Window) -> Option<Rect> {
         if let AppEvent::MouseClick { x, y, .. } = event {
             // Check for Mode Button Click
             if *y >= 7 && *y <= 33 && *x >= 7 && *x < 37 {
                 self.process_input('M');
-                return;
+                return None;
             }
 
-            if *y < 40 { return; } // Clicked on display area
+            if *y < 40 { return None; } // Clicked on display area
             
             let cols = if self.scientific { 5 } else { 4 };
             let btn_size = 40;
@@ -236,12 +236,12 @@ impl App for Calculator {
             let grid_width = cols as isize * btn_size;
             let offset_x = (win_width - grid_width) / 2;
             
-            if *x < offset_x { return; }
+            if *x < offset_x { return None; }
             
             let btn_x = (*x - offset_x) / btn_size;
             let btn_y = (*y - 40) / btn_size;
             
-            if btn_x >= cols as isize { return; }
+            if btn_x >= cols as isize { return None; }
 
             let key = if self.scientific {
                 match (btn_x, btn_y) {
@@ -249,7 +249,7 @@ impl App for Calculator {
                     (0, 1) => '4', (1, 1) => '5', (2, 1) => '6', (3, 1) => '*', (4, 1) => '^',
                     (0, 2) => '1', (1, 2) => '2', (2, 2) => '3', (3, 2) => '-', (4, 2) => 's',
                     (0, 3) => 'C', (1, 3) => '0', (2, 3) => '=', (3, 3) => '+', (4, 3) => '!',
-                    _ => return,
+                    _ => return None,
                 }
             } else {
                 match (btn_x, btn_y) {
@@ -257,11 +257,12 @@ impl App for Calculator {
                     (0, 1) => '4', (1, 1) => '5', (2, 1) => '6', (3, 1) => '*',
                     (0, 2) => '1', (1, 2) => '2', (2, 2) => '3', (3, 2) => '-',
                     (0, 3) => 'C', (1, 3) => '0', (2, 3) => '=', (3, 3) => '+',
-                    _ => return,
+                    _ => return None,
                 }
             };
             self.process_input(key);
         }
+        None
     }
 
     fn box_clone(&self) -> Box<dyn App> {

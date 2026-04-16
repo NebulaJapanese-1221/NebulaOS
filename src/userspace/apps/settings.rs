@@ -252,7 +252,7 @@ impl App for Settings {
                     else if *x < (tab_width * 3) as isize { self.current_tab = Tab::Theme; }
                     else if *x < (tab_width * 4) as isize { self.current_tab = Tab::Language; }
                     else { self.current_tab = Tab::Mouse; }
-                    return;
+                    return None;
                 }
 
                 // 2. Content pane click

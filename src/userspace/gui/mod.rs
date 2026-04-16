@@ -354,6 +354,20 @@ impl WindowManager {
             FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
         }
 
+        // Notify non-minimized windows of system ticks for periodic state updates (like blinking cursors)
+        let current_tick = crate::kernel::process::TICKS.load(Ordering::Relaxed);
+        for i in 0..self.windows.len() {
+            if !self.windows[i].minimized {
+                // Snapshot window info to pass to the event handler safely
+                let win_info = self.windows[i].clone();
+                if let WindowContent::App(app) = &mut self.windows[i].content {
+                    if let Some(dirty_rect) = app.handle_event(&AppEvent::Tick { tick_count: current_tick }, &win_info) {
+                        self.mark_dirty(dirty_rect);
+                    }
+                }
+            }
+        }
+
         // Tooltip logic for Battery Indicator
         let mut new_tooltip = None;
         let top_bar_y = 0;
