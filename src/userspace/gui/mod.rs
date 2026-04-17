@@ -299,14 +299,22 @@ impl WindowManager {
 
         // Handle Start Menu animation (Slide effect)
         if self.menu_anim_progress != self.menu_anim_target {
+            let menu_h = 345;
+            let start_y = TOP_BAR_HEIGHT as isize;
+            // Calculate position before update to track what needs cleaning
+            let old_y = start_y - (menu_h as isize * (100 - self.menu_anim_progress) as isize / 100);
+
             if self.menu_anim_progress < self.menu_anim_target {
                 self.menu_anim_progress = (self.menu_anim_progress + 10).min(self.menu_anim_target);
             } else {
                 self.menu_anim_progress = self.menu_anim_progress.saturating_sub(10).max(self.menu_anim_target);
             }
             self.start_menu_open = self.menu_anim_progress > 0;
-            // Mark the sweep area dirty to ensure the slide is smooth and leaves no ghosts
-            self.mark_dirty(Rect { x: 0, y: 0, width: 210, height: 400 });
+
+            let new_y = start_y - (menu_h as isize * (100 - self.menu_anim_progress) as isize / 100);
+            let r1 = Rect { x: 0, y: old_y, width: 210, height: menu_h };
+            let r2 = Rect { x: 0, y: new_y, width: 210, height: menu_h };
+            self.mark_dirty(r1.union(&r2));
         }
 
         // Check for brightness changes (to trigger OSD popup)
@@ -1514,8 +1522,15 @@ impl WindowManager {
         let menu_y = target_y - (menu_height as isize * (100 - self.menu_anim_progress) as isize / 100);
         let menu_x = 0;
         let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
-        
-        let bg_color = if high_contrast { 0x00_00_00_00 } else { 0x00_C0_C0_C0 };
+
+        // Fading effect: Interpolate background color based on progress
+        let target_bg = if high_contrast { 0x00_00_00_00 } else { 0x00_1E_1E_1E };
+        let bg_color = if high_contrast {
+            target_bg
+        } else {
+            let desktop_bg = DESKTOP_GRADIENT_START.load(Ordering::Relaxed);
+            self.interpolate_gradient(desktop_bg, target_bg, self.menu_anim_progress as isize, 100)
+        };
 
         // 1. Draw Background (Flat design, no "effects")
         draw_rect(fb, menu_x, menu_y, menu_width, menu_height, bg_color, Some(clip));

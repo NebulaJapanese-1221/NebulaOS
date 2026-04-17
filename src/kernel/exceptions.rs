@@ -55,11 +55,18 @@ pub unsafe fn print_stack_trace() {
     let mut i = 0;
     // Limit to 20 frames to prevent infinite loops in case of stack corruption.
     while rbp != 0 && i < 20 {
+        // Alignment check: x86 stack frames must be 4-byte aligned.
+        if rbp & 3 != 0 {
+            crate::serial_println!("  <Frame {:02}: RBP misaligned ({:#010x}), stopping trace>", i, rbp);
+            break;
+        }
+
         // The return address is stored on the stack just above the saved RBP.
-        let return_address = *(rbp as *const u32).add(1);
+        let return_address = core::ptr::read_unaligned((rbp as *const u32).add(1));
         crate::serial_println!("  Frame {:02}: Return to 0x{:08x}", i, return_address);
+
         // The next RBP is the value pointed to by the current RBP.
-        let next_rbp = *(rbp as *const u32);
+        let next_rbp = core::ptr::read_unaligned(rbp as *const u32);
         
         // Basic sanity check: Stack usually grows down, so previous frame RBP should be > current RBP
         if next_rbp <= rbp && next_rbp != 0 {
@@ -80,10 +87,15 @@ pub unsafe fn print_stack_trace_to<W: fmt::Write>(writer: &mut W) {
     let _ = writeln!(writer, "\nStack Trace (RBP: {:#x}):", rbp);
     let mut i = 0;
     while rbp != 0 && i < 20 {
-        let return_address = *(rbp as *const u32).add(1);
+        if rbp & 3 != 0 {
+            let _ = writeln!(writer, "  <Frame {:02}: RBP misaligned ({:#010x}), stopping trace>", i, rbp);
+            break;
+        }
+
+        let return_address = core::ptr::read_unaligned((rbp as *const u32).add(1));
         let _ = writeln!(writer, "  Frame {:02}: Return to 0x{:08x}", i, return_address);
         
-        let next_rbp = *(rbp as *const u32);
+        let next_rbp = core::ptr::read_unaligned(rbp as *const u32);
         if next_rbp <= rbp && next_rbp != 0 {
              let _ = writeln!(writer, "  <Stack End or Corruption>");
              break;

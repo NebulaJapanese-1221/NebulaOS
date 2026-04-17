@@ -3,7 +3,7 @@ use crate::userspace::gui::{self, font, Window, rect::Rect};
 use super::app::{App, AppEvent};
 use alloc::boxed::Box;
 use alloc::format;
-use crate::kernel::process::{SCHEDULER, TICKS};
+use crate::kernel::process::SCHEDULER;
 use crate::kernel::allocator::ALLOCATOR;
 use alloc::vec::Vec;
 use alloc::sync::Arc;
@@ -74,7 +74,7 @@ impl App for TaskManager {
         let graph_width = if win.width > 20 { win.width - 20 } else { 10 };
 
         // Memory Graph Blit
-        if dirty_rect.intersects(&Rect { x, y, width: graph_width, height: graph_height }) {
+        if !state_lock.mem_graph_buffer.is_empty() && dirty_rect.intersects(&Rect { x, y, width: graph_width, height: graph_height }) {
             fb.draw_bitmap(x as usize, y as usize, graph_width, graph_height, &state_lock.mem_graph_buffer);
         }
 
@@ -90,7 +90,7 @@ impl App for TaskManager {
             y += font_height as isize + 2;
 
             // CPU Graph Blit
-            if dirty_rect.intersects(&Rect { x, y, width: graph_width, height: graph_height }) {
+            if !state_lock.cpu_graph_buffer.is_empty() && dirty_rect.intersects(&Rect { x, y, width: graph_width, height: graph_height }) {
                 fb.draw_bitmap(x as usize, y as usize, graph_width, graph_height, &state_lock.cpu_graph_buffer);
             }
 
@@ -135,7 +135,8 @@ impl App for TaskManager {
                 let total_mem = crate::kernel::TOTAL_MEMORY.load(Ordering::Relaxed) / 1024 / 1024;
                 let mem_scale_max = if total_mem > 0 { total_mem } else { 128 };
 
-                for (i, &val) in state.mem_history.iter().enumerate() {
+                let mem_vals = state.mem_history.clone();
+                for (i, &val) in mem_vals.iter().enumerate() {
                     let bar_h = (val * graph_height) / mem_scale_max;
                     let bar_x = i * 4;
                     if bar_x + 3 < graph_width {
@@ -152,7 +153,8 @@ impl App for TaskManager {
                 state.cpu_graph_buffer.resize(buf_size, 0);
                 state.cpu_graph_buffer.fill(0xFF_12_12_12);
 
-                for (i, &val) in state.cpu_history.iter().enumerate() {
+                let cpu_vals = state.cpu_history.clone();
+                for (i, &val) in cpu_vals.iter().enumerate() {
                     let safe_val = val.min(100);
                     let bar_h = (safe_val * graph_height) / 100;
                     let bar_x = i * 4;

@@ -3,7 +3,7 @@ use crate::userspace::gui::{self, font, Window, button::Button, rect::Rect};
 use super::app::{App, AppEvent};
 use alloc::boxed::Box;
 use core::cell::{Cell, RefCell};
-use alloc::string::{String, ToString};
+use alloc::string::String;
 
 #[derive(Clone, Debug)]
 pub struct Calculator {
