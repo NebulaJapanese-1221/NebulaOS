@@ -76,50 +76,36 @@ impl Paint {
 }
 
 impl App for Paint {
-    fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window, _dirty_rect: Rect) {
+    fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window, dirty_rect: Rect) {
         // Toolbar area
         let toolbar_height = 40;
-        gui::draw_rect(fb, win.x, win.y + 20, win.width, toolbar_height, 0x00_30_30_30, None);
+        gui::draw_rect(fb, win.x, win.y + 20, win.width, toolbar_height, 0x00_30_30_30, Some(dirty_rect));
 
         // Canvas area
         let canvas_y = win.y + 20 + toolbar_height as isize;
         let canvas_height = win.height.saturating_sub(20 + toolbar_height);
         
-        gui::draw_rect(fb, win.x, canvas_y, win.width, canvas_height, 0x00_00_00_00, None); // Black bg
+        gui::draw_rect(fb, win.x, canvas_y, win.width, canvas_height, 0x00_00_00_00, Some(dirty_rect)); // Black bg
 
         if self.buffer_width > 0 {
-             // Blit buffer to screen
-             let w = self.buffer_width.min(win.width);
-             let h = self.buffer_height.min(canvas_height);
-             
-             for y in 0..h {
-                 for x in 0..w {
-                     let color = self.buffer[y * self.buffer_width + x];
-                     if color != 0 { // Simple transparency
-                         if let Some(info) = &fb.info {
-                             let screen_x = win.x + x as isize;
-                             let screen_y = canvas_y + y as isize;
-                             if screen_x >= 0 && screen_x < info.width as isize && screen_y >= 0 && screen_y < info.height as isize {
-                                  fb.set_pixel(screen_x as usize, screen_y as usize, color);
-                             }
-                         }
-                     }
-                 }
+             // Optimized Blit using draw_bitmap which uses copy_from_slice
+             if dirty_rect.intersects(&Rect { x: win.x, y: canvas_y, width: self.buffer_width, height: self.buffer_height }) {
+                fb.draw_bitmap(win.x as usize, canvas_y as usize, self.buffer_width, self.buffer_height, &self.buffer[..]);
              }
         }
 
         // Draw Toolbar Buttons (Palette)
         let colors = [0x00_FFFFFF, 0x00_FF0000, 0x00_00FF00, 0x00_0000FF, 0x00_FFFF00, 0x00_00FFFF, 0x00_FF00FF, 0x00_000000];
         for (i, &c) in colors.iter().enumerate() {
-            gui::draw_rect(fb, win.x + 5 + (i as isize * 25), win.y + 25, 20, 20, c, None);
+            gui::draw_rect(fb, win.x + 5 + (i as isize * 25), win.y + 25, 20, 20, c, Some(dirty_rect));
             if self.color == c {
                 // Highlight selected
-                 gui::draw_rect(fb, win.x + 5 + (i as isize * 25), win.y + 45, 20, 2, 0x00_FFFFFF, None);
+                 gui::draw_rect(fb, win.x + 5 + (i as isize * 25), win.y + 45, 20, 2, 0x00_FFFFFF, Some(dirty_rect));
             }
         }
         
         let clear_btn = Button::new(win.x + 5 + (colors.len() as isize * 25) + 10, win.y + 25, 50, 20, "Clear");
-        clear_btn.draw(fb, 0, 0, None);
+        clear_btn.draw(fb, 0, 0, Some(dirty_rect));
     }
 
     fn handle_event(&mut self, event: &AppEvent, _win: &Window) -> Option<Rect> {
@@ -147,9 +133,11 @@ impl App for Paint {
                      // Canvas Drawing
                      let cx = *x;
                      let cy = *y - (20 + toolbar_height as isize);
+                     let canvas_y = _win.y + 20 + toolbar_height as isize;
                      let start = self.last_pos.unwrap_or((cx, cy));
                      self.draw_line(start.0, start.1, cx, cy, self.color);
                      self.last_pos = if matches!(event, AppEvent::MouseMove { .. }) { Some((cx, cy)) } else { None };
+                     return Some(Rect { x: _win.x, y: canvas_y, width: _win.width, height: canvas_h as usize });
                  }
              }
              _ => {}

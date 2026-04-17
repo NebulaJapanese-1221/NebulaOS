@@ -343,17 +343,6 @@ impl WindowManager {
             (800, 600) // Fallback
         };
 
-        // Optimization: Rebuild gradient cache if colors or resolution changed
-        let start_c = DESKTOP_GRADIENT_START.load(Ordering::Relaxed);
-        let end_c = DESKTOP_GRADIENT_END.load(Ordering::Relaxed);
-        if self.gradient_cache.len() != screen_height as usize {
-            self.gradient_cache.resize(screen_height as usize, 0);
-            for y in 0..screen_height {
-                self.gradient_cache[y as usize] = self.interpolate_gradient(start_c, end_c, y, screen_height);
-            }
-            FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
-        }
-
         // Notify non-minimized windows of system ticks for periodic state updates (like blinking cursors)
         let current_tick = crate::kernel::process::TICKS.load(Ordering::Relaxed);
         for i in 0..self.windows.len() {
@@ -1187,6 +1176,16 @@ impl WindowManager {
             self.backbuffer.resize(buffer_size, 0);
         }
 
+        // Ensure gradient cache is initialized (Fixes crash if draw_dirty is called before update)
+        if self.gradient_cache.len() != fb_info.height {
+            self.gradient_cache.resize(fb_info.height, 0);
+            let start_c = DESKTOP_GRADIENT_START.load(Ordering::Relaxed);
+            let end_c = DESKTOP_GRADIENT_END.load(Ordering::Relaxed);
+            for y in 0..fb_info.height {
+                self.gradient_cache[y] = self.interpolate_gradient(start_c, end_c, y as isize, fb_info.height as isize);
+            }
+        }
+
         // Create a temporary Framebuffer wrapping our local backbuffer.
         // This allows us to use existing draw functions without locking the global driver.
         let mut local_fb = framebuffer::Framebuffer::new();
@@ -1902,9 +1901,16 @@ pub fn draw_rect(fb: &mut framebuffer::Framebuffer, x: isize, y: isize, width: u
             let start_y = clipped.y as usize;
             let end_y = start_y + clipped.height;
             
+            // Final boundary check to ensure we don't index outside the physical framebuffer dimensions
+            if end_y > info.height || start_x + clipped.width > info.width {
+                return;
+            }
+
             for py in start_y..end_y {
                 let offset = py * info.width + start_x;
-                buffer[offset..offset + clipped.width].fill(color);
+                if let Some(line) = buffer.get_mut(offset..offset + clipped.width) {
+                    line.fill(color);
+                }
             }
         }
     }

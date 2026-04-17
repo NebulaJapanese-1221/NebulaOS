@@ -6,6 +6,7 @@ use crate::drivers::framebuffer;
 use crate::userspace::gui::{self, font, Window, rect::Rect};
 use super::app::{App, AppEvent};
 use core::sync::atomic::Ordering;
+use core::cell::Cell;
 
 #[derive(Clone)]
 pub struct Terminal {
@@ -14,6 +15,7 @@ pub struct Terminal {
     pub prompt: String,
     pub cursor_visible: bool,
     pub last_blink_tick: usize,
+    dirty: Cell<bool>,
 }
 
 impl Terminal {
@@ -24,6 +26,7 @@ impl Terminal {
             prompt: String::from("/> "),
             cursor_visible: true,
             last_blink_tick: 0,
+            dirty: Cell::new(true),
         };
         term.history.push(String::from("NebulaOS Terminal"));
         term
@@ -50,6 +53,7 @@ impl Terminal {
                 }
             }
         }
+        self.dirty.set(true);
     }
 
     fn execute_command(&mut self, cmd: &str) {

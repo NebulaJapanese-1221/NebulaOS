@@ -2,8 +2,10 @@ use crate::drivers::framebuffer;
 use crate::userspace::gui::{self, font, Window, button::Button, rect::Rect};
 use super::app::{App, AppEvent};
 use alloc::boxed::Box;
+use core::cell::{Cell, RefCell};
+use alloc::string::{String, ToString};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Calculator {
     pub value: i64,
     pub operand: i64,
@@ -11,10 +13,12 @@ pub struct Calculator {
     pub inputing: bool,
     pub error: bool,
     pub scientific: bool,
+    dirty: Cell<bool>,
+    display_cache: RefCell<String>,
 }
 
 impl Calculator {
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Calculator {
             value: 0,
             operand: 0,
@@ -22,6 +26,8 @@ impl Calculator {
             inputing: false,
             error: false,
             scientific: false,
+            dirty: Cell::new(true),
+            display_cache: RefCell::new(String::new()),
         }
     }
 
@@ -30,7 +36,7 @@ impl Calculator {
             return;
         }
 
-        match key {
+        let changed = match key {
             '0'..='9' => {
                 let digit = key as i64 - '0' as i64;
                 if self.inputing {
@@ -39,6 +45,7 @@ impl Calculator {
                     self.value = digit;
                     self.inputing = true;
                 }
+                true
             }
             '+' | '-' | '*' | '/' | '%' | '^' => {
                 if self.inputing {
@@ -55,6 +62,7 @@ impl Calculator {
                 };
                 self.operand = self.value;
                 self.inputing = false;
+                true
             }
             '=' => {
                 if self.op != 0 {
@@ -62,6 +70,7 @@ impl Calculator {
                     self.op = 0;
                     self.inputing = false;
                 }
+                true
             }
             'C' => {
                 self.value = 0;
@@ -69,13 +78,16 @@ impl Calculator {
                 self.op = 0;
                 self.inputing = false;
                 self.error = false;
+                true
             }
             'M' => {
                 self.scientific = !self.scientific;
+                true
             }
             's' => { // Square
                 self.value = self.value.saturating_mul(self.value);
                 self.inputing = false;
+                true
             }
             '!' => { // Factorial
                 if self.value < 0 || self.value > 20 {
@@ -88,8 +100,13 @@ impl Calculator {
                     self.value = res;
                 }
                 self.inputing = false;
+                true
             }
-            _ => {}
+            _ => false,
+        };
+
+        if changed {
+            self.dirty.set(true);
         }
     }
 
@@ -152,35 +169,19 @@ impl App for Calculator {
         mode_btn.text_color = 0x00_FF_FF_FF;
         mode_btn.draw(fb, 0, 0, None);
 
-        // Format number to string
-        let mut buffer = [0u8; 22];
-        let val = self.value;
-        
-        let s = if self.error {
-            "Error"
-        } else {
-            let mut i = 21;
-            if val == 0 {
-                buffer[i] = b'0';
-                i -= 1;
+        if self.dirty.get() {
+            let s: String = if self.error {
+                String::from("Error")
             } else {
-                let neg = val < 0;
-                let mut u_val = if neg {
-                    if val == i64::MIN { 9223372036854775808u64 } else { -val as u64 }
-                } else {
-                    val as u64
-                };
-                while u_val > 0 {
-                    buffer[i] = b'0' + (u_val % 10) as u8;
-                    u_val /= 10;
-                    i -= 1;
-                }
-                if neg { buffer[i] = b'-'; i -= 1; }
-            }
-            core::str::from_utf8(&buffer[i + 1..22]).unwrap_or("Err")
-        };
-        
-        font::draw_string(fb, win.x + width - 10 - (s.len() as isize * 8), content_y + 12, s, 0x00_00_FF_00, None);
+                alloc::format!("{}", self.value)
+            };
+            *self.display_cache.borrow_mut() = s;
+            self.dirty.set(false);
+        }
+
+        let display_text = self.display_cache.borrow();
+        let text_width = font::string_width(&**display_text);
+        font::draw_string(fb, win.x + width - 10 - text_width as isize, content_y + 12, &**display_text, 0x00_00_FF_00, None);
 
         // 2. Draw Buttons
         let labels: &[&str] = if self.scientific {
