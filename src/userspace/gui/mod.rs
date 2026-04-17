@@ -24,10 +24,10 @@ use crate::userspace::localisation::Localisation;
 pub use crate::userspace::fonts::font;
 
 const MAX_WINDOWS: usize = 10;
-pub const TOP_BAR_HEIGHT: usize = 26;
+pub const TOP_BAR_HEIGHT: usize = 32; // Slightly taller for better readability
 
-pub static DESKTOP_GRADIENT_START: AtomicU32 = AtomicU32::new(0x00_10_20_40);
-pub static DESKTOP_GRADIENT_END: AtomicU32 = AtomicU32::new(0x00_50_80_B0);
+pub static DESKTOP_GRADIENT_START: AtomicU32 = AtomicU32::new(0x00_0F_11_1A); // Deep Navy
+pub static DESKTOP_GRADIENT_END: AtomicU32 = AtomicU32::new(0x00_24_3B_55);   // Nebula Blue
 pub static FULL_REDRAW_REQUESTED: AtomicBool = AtomicBool::new(false);
 pub static HIGH_CONTRAST: AtomicBool = AtomicBool::new(false);
 pub static LARGE_TEXT: AtomicBool = AtomicBool::new(false);
@@ -1362,16 +1362,16 @@ impl WindowManager {
         let is_active = self.z_order.last() == Some(&win.id);
         let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
         
-        let (title_color, body_color, border_bright, border_dark, title_text_color) = if high_contrast {
-            (if is_active { 0x00_00_00_FF } else { 0x00_00_00_00 }, 0x00_00_00_00, 0x00_FF_FF_FF, 0x00_FF_FF_FF, 0x00_FF_FF_FF)
+        let (title_color, body_color, border_color, title_text_color) = if high_contrast {
+            (if is_active { 0x00_00_00_FF } else { 0x00_00_00_00 }, 0x00_00_00_00, 0x00_FF_FF_FF, 0x00_FF_FF_FF)
         } else {
-            (if is_active { 0x00_00_40_80 } else { 0x00_40_40_40 }, win.color, 0x00_FF_FF_FF, 0x00_40_40_40, 0x00_FF_FF_FF)
+            (if is_active { 0x00_1E_1E_1E } else { 0x00_25_25_26 }, win.color, 0x00_3F_3F_46, 0x00_D0_D0_D0)
         };
         let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
-        let title_height = font_height + 6;
+        let title_height = font_height + 10;
 
-        // Draw main window body
-        draw_rect(fb, win.x, win.y, win.width, win.height, body_color, Some(clip));
+        // Draw main window body with rounded corners
+        draw_rounded_rect(fb, win.x, win.y, win.width, win.height, 8, body_color, Some(clip));
         
         // Draw Content
         let content_rect = Rect {
@@ -1391,8 +1391,11 @@ impl WindowManager {
             fb.clear_clip();
         }
 
-        // Draw title bar on top
-        draw_rect(fb, win.x, win.y, win.width, title_height, title_color, Some(clip));
+        // Draw title bar with rounded top corners
+        draw_rounded_rect(fb, win.x, win.y, win.width, title_height, 8, title_color, Some(clip));
+        // Cover the bottom rounding of the title bar to make it flush with the body
+        draw_rect(fb, win.x, win.y + (title_height / 2) as isize, win.width, title_height / 2, title_color, Some(clip));
+
         // Draw title text
         // Clip text to title bar area to prevent spillover (especially with Large Text)
         let title_rect = Rect { x: win.x, y: win.y, width: win.width, height: title_height };
@@ -1410,12 +1413,10 @@ impl WindowManager {
         self.draw_win_btn(fb, win.x + win.width as isize - 40, btn_y, "+", title_color, mouse_x, mouse_y, clip);
         self.draw_win_btn(fb, win.x + win.width as isize - 60, btn_y, "-", title_color, mouse_x, mouse_y, clip);
 
-        // Draw Bevel Frame (On top of everything)
-        draw_rect(fb, win.x, win.y, win.width, 1, border_bright, Some(clip)); // Top
-        draw_rect(fb, win.x, win.y, 1, win.height, border_bright, Some(clip)); // Left
-        draw_rect(fb, win.x + win.width as isize - 1, win.y, 1, win.height, border_dark, Some(clip)); // Right
-        draw_rect(fb, win.x, win.y + win.height as isize - 1, win.width, 1, border_dark, Some(clip)); // Bottom
-        draw_rect(fb, win.x, win.y + title_height as isize, win.width, 1, border_dark, Some(clip)); // Header separator
+        // Draw Border
+        draw_rounded_rect(fb, win.x, win.y, win.width, win.height, 8, border_color, Some(clip));
+        // Redraw body over border to keep only 1px edge
+        draw_rounded_rect(fb, win.x + 1, win.y + 1, win.width - 2, win.height - 2, 7, body_color, Some(clip));
     }
 
     fn draw_taskbar(&self, fb: &mut framebuffer::Framebuffer, _mouse_x: isize, _mouse_y: isize, clip: Rect) {
@@ -1432,7 +1433,7 @@ impl WindowManager {
             let (bg_color, border_color) = if high_contrast {
                 (0x00_00_00_00, 0x00_FF_FF_FF)
             } else {
-                (0x00_28_28_28, 0x00_50_50_50)
+                (0x00_12_12_12, 0x00_2A_2A_2A)
             };
             
             // Dark sleek taskbar
@@ -1483,7 +1484,7 @@ impl WindowManager {
 
         // Right side status icons - Dynamic Positioning
         let battery_info = crate::drivers::battery::BATTERY.lock().get_info();
-        let clock_text_width = font::string_width(clock_text);
+        let clock_text_width = font::string_width(clock_text) + 10;
         
         let mut cursor_x = width as isize - 10;
 

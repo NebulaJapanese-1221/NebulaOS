@@ -5,6 +5,7 @@ use alloc::boxed::Box;
 use crate::drivers::framebuffer;
 use crate::userspace::gui::{self, font, Window, rect::Rect};
 use super::app::{App, AppEvent};
+use core::sync::atomic::Ordering;
 
 #[derive(Clone)]
 pub struct Terminal {
@@ -148,15 +149,19 @@ impl Terminal {
 
 impl App for Terminal {
     fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window, dirty_rect: Rect) {
+        let font_height = if gui::LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
+        let title_height = font_height + 10;
+        let padding = 10;
+
         // 1. Only clear the background within the dirty region
-        let content_rect = Rect { x: win.x, y: win.y + 20, width: win.width, height: win.height - 20 };
+        let content_rect = Rect { x: win.x, y: win.y + title_height as isize, width: win.width, height: win.height - title_height };
         if let Some(fill_area) = dirty_rect.intersection(&content_rect) {
-            gui::draw_rect(fb, fill_area.x, fill_area.y, fill_area.width, fill_area.height, 0x00_000000, None);
+            gui::draw_rect(fb, fill_area.x, fill_area.y, fill_area.width, fill_area.height, 0x00_12_12_12, None);
         }
 
-        let start_x = win.x + 5;
-        let mut y = win.y + 25;
-        let line_height = 16;
+        let start_x = win.x + padding as isize;
+        let mut y = win.y + title_height as isize + padding as isize;
+        let line_height = font_height;
 
         let max_lines = (win.height - 30) / line_height;
         // Reserve one line for the input prompt so it is always visible
@@ -167,7 +172,7 @@ impl App for Terminal {
             // 2. Only draw history lines if they intersect the dirty rect
             let line_bounds = Rect { x: win.x, y, width: win.width, height: line_height };
             if dirty_rect.intersects(&line_bounds) {
-                font::draw_string(fb, start_x, y, line, 0x00_CCCCCC, Some(dirty_rect));
+                font::draw_string(fb, start_x, y, line, 0x00_A0_A0_A0, Some(dirty_rect));
             }
             y += line_height as isize;
         }
@@ -177,11 +182,11 @@ impl App for Terminal {
         if y < (win.y + win.height as isize - line_height as isize) {
             let input_bounds = Rect { x: win.x, y, width: win.width, height: line_height };
             if dirty_rect.intersects(&input_bounds) {
-                font::draw_string(fb, start_x, y, input_line.as_str(), 0x00_FFFFFF, Some(dirty_rect));
+                font::draw_string(fb, start_x, y, input_line.as_str(), 0x00_E1_E1_E1, Some(dirty_rect));
                 if self.cursor_visible {
                     let cursor_x = start_x + font::string_width(&input_line) as isize;
                     // Only draw cursor if it's within the dirty area
-                    gui::draw_rect(fb, cursor_x, y, 8, line_height as usize, 0x00_FFFFFF, Some(dirty_rect));
+                    gui::draw_rect(fb, cursor_x, y, 8, line_height as usize, 0x00_00_7A_CC, Some(dirty_rect));
                 }
             }
         }
@@ -190,13 +195,15 @@ impl App for Terminal {
     fn handle_event(&mut self, event: &AppEvent, win: &Window) -> Option<Rect> {
         match event {
             AppEvent::KeyPress { key } => {
-            let line_height = 16;
-            let max_lines = (win.height - 30) / line_height;
+            let font_height = if gui::LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
+            let title_height = font_height + 10;
+            let line_height = font_height;
+            let max_lines = (win.height - (title_height + 10)) / line_height;
             let history_lines = if max_lines > 0 { max_lines - 1 } else { 0 };
             
             // Calculate where the input line currently is on the screen
             let displayed_history = self.history.len().min(history_lines);
-            let input_y = win.y + 25 + (displayed_history as isize * line_height as isize);
+            let input_y = win.y + title_height as isize + 10 + (displayed_history as isize * line_height as isize);
             
             let input_rect = Rect {
                 x: win.x,
@@ -221,13 +228,15 @@ impl App for Terminal {
                     self.cursor_visible = !self.cursor_visible;
                     self.last_blink_tick = *tick_count;
 
-                    let line_height = 16;
-                    let max_lines = (win.height - 30) / line_height;
+                    let font_height = if gui::LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
+                    let title_height = font_height + 10;
+                    let line_height = font_height;
+                    let max_lines = (win.height - (title_height + 10)) / line_height;
                     let history_lines = if max_lines > 0 { max_lines - 1 } else { 0 };
                     let displayed_history = self.history.len().min(history_lines);
-                    let input_y = win.y + 25 + (displayed_history as isize * line_height as isize);
+                    let input_y = win.y + title_height as isize + 10 + (displayed_history as isize * line_height as isize);
                     let input_line = format!("{}{}", self.prompt, self.input_buffer);
-                    let cursor_x = win.x + 5 + font::string_width(&input_line) as isize;
+                    let cursor_x = win.x + 10 + font::string_width(&input_line) as isize;
 
                     return Some(Rect { x: cursor_x, y: input_y, width: 8, height: line_height as usize });
                 }

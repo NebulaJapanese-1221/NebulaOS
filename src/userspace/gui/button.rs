@@ -16,8 +16,8 @@ impl Button {
         Self {
             rect: Rect { x, y, width, height },
             text: text.into(),
-            bg_color: 0x00_C0_C0_C0,
-            text_color: 0x00_00_00_00,
+            bg_color: 0x00_2D_2D_30, // Darker modern grey
+            text_color: 0x00_E1_E1_E1, // Off-white
         }
     }
 
@@ -38,30 +38,26 @@ impl Button {
 
         let mut draw_color = if high_contrast { 0x00_00_00_00 } else { self.bg_color };
         if is_hovered && !high_contrast {
-            draw_color = 0x00_00_50_A0; // Nebula Blue Hover
+            draw_color = 0x00_3E_3E_42; // Lighter grey hover
             super::draw_rounded_rect(fb, self.rect.x, self.rect.y, self.rect.width, self.rect.height, 6, draw_color, Some(draw_clip));
         } else {
-            super::draw_rect(fb, self.rect.x, self.rect.y, self.rect.width, self.rect.height, draw_color, Some(draw_clip));
+            super::draw_rounded_rect(fb, self.rect.x, self.rect.y, self.rect.width, self.rect.height, 4, draw_color, Some(draw_clip));
         }
 
-        // Add 3D bevel effect
-        let (bright, dark) = if high_contrast || is_hovered {
-            // Use flat design for hover highlight
-            (draw_color, draw_color)
-        } else {
-            (0x00_FF_FF_FF, 0x00_40_40_40)
-        };
-        
-        super::draw_rect(fb, self.rect.x, self.rect.y, self.rect.width, 1, bright, Some(draw_clip)); // Top
-        super::draw_rect(fb, self.rect.x, self.rect.y, 1, self.rect.height, bright, Some(draw_clip)); // Left
-        super::draw_rect(fb, self.rect.x + self.rect.width as isize - 1, self.rect.y, 1, self.rect.height, dark, Some(draw_clip)); // Right
-        super::draw_rect(fb, self.rect.x, self.rect.y + self.rect.height as isize - 1, self.rect.width, 1, dark, Some(draw_clip)); // Bottom
+        // Add a subtle border for definition instead of heavy 3D bevels
+        let border_color = if is_hovered { 0x00_00_7A_CC } else { 0x00_43_43_46 };
+        if !high_contrast {
+            super::draw_rect(fb, self.rect.x, self.rect.y, self.rect.width, 1, border_color, Some(draw_clip)); // Top
+            super::draw_rect(fb, self.rect.x, self.rect.y, 1, self.rect.height, border_color, Some(draw_clip)); // Left
+            super::draw_rect(fb, self.rect.x + self.rect.width as isize - 1, self.rect.y, 1, self.rect.height, border_color, Some(draw_clip)); // Right
+            super::draw_rect(fb, self.rect.x, self.rect.y + self.rect.height as isize - 1, self.rect.width, 1, border_color, Some(draw_clip)); // Bottom
+        }
 
         let font_height = if super::LARGE_TEXT.load(core::sync::atomic::Ordering::Relaxed) { 32 } else { 16 };
         let text_x = self.rect.x + (self.rect.width as isize - font::string_width(self.text.as_str()) as isize) / 2;
         let text_y = self.rect.y + (self.rect.height as isize - font_height) / 2;
         
-        let final_text_color = if high_contrast || is_hovered { 0x00_FF_FF_FF } else { self.text_color };
+        let final_text_color = if is_hovered { 0x00_FF_FF_FF } else { self.text_color };
         
         font::draw_string(fb, text_x, text_y, self.text.as_str(), final_text_color, Some(draw_clip));
     }
