@@ -1,7 +1,9 @@
 # NebulaOS Version History
 - Note: the date between "()" is the release date for each version
 
-## v0.0.3-dev2 (In Progress)
+## 0.0.3-dev3 (In Progress)
+
+## v0.0.3-dev2 (04-17-2026)
 - Added robust Framebuffer initialization with support for 15-bit (RGB555) and 16-bit (RGB565) color depths.
 - Implemented a streamlined PAE Paging system for improved kernel identity mapping stability.
 - Added a 'Brightness' system with simulated control and OSD popup.
@@ -11,8 +13,7 @@
 - Added a better boot screen.
 - Added adjustable Mouse Sensitivity in Settings with sub-pixel accumulation logic.
 - Added tooltips for status bar indicators including the Date/Time clock.
-- Added system startup and shutdown sounds.
-- Major UI improvements
+- Major UI improvements.
 
 ## v0.0.3-dev (03-22-2026)
 - Added proper System Information detection (CPUID for Brand String).
