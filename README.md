@@ -32,7 +32,7 @@ make run
 *Requires QEMU and a nightly Rust toolchain.*
 
 ## Current Bugs
-[Many]
+[Many issues with hangs and the clear button in paint does not work.]
 
 ## 📜 License
 

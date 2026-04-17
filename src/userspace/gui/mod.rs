@@ -305,9 +305,9 @@ impl WindowManager {
             let old_y = start_y - (menu_h as isize * (100 - self.menu_anim_progress) as isize / 100);
 
             if self.menu_anim_progress < self.menu_anim_target {
-                self.menu_anim_progress = (self.menu_anim_progress + 10).min(self.menu_anim_target);
+                self.menu_anim_progress = (self.menu_anim_progress + 25).min(self.menu_anim_target);
             } else {
-                self.menu_anim_progress = self.menu_anim_progress.saturating_sub(10).max(self.menu_anim_target);
+                self.menu_anim_progress = self.menu_anim_progress.saturating_sub(25).max(self.menu_anim_target);
             }
             self.start_menu_open = self.menu_anim_progress > 0;
 
@@ -1377,26 +1377,10 @@ impl WindowManager {
         let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
         let title_height = font_height + 10;
 
-        // Draw main window body with rounded corners
-        draw_rounded_rect(fb, win.x, win.y, win.width, win.height, 8, body_color, Some(clip));
-        
-        // Draw Content
-        let content_rect = Rect {
-            x: win.x,
-            y: win.y + title_height as isize,
-            width: win.width,
-            height: win.height.saturating_sub(title_height),
-        };
-        
-        let screen_rect = fb.info.as_ref().map(|i| Rect { x: 0, y: 0, width: i.width, height: i.height }).unwrap_or(Rect { x: 0, y: 0, width: 0, height: 0 });
-
-        if let Some(r) = clip.intersection(&content_rect).and_then(|r| r.intersection(&screen_rect)) {
-            fb.set_clip(r.x as usize, r.y as usize, r.width, r.height);
-            if let WindowContent::App(app) = &win.content {
-                app.draw(fb, win, r);
-            }
-            fb.clear_clip();
-        }
+        // 1. Draw Border and Background FIRST
+        draw_rounded_rect(fb, win.x, win.y, win.width, win.height, 8, border_color, Some(clip));
+        // Redraw body over border to keep only 1px edge
+        draw_rounded_rect(fb, win.x + 1, win.y + 1, win.width - 2, win.height - 2, 7, body_color, Some(clip));
 
         // Draw title bar with rounded top corners
         draw_rounded_rect(fb, win.x, win.y, win.width, title_height, 8, title_color, Some(clip));
@@ -1420,10 +1404,23 @@ impl WindowManager {
         self.draw_win_btn(fb, win.x + win.width as isize - 40, btn_y, "+", title_color, mouse_x, mouse_y, clip);
         self.draw_win_btn(fb, win.x + win.width as isize - 60, btn_y, "-", title_color, mouse_x, mouse_y, clip);
 
-        // Draw Border
-        draw_rounded_rect(fb, win.x, win.y, win.width, win.height, 8, border_color, Some(clip));
-        // Redraw body over border to keep only 1px edge
-        draw_rounded_rect(fb, win.x + 1, win.y + 1, win.width - 2, win.height - 2, 7, body_color, Some(clip));
+        // 2. Draw Content LAST (Ensures it is on top of the window background)
+        let content_rect = Rect {
+            x: win.x,
+            y: win.y + title_height as isize,
+            width: win.width,
+            height: win.height.saturating_sub(title_height),
+        };
+        
+        let screen_rect = fb.info.as_ref().map(|i| Rect { x: 0, y: 0, width: i.width, height: i.height }).unwrap_or(Rect { x: 0, y: 0, width: 0, height: 0 });
+
+        if let Some(r) = clip.intersection(&content_rect).and_then(|r| r.intersection(&screen_rect)) {
+            fb.set_clip(r.x as usize, r.y as usize, r.width, r.height);
+            if let WindowContent::App(app) = &win.content {
+                app.draw(fb, win, r);
+            }
+            fb.clear_clip();
+        }
     }
 
     fn draw_taskbar(&self, fb: &mut framebuffer::Framebuffer, _mouse_x: isize, _mouse_y: isize, clip: Rect) {

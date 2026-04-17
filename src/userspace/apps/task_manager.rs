@@ -43,11 +43,13 @@ impl TaskManager {
 
 impl App for TaskManager {
     fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window, dirty_rect: Rect) {
-        // Draw background
-        gui::draw_rect(fb, win.x, win.y + 20, win.width, win.height - 20, 0x00_00_00_00, Some(dirty_rect));
-
         let font_height = if gui::LARGE_TEXT.load(core::sync::atomic::Ordering::Relaxed) { 32 } else { 16 };
-        let mut y = win.y + 20 + 5;
+        let title_height = font_height + 10;
+
+        // Draw background
+        gui::draw_rect(fb, win.x, win.y + title_height as isize, win.width, win.height - title_height, 0x00_12_12_12, Some(dirty_rect));
+
+        let mut y = win.y + title_height as isize + 5;
         let x = win.x + 5;
 
         // Draw Header
@@ -75,7 +77,7 @@ impl App for TaskManager {
 
         // Memory Graph Blit
         if !state_lock.mem_graph_buffer.is_empty() && dirty_rect.intersects(&Rect { x, y, width: graph_width, height: graph_height }) {
-            fb.draw_bitmap(x as usize, y as usize, graph_width, graph_height, &state_lock.mem_graph_buffer);
+            fb.draw_bitmap(x, y, graph_width, graph_height, &state_lock.mem_graph_buffer);
         }
 
         let total_mem = crate::kernel::TOTAL_MEMORY.load(Ordering::Relaxed) / 1024 / 1024;
@@ -91,7 +93,7 @@ impl App for TaskManager {
 
             // CPU Graph Blit
             if !state_lock.cpu_graph_buffer.is_empty() && dirty_rect.intersects(&Rect { x, y, width: graph_width, height: graph_height }) {
-                fb.draw_bitmap(x as usize, y as usize, graph_width, graph_height, &state_lock.cpu_graph_buffer);
+                fb.draw_bitmap(x, y, graph_width, graph_height, &state_lock.cpu_graph_buffer);
             }
 
             let last_cpu = state_lock.cpu_history.last().copied().unwrap_or(0);

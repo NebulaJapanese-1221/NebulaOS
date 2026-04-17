@@ -154,20 +154,20 @@ impl Calculator {
 }
 
 impl App for Calculator {
-    fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window, _dirty_rect: Rect) {
+    fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window, dirty_rect: Rect) {
         let font_height = if gui::LARGE_TEXT.load(core::sync::atomic::Ordering::Relaxed) { 32 } else { 16 };
         let content_y = win.y + font_height as isize + 6;
         let width = win.width as isize;
         
         // 1. Draw Display
-        gui::draw_rect(fb, win.x + 5, content_y + 5, win.width - 10, 30, 0x00_00_00_00, None); // Black bg
+        gui::draw_rect(fb, win.x + 5, content_y + 5, win.width - 10, 30, 0x00_00_00_00, Some(dirty_rect)); // Black bg
         
         // Draw Mode Button inside display area (left side) using Button struct
         let mode_label = if self.scientific { "Sci" } else { "Std" };
         let mut mode_btn = Button::new(win.x + 7, content_y + 7, 30, 26, mode_label);
         mode_btn.bg_color = 0x00_60_60_60;
         mode_btn.text_color = 0x00_FF_FF_FF;
-        mode_btn.draw(fb, 0, 0, None);
+        mode_btn.draw(fb, 0, 0, Some(dirty_rect));
 
         if self.dirty.get() {
             let s: String = if self.error {
@@ -181,7 +181,7 @@ impl App for Calculator {
 
         let display_text = self.display_cache.borrow();
         let text_width = font::string_width(&**display_text);
-        font::draw_string(fb, win.x + width - 10 - text_width as isize, content_y + 12, &**display_text, 0x00_00_FF_00, None);
+        font::draw_string(fb, win.x + width - 10 - text_width as isize, content_y + 12, &**display_text, 0x00_00_FF_00, Some(dirty_rect));
 
         // 2. Draw Buttons
         let labels: &[&str] = if self.scientific {
@@ -211,8 +211,8 @@ impl App for Calculator {
             let col = i % cols;
             let bx = win.x + offset_x + (col as isize * btn_size);
             let by = content_y + 40 + (row as isize * btn_size);
-            gui::draw_rect(fb, bx + 2, by + 2, 36, 36, 0x00_40_40_40, None); // Button color
-            font::draw_string(fb, bx + 15, by + 12, label, 0x00_FFFFFF, None);
+            gui::draw_rect(fb, bx + 2, by + 2, 36, 36, 0x00_40_40_40, Some(dirty_rect)); // Button color
+            font::draw_string(fb, bx + 15, by + 12, label, 0x00_FFFFFF, Some(dirty_rect));
         }
     }
 

@@ -90,7 +90,7 @@ impl App for Paint {
         if self.buffer_width > 0 {
              // Optimized Blit using draw_bitmap which uses copy_from_slice
              if dirty_rect.intersects(&Rect { x: win.x, y: canvas_y, width: self.buffer_width, height: self.buffer_height }) {
-                fb.draw_bitmap(win.x as usize, canvas_y as usize, self.buffer_width, self.buffer_height, &self.buffer[..]);
+                fb.draw_bitmap(win.x, canvas_y, self.buffer_width, self.buffer_height, &self.buffer[..]);
              }
         }
 

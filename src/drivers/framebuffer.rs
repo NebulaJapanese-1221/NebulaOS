@@ -138,24 +138,33 @@ impl Framebuffer {
     /// Draws a bitmap image to the buffer.
     /// `data` is a slice of u32 pixels (ARGB/RGBA).
     /// Assumes 0x00 in the alpha channel (highest byte) is fully transparent.
-    pub fn draw_bitmap(&mut self, x: usize, y: usize, width: usize, height: usize, data: &[u32]) {
+    pub fn draw_bitmap(&mut self, x: isize, y: isize, width: usize, height: usize, data: &[u32]) {
         if let (Some(info), Some(buffer)) = (self.info.as_ref(), self.draw_buffer.as_mut()) {
-            for j in 0..height {
-                let py = y + j;
-                if py >= info.height { break; }
+            let x_start = x.max(0);
+            let y_start = y.max(0);
+            let x_end = (x + width as isize).min(info.width as isize);
+            let y_end = (y + height as isize).min(info.height as isize);
+
+            if x_end <= x_start || y_end <= y_start { return; }
+
+            let copy_width = (x_end - x_start) as usize;
+            let src_x_offset = (x_start - x) as usize;
+            let src_y_start = (y_start - y) as usize;
+
+            for j in 0..((y_end - y_start) as usize) {
+                let py = (y_start + j as isize) as usize;
+                let sy = src_y_start + j;
                 
-                let src_row = &data[j * width..(j + 1) * width];
-                let dest_offset = py * info.width + x;
-                
+                let src_row_start = sy * width + src_x_offset;
+                let src_row = &data[src_row_start..src_row_start + copy_width];
+                let dest_offset = py * info.width + x_start as usize;
+
                 // Check if row is fully opaque (common for many UI assets)
                 if src_row.iter().all(|&p| (p >> 24) == 0xFF) {
-                    let copy_len = width.min(info.width.saturating_sub(x));
-                    buffer[dest_offset..dest_offset + copy_len].copy_from_slice(&src_row[..copy_len]);
+                    buffer[dest_offset..dest_offset + copy_width].copy_from_slice(src_row);
                 } else {
                     // Per-pixel alpha for complex icons
-                    for i in 0..width {
-                        let px = x + i;
-                        if px >= info.width { break; }
+                    for i in 0..copy_width {
                         let color = src_row[i];
                         if (color >> 24) != 0 {
                             buffer[dest_offset + i] = color;
