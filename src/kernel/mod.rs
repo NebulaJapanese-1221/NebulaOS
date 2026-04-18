@@ -18,7 +18,7 @@ pub mod process;
 pub mod cpu;
 pub mod elf;
 
-pub const VERSION: &str = "0.0.3-dev2";
+pub const VERSION: &str = "0.0.3-dev3";
 
 pub static TOTAL_MEMORY: AtomicUsize = AtomicUsize::new(0);
 pub static CPU_CORES: AtomicUsize = AtomicUsize::new(1);
@@ -115,8 +115,10 @@ fn add_boot_status(status: &str, target_progress: usize) {
         for p in current..=target_progress {
             BOOT_PROGRESS_DISPLAY.store(p, Ordering::Relaxed);
             draw_boot_screen(status, p);
-            // Calibrated delay for a smooth "sliding" feel during boot
-            for _ in 0..7000 { unsafe { asm!("nop") } }
+
+                // Use the new TSC-based high precision delay. 
+                // This works perfectly regardless of whether interrupts are enabled or disabled.
+                cpu::spin_wait_us(10000); // 10ms
         }
     } else {
         draw_boot_screen(status, target_progress);
@@ -227,6 +229,9 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     // Now it is safe to enable interrupts
     interrupts::enable_interrupts();
     add_boot_status("Interrupts Enabled", 70);
+
+    // Calibrate NOP loops while PIT is running for hardware-consistent delays
+    cpu::calibrate_delay();
 
     // Initialize ACPI
     acpi::init();

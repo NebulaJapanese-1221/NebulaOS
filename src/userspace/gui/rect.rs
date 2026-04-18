@@ -45,4 +45,14 @@ impl Rect {
             None
         }
     }
+
+    /// Returns a new rectangle expanded by the given amount on all sides.
+    pub fn inflate(&self, amount: isize) -> Rect {
+        Rect {
+            x: self.x - amount,
+            y: self.y - amount,
+            width: (self.width as isize + amount * 2).max(0) as usize,
+            height: (self.height as isize + amount * 2).max(0) as usize,
+        }
+    }
 }

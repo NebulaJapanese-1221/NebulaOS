@@ -1,12 +1,25 @@
 # NebulaOS Version History
 - Note: the date between "()" is the release date for each version
 
-## 0.0.3-dev3 (In Progress)
+## v0.0.3-dev3 (In Progress)
+- Revamped Settings App and added Power Settings and Display Settings.
+- Implemented dynamic CPU frequency detection and calibrated NOP-based delay loops for consistent timing across hardware.
+- Synchronized boot sequence and UI animations to the system timer, fixing the 'too fast' execution on real hardware.
+- Added 'NebulaBrowser' app (experimental/non-functional mockup).
+- Enhanced Task Manager bars with automatic percentage text and better visibility.
+- Added thermal zone (_TZ) monitoring support in ACPI.
+- Added CPU Temperature display to Task Manager.
+- Temporarily removed performance graphs from Task Manager to improve UI stability.
+- Fixed 'Clear' button in Paint app by returning a dirty rectangle to the GUI manager.
+- Optimized ACPI power status updates by caching DSDT pointers, significantly reducing CPU overhead in the GUI loop.
+- Improved overall system responsiveness and fixed 'soft' hangs during battery polling.
+- Added a ProgressBar component to the GUI.
+- Fixed some issues that caused the OS to hang, but not all of them.
 
 ## v0.0.3-dev2 (04-17-2026)
 - Added robust Framebuffer initialization with support for 15-bit (RGB555) and 16-bit (RGB565) color depths.
 - Implemented a streamlined PAE Paging system for improved kernel identity mapping stability.
-- Added a 'Brightness' system with simulated control and OSD popup.
+- Added a 'Brightness' system with real control and OSD popup.
 - Added a 'Battery' indicator to the taskbar with ACPI device detection hooks.
 - Implemented a dynamic ToolTip system for the taskbar.
 - Added a system top bar with the Start menu being moved to there and status indicators (Battery and Date/Time).

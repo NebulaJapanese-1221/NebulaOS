@@ -1,4 +1,5 @@
 use super::acpi;
+use super::cpu;
 use crate::drivers::framebuffer::FRAMEBUFFER;
 use crate::userspace::fonts::font;
 use core::arch::asm;
@@ -26,7 +27,7 @@ pub fn shutdown() {
             fb.present_rect(width / 2 - 150, height / 2 - 60, 300, 120);
         }
         drop(fb);
-        for _ in 0..15000 { unsafe { asm!("nop") } }
+        cpu::spin_wait_ms(10);
     }
 
     // This will attempt to perform an ACPI shutdown.
@@ -84,13 +85,13 @@ pub fn reboot() -> ! {
 
         // Method 1: PCI Reset (Port 0xCF9) - Very reliable on modern systems
         io::outb(0xCF9, 0x06);
-        for _ in 0..1000 { asm!("nop") }
+        cpu::spin_wait_ms(1);
 
         // Method 2: Keyboard Controller Reset (Port 0x64)
         for _ in 0..10 {
             while (io::inb(0x64) & 2) != 0 { asm!("nop") }
             io::outb(0x64, 0xFE);
-            for _ in 0..10000 { asm!("nop") }
+            cpu::spin_wait_ms(10);
         }
 
         // Method 3: Triple Fault (Fallback)

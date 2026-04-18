@@ -80,13 +80,24 @@ impl Scheduler {
 pub static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
 pub static TICKS: AtomicUsize = AtomicUsize::new(0);
 
+pub fn get_task_count() -> usize {
+    SCHEDULER.lock().tasks.len() + 1 // +1 for the kernel idle task
+}
+
 /// Called by the assembly timer handler. 
 /// Updates the scheduler and returns the ESP of the next task.
 #[no_mangle]
 pub extern "C" fn schedule(current_esp: usize) -> usize {
     // 1. Handle Timer Logic
     rtc::handle_timer_tick();
-    TICKS.fetch_add(1, Ordering::Relaxed);
+    
+    let inc = crate::kernel::cpu::get_tick_increment();
+    TICKS.fetch_add(inc, Ordering::Relaxed);
+
+    if TICKS.load(Ordering::Relaxed) % 100 == 0 {
+        crate::kernel::cpu::update_usage_stats();
+    }
+
     unsafe { io::outb(0x20, 0x20); } // Send EOI
 
     let mut scheduler = SCHEDULER.lock();

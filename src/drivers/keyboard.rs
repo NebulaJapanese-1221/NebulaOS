@@ -188,6 +188,10 @@ pub fn scancode_to_char(scancode: u8) -> Option<char> {
             0x30 => Some('\u{B0}'), // Multimedia Vol Up
             0x08 => Some('\u{B3}'), // Multimedia Brightness Down (Common on some laptops)
             0x09 => Some('\u{B4}'), // Multimedia Brightness Up (Common on some laptops)
+            0x48 => Some('\u{B5}'), // Arrow Up
+            0x50 => Some('\u{B6}'), // Arrow Down
+            0x4B => Some('\u{B7}'), // Arrow Left
+            0x4D => Some('\u{B8}'), // Arrow Right
             _ => None,
         };
     }

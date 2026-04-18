@@ -39,9 +39,9 @@ impl Button {
         let mut draw_color = if high_contrast { 0x00_00_00_00 } else { self.bg_color };
         if is_hovered && !high_contrast {
             draw_color = 0x00_3E_3E_42; // Lighter grey hover
-            super::draw_rounded_rect(fb, self.rect.x, self.rect.y, self.rect.width, self.rect.height, 6, draw_color, Some(draw_clip));
+            super::draw_rect(fb, self.rect.x, self.rect.y, self.rect.width, self.rect.height, draw_color, Some(draw_clip));
         } else {
-            super::draw_rounded_rect(fb, self.rect.x, self.rect.y, self.rect.width, self.rect.height, 4, draw_color, Some(draw_clip));
+            super::draw_rect(fb, self.rect.x, self.rect.y, self.rect.width, self.rect.height, draw_color, Some(draw_clip));
         }
 
         // Add a subtle border for definition instead of heavy 3D bevels

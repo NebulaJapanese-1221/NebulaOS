@@ -127,7 +127,11 @@ impl App for Paint {
                              if *x >= bx && *x < bx + 20 && *y >= 25 && *y < 45 { self.color = c; }
                          }
                          let clear_x = 5 + (colors.len() as isize * 25) + 10;
-                         if *x >= clear_x && *x < clear_x + 50 && *y >= 25 && *y < 45 { self.buffer.fill(0); }
+                         if *x >= clear_x && *x < clear_x + 50 && *y >= 25 && *y < 45 { 
+                             self.buffer.fill(0);
+                             // Return a dirty rect covering the window to ensure the clear is visible immediately
+                             return Some(_win.rect());
+                         }
                      }
                  } else {
                      // Canvas Drawing

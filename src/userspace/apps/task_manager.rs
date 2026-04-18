@@ -1,5 +1,5 @@
 use crate::drivers::framebuffer;
-use crate::userspace::gui::{self, font, Window, rect::Rect};
+use crate::userspace::gui::{self, font, Window, rect::Rect, progress_bar::ProgressBar};
 use super::app::{App, AppEvent};
 use alloc::boxed::Box;
 use alloc::format;
@@ -11,11 +11,7 @@ use spin::Mutex;
 use core::sync::atomic::Ordering;
 
 struct TaskManagerState {
-    mem_history: Vec<usize>,
-    cpu_history: Vec<usize>,
     last_tick: usize,
-    mem_graph_buffer: Vec<u32>,
-    cpu_graph_buffer: Vec<u32>,
     dirty: bool,
     task_snapshot: Vec<(usize, &'static str)>,
 }
@@ -29,11 +25,7 @@ impl TaskManager {
     pub fn new() -> Self {
         Self {
             state: Arc::new(Mutex::new(TaskManagerState {
-                mem_history: Vec::new(),
-                cpu_history: Vec::new(),
                 last_tick: 0,
-                mem_graph_buffer: Vec::new(),
-                cpu_graph_buffer: Vec::new(),
                 dirty: true,
                 task_snapshot: Vec::new(),
             })),
@@ -67,38 +59,43 @@ impl App for TaskManager {
             y += font_height as isize + 2;
         }
 
-        // --- Draw Memory Graph ---
+        // --- System Statistics ---
         y += 10;
-        font::draw_string(fb, x, y, "Memory Usage (MB)", 0x00_FF_FF_FF, Some(dirty_rect));
-        y += font_height as isize + 2;
-
-        let graph_height = 100;
-        let graph_width = if win.width > 20 { win.width - 20 } else { 10 };
-
-        // Memory Graph Blit
-        if !state_lock.mem_graph_buffer.is_empty() && dirty_rect.intersects(&Rect { x, y, width: graph_width, height: graph_height }) {
-            fb.draw_bitmap(x, y, graph_width, graph_height, &state_lock.mem_graph_buffer);
-        }
+        let stats_y_start = y;
+        font::draw_string(fb, x, y, "System Statistics", 0x00_FF_FF_FF, Some(dirty_rect));
+        y += font_height as isize + 8;
 
         let total_mem = crate::kernel::TOTAL_MEMORY.load(Ordering::Relaxed) / 1024 / 1024;
-        let mem_scale_max = if total_mem > 0 { total_mem } else { 128 };
-        let last_mem = state_lock.mem_history.last().copied().unwrap_or(0);
-        font::draw_string(fb, x + 5, y + 5, &format!("{} / {} MB", last_mem, mem_scale_max), 0x00_FFFFFF, Some(dirty_rect));
+        let used_mem = ALLOCATOR.lock().used() / 1024 / 1024;
+        let cpu_usage = crate::kernel::cpu::CPU_USAGE.load(Ordering::Relaxed);
+        let cpu_temp = crate::kernel::cpu::CPU_TEMP.load(Ordering::Relaxed);
 
-        // --- Draw CPU Graph ---
-        y += graph_height as isize + 15;
-        if y + graph_height as isize + 20 < win.y + win.height as isize {
-            font::draw_string(fb, x, y, "CPU Usage (%)", 0x00_FF_FF_FF, Some(dirty_rect));
-            y += font_height as isize + 2;
+        font::draw_string(fb, x, y, &format!("Mem: {} / {} MB", used_mem, total_mem), 0x00_E1_E1_E1, Some(dirty_rect));
+        y += font_height as isize + 4;
+        font::draw_string(fb, x, y, &format!("CPU: {}%", cpu_usage), 0x00_E1_E1_E1, Some(dirty_rect));
+        y += font_height as isize + 4;
+        font::draw_string(fb, x, y, &format!("Temp: {} C", cpu_temp), 0x00_AA_FF_AA, Some(dirty_rect));
 
-            // CPU Graph Blit
-            if !state_lock.cpu_graph_buffer.is_empty() && dirty_rect.intersects(&Rect { x, y, width: graph_width, height: graph_height }) {
-                fb.draw_bitmap(x, y, graph_width, graph_height, &state_lock.cpu_graph_buffer);
-            }
+        // --- Vertical Progress Bars ---
+        let bar_h = 70;
+        let bar_w = 34; // Increased width to fit percentage text
+        let bars_x = win.x + win.width as isize - 90;
+        let bars_y = stats_y_start + font_height as isize + 8;
 
-            let last_cpu = state_lock.cpu_history.last().copied().unwrap_or(0);
-            font::draw_string(fb, x + 5, y + 5, &format!("{} %", last_cpu), 0x00_FFFFFF, Some(dirty_rect));
-        }
+        // CPU Usage Bar
+        let cpu_color = if cpu_usage > 80 { 0x00_FF_44_44 } else if cpu_usage > 50 { 0x00_FF_CC_00 } else { 0x00_00_CC_66 };
+        let mut cpu_bar = ProgressBar::new(bars_x, bars_y, bar_w, bar_h, cpu_usage, cpu_color);
+        cpu_bar.text = true;
+        cpu_bar.draw(fb, Some(dirty_rect));
+        font::draw_char(fb, bars_x + (bar_w as isize / 2) - 4, bars_y + bar_h as isize + 2, 'C', 0x00_80_80_80, Some(dirty_rect));
+
+        // Temperature Bar
+        let temp_x = bars_x + 40;
+        let temp_color = if cpu_temp > 75 { 0x00_FF_66_00 } else if cpu_temp > 45 { 0x00_FF_CC_00 } else { 0x00_00_AA_FF };
+        let mut temp_bar = ProgressBar::new(temp_x, bars_y, bar_w, bar_h, cpu_temp, temp_color);
+        temp_bar.text = true;
+        temp_bar.draw(fb, Some(dirty_rect));
+        font::draw_char(fb, temp_x + (bar_w as isize / 2) - 4, bars_y + bar_h as isize + 2, 'T', 0x00_80_80_80, Some(dirty_rect));
     }
 
     fn handle_event(&mut self, event: &AppEvent, win: &Window) -> Option<Rect> {
@@ -116,64 +113,6 @@ impl App for TaskManager {
                     state.task_snapshot.push((task.id, status));
                 }
                 drop(scheduler);
-
-                let used_bytes = ALLOCATOR.lock().used();
-                state.mem_history.push(used_bytes / 1024 / 1024);
-                let cpu_usage = crate::kernel::cpu::CPU_USAGE.load(Ordering::Relaxed);
-                state.cpu_history.push(cpu_usage as usize);
-
-                let graph_width = if win.width > 20 { win.width - 20 } else { 10 };
-                let max_points = graph_width / 4;
-                if state.mem_history.len() > max_points { state.mem_history.remove(0); }
-                if state.cpu_history.len() > max_points { state.cpu_history.remove(0); }
-
-                // --- Internal Redraw: Update Graph Buffers ---
-                let graph_height = 100;
-                let buf_size = graph_width * graph_height;
-                
-                // Update Memory Graph
-                state.mem_graph_buffer.resize(buf_size, 0);
-                state.mem_graph_buffer.fill(0xFF_12_12_12);
-                let total_mem = crate::kernel::TOTAL_MEMORY.load(Ordering::Relaxed) / 1024 / 1024;
-                let mem_scale_max = if total_mem > 0 { total_mem } else { 128 };
-
-                let mem_vals = state.mem_history.clone();
-                for (i, &val) in mem_vals.iter().enumerate() {
-                    let bar_h = (val * graph_height) / mem_scale_max;
-                    let bar_x = i * 4;
-                    if bar_x + 3 < graph_width {
-                        let start_y = graph_height.saturating_sub(bar_h);
-                        for by in start_y..graph_height {
-                            for bx in 0..3 {
-                                state.mem_graph_buffer[by * graph_width + (bar_x + bx)] = 0xFF_00_7A_CC;
-                            }
-                        }
-                    }
-                }
-
-                // Update CPU Graph
-                state.cpu_graph_buffer.resize(buf_size, 0);
-                state.cpu_graph_buffer.fill(0xFF_12_12_12);
-
-                let cpu_vals = state.cpu_history.clone();
-                for (i, &val) in cpu_vals.iter().enumerate() {
-                    let safe_val = val.min(100);
-                    let bar_h = (safe_val * graph_height) / 100;
-                    let bar_x = i * 4;
-                    let color = if safe_val < 50 { 0xFF_00_AA_00 } 
-                               else if safe_val < 80 { 0xFF_AA_AA_00 } 
-                               else { 0xFF_AA_00_00 };
-
-                    if bar_x + 3 < graph_width {
-                        let start_y = graph_height.saturating_sub(bar_h);
-                        for by in start_y..graph_height {
-                            for bx in 0..3 {
-                                state.cpu_graph_buffer[by * graph_width + (bar_x + bx)] = color;
-                            }
-                        }
-                    }
-                }
-
                 state.dirty = false;
                 return Some(win.rect());
             }

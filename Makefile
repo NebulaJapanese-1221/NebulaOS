@@ -19,7 +19,7 @@ iso: build
 	rm -r isofiles
 
 run: iso
-	qemu-system-i386 -cdrom nebula_os.iso -serial stdio
+	qemu-system-i386 -cdrom nebula_os.iso -m 1024 -cpu max -accel kvm -accel tcg -serial stdio
 
 clean:
 	cargo clean

@@ -1,13 +1,15 @@
 use super::io;
 use core::{mem::size_of, slice};
 use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
-use alloc::vec::Vec;
 
 static EC_PRESENT: AtomicBool = AtomicBool::new(false);
 static PM1A_CNT_BLK: AtomicU32 = AtomicU32::new(0);
 static SHUTDOWN_CMD: AtomicU16 = AtomicU16::new(0);
 static BATTERY_BST_PTR: AtomicU32 = AtomicU32::new(0);
 static BATTERY_BIF_PTR: AtomicU32 = AtomicU32::new(0);
+static THERMAL_TMP_PTR: AtomicU32 = AtomicU32::new(0);
+static DSDT_PTR: AtomicU32 = AtomicU32::new(0);
+static DSDT_LEN: AtomicU32 = AtomicU32::new(0);
 
 static EC_REG_BACKLIGHT: AtomicU16 = AtomicU16::new(0);
 static EC_REG_BATTERY_STATUS: AtomicU16 = AtomicU16::new(0);
@@ -177,6 +179,37 @@ impl<'a> AmlStream<'a> {
     fn read_name(&mut self) -> Option<[u8; 4]> {
         Some([self.read_u8()?, self.read_u8()?, self.read_u8()?, self.read_u8()?])
     }
+
+    /// Parses a full NameString and returns the final 4-character NameSeg.
+    /// This handles root prefixes, parent prefixes, and multi-part paths.
+    fn parse_name_string(&mut self) -> Option<[u8; 4]> {
+        let mut b = self.peek_u8()?;
+        if b == b'\\' { // Root prefix
+            self.read_u8();
+            b = self.peek_u8()?;
+        }
+        while b == b'^' { // Parent prefix
+            self.read_u8();
+            b = self.peek_u8()?;
+        }
+
+        match b {
+            0x00 => { self.read_u8(); None } // NullName
+            0x2E => { // DualNamePrefix
+                self.read_u8();
+                self.read_name(); // Skip first segment
+                self.read_name()   // Return second segment
+            }
+            0x2F => { // MultiNamePrefix
+                self.read_u8();
+                let count = self.read_u8()? as usize;
+                let mut last = [0u8; 4];
+                for _ in 0..count { last = self.read_name()?; }
+                Some(last)
+            }
+            _ => self.read_name(), // Single NameSeg
+        }
+    }
 }
 
 /// Searches the DSDT for a specific AML object name.
@@ -258,12 +291,17 @@ pub fn init() {
             PM1A_CNT_BLK.store(pm1a_cnt_port as u32, Ordering::Relaxed);
             SHUTDOWN_CMD.store(shutdown_val, Ordering::Relaxed);
 
+            // Cache DSDT for efficient periodic updates
+            DSDT_PTR.store(dsdt_ptr as u32, Ordering::Relaxed);
+            DSDT_LEN.store(dsdt_len as u32, Ordering::Relaxed);
+
             // Use the DSDT pointer found in the FADT to detect power devices
                 let dsdt_data = unsafe { slice::from_raw_parts(dsdt_ptr as *const u8, dsdt_len) };
                 crate::drivers::ec::init(); // Initialize EC driver
                 detect_ec(dsdt_data);
                 discover_ec_offsets(dsdt_data);
             detect_battery(dsdt_data);
+            detect_thermal(dsdt_data);
         }
 
         // Parse MADT for core count
@@ -293,7 +331,7 @@ fn discover_ec_offsets(dsdt_data: &[u8]) {
     while stream.offset < dsdt_data.len() - 10 {
         if stream.read_u8() == Some(AML_EXT_OP_PREFIX) && stream.peek_u8() == Some(AML_OP_REGION_OP) {
             stream.read_u8(); // Consume OpRegion opcode
-            let name = stream.read_name();
+            let name = stream.parse_name_string();
             let region_space = stream.read_u8();
             if region_space == Some(0x03) { // 0x03 = EmbeddedControl
                 ec_region_name = name;
@@ -310,7 +348,7 @@ fn discover_ec_offsets(dsdt_data: &[u8]) {
         if stream.read_u8() == Some(AML_EXT_OP_PREFIX) && stream.peek_u8() == Some(AML_FIELD_OP) {
             stream.read_u8(); // Consume FieldOp
             let _pkg_len = stream.skip_pkg_length();
-            let target_name = stream.read_name();
+            let target_name = stream.parse_name_string();
             
             if target_name == Some(region_name) {
                 stream.read_u8(); // AccessType
@@ -375,14 +413,24 @@ fn detect_battery(dsdt_data: &[u8]) {
             crate::serial_println!("[ACPI] _BIF method found at offset {:#x}", search_start + bif_offset as usize);
         }
 
-        // Initial update with dummy values until _BIF is evaluated
-        crate::drivers::battery::BATTERY.lock().update_status(0, false, None, None, None);
+        // Only notify the driver if at least the status method was found
+        if BATTERY_BST_PTR.load(Ordering::Relaxed) != 0 {
+            crate::drivers::battery::BATTERY.lock().update_status(0, false, None, None, None);
+        }
+    }
+}
+
+fn detect_thermal(dsdt_data: &[u8]) {
+    // Search for _TMP (Temperature) method or object
+    if let Some(tmp_offset) = find_aml_object_bytecode(dsdt_data, b"_TMP") {
+        THERMAL_TMP_PTR.store(tmp_offset, Ordering::Relaxed);
+        crate::serial_println!("[ACPI] Thermal monitoring (_TMP) found at offset {:#x}", tmp_offset);
     }
 }
 
 /// Evaluates a simple AML method that returns a Package of integers.
-/// Returns a Vec of u64 integers if successful.
-fn evaluate_aml_method(method_bytecode_ptr: u32, dsdt_data: &[u8]) -> Option<Vec<u64>> {
+/// Writes results into `out_buffer` and returns the number of elements parsed.
+fn evaluate_aml_method(method_bytecode_ptr: u32, dsdt_data: &[u8], out_buffer: &mut [u64]) -> Option<usize> {
     if method_bytecode_ptr == 0 { return None; }
 
     let method_offset = method_bytecode_ptr as usize;
@@ -390,32 +438,65 @@ fn evaluate_aml_method(method_bytecode_ptr: u32, dsdt_data: &[u8]) -> Option<Vec
 
     let mut stream = AmlStream::new(dsdt_data, method_offset);
 
-    // Skip the method name (e.g., "_BST")
-    stream.offset += 4;
+    // Robustly skip the NameString
+    stream.parse_name_string()?;
 
     // Skip MethodOp and PkgLength, NumArgs
     if stream.read_u8()? != AML_METHOD_OP { return None; }
-    stream.skip_pkg_length()?;
+    let pkg_start = stream.offset;
+    let pkg_len = stream.skip_pkg_length()?;
+    let scope_end = (pkg_start + pkg_len).min(dsdt_data.len());
     stream.read_u8()?; // NumArgs
 
-    // Look for ReturnOp (0xA4) followed by PackageOp (0x12)
-    while stream.offset < dsdt_data.len() {
+    // Look for ReturnOp (0xA4) followed by PackageOp (0x12) within the method scope
+    while stream.offset < scope_end {
         if stream.read_u8()? == AML_RETURN_OP {
             if stream.read_u8()? == AML_PACKAGE_OP {
                 stream.skip_pkg_length()?; // Skip package length
-                let num_elements = stream.read_u8()?;
-                let mut result = Vec::with_capacity(num_elements as usize);
-                for _ in 0..num_elements {
+                let num_elements = stream.read_u8()? as usize;
+                let to_parse = num_elements.min(out_buffer.len());
+                for i in 0..to_parse {
                     // Only parse as long as we find valid integers. 
                     // This allows us to skip trailing strings in _BIF.
                     if let Some(val) = stream.parse_integer() {
-                        result.push(val);
+                        out_buffer[i] = val;
                     } else {
-                        break;
+                        return Some(i);
                     }
                 }
-                return Some(result);
+                return Some(to_parse);
             }
+        }
+    }
+    None
+}
+
+/// Evaluates an AML method that returns a single integer.
+fn evaluate_aml_integer_method(method_bytecode_ptr: u32, dsdt_data: &[u8]) -> Option<u64> {
+    if method_bytecode_ptr == 0 { return None; }
+    let method_offset = method_bytecode_ptr as usize;
+    if method_offset >= dsdt_data.len() { return None; }
+
+    let mut stream = AmlStream::new(dsdt_data, method_offset);
+    
+    stream.parse_name_string()?; // Skip name
+
+    // If it's a Name object instead of a Method, it might just be the integer prefix
+    if let Some(prefix) = stream.peek_u8() {
+        if prefix == AML_BYTE_PREFIX || prefix == AML_WORD_PREFIX || prefix == AML_DWORD_PREFIX || prefix == AML_ZERO_OP || prefix == AML_ONE_OP {
+            return stream.parse_integer();
+        }
+    }
+
+    if stream.read_u8()? != AML_METHOD_OP { return None; }
+    let pkg_start = stream.offset;
+    let pkg_len = stream.skip_pkg_length()?;
+    let scope_end = (pkg_start + pkg_len).min(dsdt_data.len());
+    stream.read_u8()?; // NumArgs
+
+    while stream.offset < scope_end {
+        if stream.read_u8()? == AML_RETURN_OP {
+            return stream.parse_integer();
         }
     }
     None
@@ -425,54 +506,58 @@ fn evaluate_aml_method(method_bytecode_ptr: u32, dsdt_data: &[u8]) -> Option<Vec
 pub fn update_power_status() {
     let bst_ptr = BATTERY_BST_PTR.load(Ordering::Relaxed);
     let bif_ptr = BATTERY_BIF_PTR.load(Ordering::Relaxed);
+    let tmp_ptr = THERMAL_TMP_PTR.load(Ordering::Relaxed);
+    let dsdt_addr = DSDT_PTR.load(Ordering::Relaxed);
+    let dsdt_len = DSDT_LEN.load(Ordering::Relaxed);
 
-    if bst_ptr == 0 { return; } // No battery detected or _BST not found
+    // DSDT not cached yet or no power-related devices were discovered
+    if dsdt_addr == 0 || (bst_ptr == 0 && bif_ptr == 0 && tmp_ptr == 0) {
+        return;
+    }
 
-    let dsdt_ptr = unsafe {
-        let rsdp = match find_rsdp() {
-            Some(r) => r,
-            None => return,
-        };
-        let rsdt_ptr = core::ptr::addr_of!((*rsdp).rsdt_address).read_unaligned() as *const SdtHeader;
-        let fadt_ptr = match find_sdt_in_rsdt(rsdt_ptr, b"FACP") {
-            Some(f) => f,
-            None => return,
-        };
-        core::ptr::addr_of!((*fadt_ptr.cast::<Fadt>()).dsdt).read_unaligned() as *const SdtHeader
-    };
-    if dsdt_ptr.is_null() { return; }
-
-    let dsdt_len = unsafe { core::ptr::addr_of!((*dsdt_ptr).length).read_unaligned() as usize };
-    let dsdt_data = unsafe { slice::from_raw_parts(dsdt_ptr as *const u8, dsdt_len) };
+    let dsdt_data = unsafe { slice::from_raw_parts(dsdt_addr as *const u8, dsdt_len as usize) };
 
     // 1. Evaluate _BIF (Battery Information) if not already done or if needed
     let mut design_capacity: Option<u32> = None;
     let mut full_charge_capacity: Option<u32> = None;
     let mut cycle_count: Option<u32> = None;
 
+    let mut aml_buffer = [0u64; 16]; // Fixed-size stack buffer to avoid heap allocations
+
     if bif_ptr != 0 {
-        if let Some(bif_data) = evaluate_aml_method(bif_ptr, dsdt_data) {
-            if bif_data.len() >= 2 {
-                design_capacity = Some(bif_data[1] as u32);
+        if let Some(count) = evaluate_aml_method(bif_ptr, dsdt_data, &mut aml_buffer) {
+            if count >= 2 {
+                design_capacity = Some(aml_buffer[1] as u32);
             }
-            if bif_data.len() >= 3 {
-                full_charge_capacity = Some(bif_data[2] as u32);
+            if count >= 3 {
+                full_charge_capacity = Some(aml_buffer[2] as u32);
             }
             // Some implementations append Cycle Count to _BIF, or this may be a _BIX package
-            if bif_data.len() >= 9 {
-                cycle_count = Some(bif_data[8] as u32);
+            if count >= 9 {
+                cycle_count = Some(aml_buffer[8] as u32);
             }
         }
     }
 
     // 2. Evaluate _BST (Battery Status)
-    if let Some(bst_data) = evaluate_aml_method(bst_ptr, dsdt_data) {
-        if bst_data.len() >= 4 {
-            let state_flags = bst_data[0] as u32;
-            let remaining_capacity = bst_data[2] as u32; // mWh
-            
-            let is_charging = (state_flags & 0x02) != 0;
-            crate::drivers::battery::BATTERY.lock().update_status(remaining_capacity, is_charging, design_capacity, full_charge_capacity, cycle_count);
+    if bst_ptr != 0 {
+        if let Some(count) = evaluate_aml_method(bst_ptr, dsdt_data, &mut aml_buffer) {
+            if count >= 4 {
+                let state_flags = aml_buffer[0] as u32;
+                let remaining_capacity = aml_buffer[2] as u32; // mWh
+                
+                let is_charging = (state_flags & 0x02) != 0;
+                crate::drivers::battery::BATTERY.lock().update_status(remaining_capacity, is_charging, design_capacity, full_charge_capacity, cycle_count);
+            }
+        }
+    }
+
+    // 3. Evaluate Temperature
+    if tmp_ptr != 0 {
+        if let Some(decikelvins) = evaluate_aml_integer_method(tmp_ptr, dsdt_data) {
+            // Decikelvins to Celsius: (K / 10) - 273.15
+            let celsius = (decikelvins as i64 / 10) - 273;
+            crate::kernel::cpu::CPU_TEMP.store(celsius.max(0) as usize, Ordering::Relaxed);
         }
     }
 }

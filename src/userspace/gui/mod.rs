@@ -1,6 +1,4 @@
 //! GUI components for NebulaOS.
-//! NOTE: This module is currently being refactored to support a graphical framebuffer
-//! instead of the old text-mode VGA buffer. The drawing logic is temporarily disabled.
 
 use crate::drivers::mouse;
 use crate::drivers::framebuffer::{self, FRAMEBUFFER};
@@ -8,14 +6,15 @@ use crate::drivers::rtc::{self, CURRENT_DATETIME, TIME_NEEDS_UPDATE};
 use crate::drivers::keyboard;
 use alloc::vec::Vec;
 use alloc::string::ToString;
-use alloc::format;
-use crate::userspace::apps::{app::{App, AppEvent}, calculator::Calculator, editor::TextEditor, paint::Paint, settings::Settings, terminal::Terminal, task_manager::TaskManager};
+use alloc::{format, vec};
+use crate::userspace::apps::{app::{App, AppEvent}, calculator::Calculator, editor::TextEditor, paint::Paint, settings::Settings, terminal::Terminal, task_manager::TaskManager, nebula_browser::NebulaBrowser};
 use spin::Mutex;
 use alloc::boxed::Box;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 pub mod rect;
 use self::rect::Rect;
 pub mod button;
+pub mod progress_bar;
 use self::button::Button;
 use crate::userspace::localisation;
 use crate::userspace::localisation::Localisation;
@@ -29,6 +28,7 @@ pub const TOP_BAR_HEIGHT: usize = 32; // Slightly taller for better readability
 pub static DESKTOP_GRADIENT_START: AtomicU32 = AtomicU32::new(0x00_0F_11_1A); // Deep Navy
 pub static DESKTOP_GRADIENT_END: AtomicU32 = AtomicU32::new(0x00_24_3B_55);   // Nebula Blue
 pub static FULL_REDRAW_REQUESTED: AtomicBool = AtomicBool::new(false);
+pub static SHOW_WALLPAPER_GRADIENT: AtomicBool = AtomicBool::new(true);
 pub static HIGH_CONTRAST: AtomicBool = AtomicBool::new(false);
 pub static LARGE_TEXT: AtomicBool = AtomicBool::new(false);
 pub static MOUSE_SENSITIVITY: AtomicU32 = AtomicU32::new(10); // 1.0x scale
@@ -59,6 +59,26 @@ pub enum WindowContent {
     App(Box<dyn App>),
     None,
 } 
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MenuAction {
+    TextEditor,
+    Calculator,
+    Paint,
+    Settings,
+    Terminal,
+    TaskManager,
+    Browser,
+    Reboot,
+    Shutdown,
+}
+
+struct MenuEntry {
+    label: alloc::string::String,
+    y: isize,
+    color: u32,
+    action: MenuAction,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CursorStyle {
@@ -208,6 +228,7 @@ pub struct WindowManager {
     tooltip: Option<(alloc::string::String, isize, isize)>,
     menu_anim_progress: usize, // 0 to 100
     menu_anim_target: usize,   // 0 or 100
+    last_grad_hash: u32,
 }
 
 impl WindowManager {
@@ -238,6 +259,7 @@ impl WindowManager {
             tooltip: None,
             menu_anim_progress: 0,
             menu_anim_target: 0,
+            last_grad_hash: 0,
         }
     }
 
@@ -253,6 +275,69 @@ impl WindowManager {
 
     fn mark_dirty(&mut self, rect: Rect) {
         self.dirty_rects.push(rect);
+    }
+
+    fn get_menu_items(&self, l: &dyn Localisation) -> Vec<MenuEntry> {
+        let menu_height = 385;
+        vec![
+            MenuEntry { label: l.app_text_editor().into(), y: 15, color: 0x00_C0_C0_C0, action: MenuAction::TextEditor },
+            MenuEntry { label: l.app_calculator().into(), y: 55, color: 0x00_C0_C0_C0, action: MenuAction::Calculator },
+            MenuEntry { label: l.app_paint().into(), y: 95, color: 0x00_C0_C0_C0, action: MenuAction::Paint },
+            MenuEntry { label: l.app_settings().into(), y: 135, color: 0x00_C0_C0_C0, action: MenuAction::Settings },
+            MenuEntry { label: l.app_terminal().into(), y: 175, color: 0x00_C0_C0_C0, action: MenuAction::Terminal },
+            MenuEntry { label: alloc::string::String::from("Task Manager"), y: 215, color: 0x00_C0_C0_C0, action: MenuAction::TaskManager },
+            MenuEntry { label: alloc::string::String::from("NebulaBrowser"), y: 255, color: 0x00_C0_C0_C0, action: MenuAction::Browser },
+            MenuEntry { label: l.btn_reboot().into(), y: menu_height - 85, color: 0x00_FF_A0_40, action: MenuAction::Reboot },
+            MenuEntry { label: l.btn_shutdown().into(), y: menu_height - 45, color: 0x00_FF_60_60, action: MenuAction::Shutdown },
+        ]
+    }
+
+    fn draw_wallpaper(&self, fb: &mut framebuffer::Framebuffer, dirty_rect: Rect, screen_width: isize, screen_height: isize) {
+        let screen_rect = Rect { x: 0, y: 0, width: screen_width as usize, height: screen_height as usize };
+        if !dirty_rect.intersects(&screen_rect) {
+            return;
+        }
+
+        let r = dirty_rect.intersection(&screen_rect).unwrap();
+        let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
+        
+        // 1. Draw Gradient/Solid Background
+        for y in r.y..(r.y + r.height as isize) {
+            let color = if high_contrast { 0 } else { self.gradient_cache[y as usize] };
+            if let Some(buf) = fb.draw_buffer.as_mut() {
+                let offset = (y as usize * screen_width as usize) + r.x as usize;
+                buf[offset..offset + r.width].fill(color);
+            }
+        }
+
+        let ver_str = format!("NebulaOS v{}", crate::kernel::VERSION);
+
+        // 2. Draw "Under Construction" banner with diagonal stripes
+        let banner_text = "NebulaOS is Under Construction.";
+        let banner_w = font::string_width(banner_text);
+        let banner_x = (screen_width - banner_w as isize) / 2;
+        let banner_y = (screen_height / 2) as isize;
+        let (tape_x, tape_w, tape_h) = (banner_x - 20, banner_w + 40, 10usize);
+        
+        let top_y = banner_y - 18;
+        draw_rect(fb, tape_x, top_y, tape_w, tape_h, 0x00_FF_CC_00, Some(dirty_rect));
+        for i in (0..(tape_w as isize + tape_h as isize)).step_by(20) {
+            for dy in 0..tape_h as isize {
+                draw_rect(fb, tape_x + i - dy, top_y + dy, 10, 1, 0, Some(dirty_rect));
+            }
+        }
+
+        font::draw_string(fb, banner_x, banner_y, banner_text, 0x00_FF_CC_00, Some(dirty_rect));
+
+        let bot_y = banner_y + 22;
+        draw_rect(fb, tape_x, bot_y, tape_w, tape_h, 0x00_FF_CC_00, Some(dirty_rect));
+        for i in (0..(tape_w as isize + tape_h as isize)).step_by(20) {
+            for dy in 0..tape_h as isize {
+                draw_rect(fb, tape_x + i - dy, bot_y + dy, 10, 1, 0, Some(dirty_rect));
+            }
+        }
+
+        font::draw_string(fb, screen_width - font::string_width(&ver_str) as isize - 10, screen_height - 60, &ver_str, 0x00_70_70_70, Some(dirty_rect));
     }
 
     fn mark_dirty_outline(&mut self, rect: Rect) {
@@ -299,22 +384,17 @@ impl WindowManager {
 
         // Handle Start Menu animation (Slide effect)
         if self.menu_anim_progress != self.menu_anim_target {
-            let menu_h = 345;
-            let start_y = TOP_BAR_HEIGHT as isize;
-            // Calculate position before update to track what needs cleaning
-            let old_y = start_y - (menu_h as isize * (100 - self.menu_anim_progress) as isize / 100);
-
-            if self.menu_anim_progress < self.menu_anim_target {
-                self.menu_anim_progress = (self.menu_anim_progress + 25).min(self.menu_anim_target);
-            } else {
-                self.menu_anim_progress = self.menu_anim_progress.saturating_sub(25).max(self.menu_anim_target);
-            }
+            // Disable animation: Jump instantly to target state
+            let old_progress = self.menu_anim_progress;
+            self.menu_anim_progress = self.menu_anim_target;
             self.start_menu_open = self.menu_anim_progress > 0;
 
-            let new_y = start_y - (menu_h as isize * (100 - self.menu_anim_progress) as isize / 100);
-            let r1 = Rect { x: 0, y: old_y, width: 210, height: menu_h };
-            let r2 = Rect { x: 0, y: new_y, width: 210, height: menu_h };
-            self.mark_dirty(r1.union(&r2));
+            if old_progress != self.menu_anim_progress {
+                let menu_h = 385;
+                let start_y = TOP_BAR_HEIGHT as isize;
+                let r = Rect { x: 0, y: start_y, width: 210, height: menu_h };
+                self.mark_dirty(r);
+            }
         }
 
         // Check for brightness changes (to trigger OSD popup)
@@ -863,17 +943,23 @@ impl WindowManager {
 
             } else if self.menu_anim_progress == 100 && self.input.mouse_x < 200 && self.input.mouse_y >= TOP_BAR_HEIGHT as isize {
                 // --- Nebula Menu Item Click Logic ---
-                // Optimization: Use coordinate math to detect clicks instead of allocating 
-                // multiple Button and String objects, which prevents system crashes/hangs.
                 let menu_y = TOP_BAR_HEIGHT as isize;
                 let rel_y = self.input.mouse_y - menu_y;
-                let item_idx = if rel_y >= 15 && rel_y < 245 && (rel_y - 15) % 40 < 30 {
-                    Some((rel_y - 15) / 40)
-                } else { None };
+                
+                self.mark_dirty(Rect { x: 0, y: menu_y, width: 200, height: 385 });
 
-                self.mark_dirty(Rect { x: 0, y: menu_y, width: 200, height: 350 });
+                let items = self.get_menu_items(locale.as_ref());
+                let mut clicked_action = None;
+                for item in items {
+                    if self.input.mouse_x >= 10 && self.input.mouse_x < 190 && rel_y >= item.y && rel_y < item.y + 30 {
+                        clicked_action = Some(item.action);
+                        break;
+                    }
+                }
 
-                if item_idx == Some(3) { // Settings
+                if let Some(action) = clicked_action {
+                    match action {
+                        MenuAction::Settings => {
                     let settings_open = self.windows.iter().any(|w| w.title == locale.app_settings());
                     if !settings_open {
                         self.add_window(Window {
@@ -884,10 +970,17 @@ impl WindowManager {
                             minimized: false, maximized: false, restore_rect: None,
                         });
                     }
-                }
-                self.menu_anim_target = 0; // Trigger slide-up after click
-                
-                if item_idx == Some(5) { // Task Manager
+                        }
+                        MenuAction::Browser => {
+                            self.add_window(Window {
+                                id: 0, x: 80, y: 80, width: 600, height: 400,
+                                color: 0x00_2D_2D_30,
+                                title: "NebulaBrowser",
+                                content: WindowContent::App(Box::new(NebulaBrowser::new())),
+                                minimized: false, maximized: false, restore_rect: None,
+                            });
+                        }
+                        MenuAction::TaskManager => {
                     self.add_window(Window {
                         id: 0, x: 150, y: 150, width: 300, height: 400,
                         color: 0x00_00_40_40,
@@ -895,9 +988,8 @@ impl WindowManager {
                         content: WindowContent::App(Box::new(TaskManager::new())),
                         minimized: false, maximized: false, restore_rect: None,
                     });
-                }
-
-                if item_idx == Some(4) { // Terminal
+                        }
+                        MenuAction::Terminal => {
                     self.add_window(Window {
                         id: 0, x: 100, y: 100, width: 480, height: 320,
                         color: 0x00_1E_1E_1E,
@@ -905,17 +997,8 @@ impl WindowManager {
                         content: WindowContent::App(Box::new(Terminal::new())),
                         minimized: false, maximized: false, restore_rect: None,
                     });
-                }
-
-                if rel_y >= 300 && rel_y < 330 { // Shutdown
-                    crate::kernel::power::shutdown();
-                }
-
-                if rel_y >= 260 && rel_y < 290 { // Reboot
-                    crate::kernel::power::reboot();
-                }
-
-                if item_idx == Some(1) { // Calculator
+                        }
+                        MenuAction::Calculator => {
                     self.add_window(Window {
                         id: 0, x: 50, y: 350, width: 200, height: 220,
                         color: 0x00_20_20_20,
@@ -923,9 +1006,8 @@ impl WindowManager {
                         content: WindowContent::App(Box::new(Calculator::new())),
                         minimized: false, maximized: false, restore_rect: None,
                     });
-                }
-
-                if item_idx == Some(2) { // Paint
+                        }
+                        MenuAction::Paint => {
                     self.add_window(Window {
                         id: 0, x: 180, y: 100, width: 400, height: 300,
                         color: 0x00_20_20_20,
@@ -933,16 +1015,20 @@ impl WindowManager {
                         content: WindowContent::App(Box::new(Paint::new())),
                         minimized: false, maximized: false, restore_rect: None,
                     });
-                }
-
-                if item_idx == Some(0) { // Text Editor
+                        }
+                        MenuAction::TextEditor => {
                     self.add_window(Window {
                         id: 0, x: 150, y: 150, width: 400, height: 300,
-                        color: 0x00_1E_1E_1E, // Very dark gray
+                        color: 0x00_1E_1E_1E,
                         title: locale.app_text_editor(),
                         content: WindowContent::App(Box::new(TextEditor::new())),
                         minimized: false, maximized: false, restore_rect: None,
                     });
+                        }
+                        MenuAction::Reboot => { crate::kernel::power::reboot(); }
+                        MenuAction::Shutdown => { crate::kernel::power::shutdown(); }
+                    }
+                    self.menu_anim_target = 0; // Trigger slide-up after selection
                 }
             } else {
                 // 2. Not a start button or menu click. Check for window interaction.
@@ -1164,6 +1250,21 @@ impl WindowManager {
             final_rects.push(current);
         }
 
+        // Second pass: Proximity merging to prevent "death by a thousand cuts" 
+        // especially in QEMU where each draw call has high overhead.
+        if final_rects.len() > 5 {
+            let mut merged_rects: Vec<Rect> = Vec::new();
+            while let Some(mut r) = final_rects.pop() {
+                let mut i = 0;
+                while i < final_rects.len() {
+                    if r.inflate(10).intersects(&final_rects[i]) { r = r.union(&final_rects.remove(i)); } 
+                    else { i += 1; }
+                }
+                merged_rects.push(r);
+            }
+            final_rects = merged_rects;
+        }
+
         // Acquire screen info to set up local buffer
         let fb_info = if let Some(info) = FRAMEBUFFER.lock().info.as_ref() {
             // Manually clone the info since FramebufferInfo doesn't derive Clone
@@ -1184,14 +1285,18 @@ impl WindowManager {
             self.backbuffer.resize(buffer_size, 0);
         }
 
-        // Ensure gradient cache is initialized (Fixes crash if draw_dirty is called before update)
-        if self.gradient_cache.len() != fb_info.height {
+        // Optimized Gradient: Only update cache when screen size or colors change
+        let g_start = DESKTOP_GRADIENT_START.load(Ordering::Relaxed);
+        let g_end = DESKTOP_GRADIENT_END.load(Ordering::Relaxed);
+        let g_mode = SHOW_WALLPAPER_GRADIENT.load(Ordering::Relaxed);
+        let g_hash = g_start ^ g_end ^ (g_mode as u32);
+
+        if self.gradient_cache.len() != fb_info.height || self.last_grad_hash != g_hash {
             self.gradient_cache.resize(fb_info.height, 0);
-            let start_c = DESKTOP_GRADIENT_START.load(Ordering::Relaxed);
-            let end_c = DESKTOP_GRADIENT_END.load(Ordering::Relaxed);
             for y in 0..fb_info.height {
-                self.gradient_cache[y] = self.interpolate_gradient(start_c, end_c, y as isize, fb_info.height as isize);
+                self.gradient_cache[y] = if g_mode { self.interpolate_gradient(g_start, g_end, y as isize, fb_info.height as isize) } else { g_start };
             }
+            self.last_grad_hash = g_hash;
         }
 
         // Create a temporary Framebuffer wrapping our local backbuffer.
@@ -1204,7 +1309,6 @@ impl WindowManager {
         // STEP 1: Draw everything to the local backbuffer.
         // No VRAM writes happen here, so no flickering can occur.
         let (screen_width, screen_height) = if let Some(info) = &local_fb.info { (info.width as isize, info.height as isize) } else { (0, 0) };
-        let screen_rect = Rect { x: 0, y: 0, width: screen_width as usize, height: screen_height as usize };
 
         // Performance optimization: Cache shared UI context once per frame 
         // to avoid redundant mutex locking and string formatting inside the hot dirty-rect loop.
@@ -1220,35 +1324,14 @@ impl WindowManager {
         let taskbar_rect = Rect { x: 0, y: screen_height - 40, width: screen_width as usize, height: 40 };
 
         for dirty_rect in &final_rects {
-            // Occlusion Culling: If a maximized window is on top, don't draw the background.
-            let background_occluded = self.windows.iter()
-                .rev()
-                .any(|w| w.maximized && !w.minimized && w.rect().intersects(dirty_rect));
-
-            if !background_occluded && dirty_rect.intersects(&screen_rect) {
-                let r = dirty_rect.intersection(&screen_rect).unwrap();
-                let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
-                
-                // Optimized Gradient: Pre-calculate colors per scanline
-                for y in r.y..(r.y + r.height as isize) {
-                    let color = if high_contrast { 0 } else { self.gradient_cache[y as usize] };
-                    if let Some(buf) = local_fb.draw_buffer.as_mut() {
-                        let offset = (y as usize * screen_width as usize) + r.x as usize;
-                        buf[offset..offset + r.width].fill(color);
-                    }
-                }
-            }
+            // 1. Desktop Wallpaper and Decorative Elements
+            self.draw_wallpaper(&mut local_fb, *dirty_rect, screen_width, screen_height);
 
             // 2. Draw Windows with subtle shadows
             for &win_id in &self.z_order {
                 if let Some(win) = self.windows.iter().find(|w| w.id == win_id) {
                     if win.minimized { continue; }
                     let win_rect = win.rect();
-                    
-                    // Draw simple 1px shadow for "Advanced" look
-                    if !win.maximized && dirty_rect.intersects(&Rect { x: win.x + 2, y: win.y + 2, width: win.width, height: win.height }) {
-                        draw_rect(&mut local_fb, win.x + 2, win.y + 2, win.width, win.height, 0x00_101010, Some(*dirty_rect));
-                    }
 
                     if dirty_rect.intersects(&win_rect) {
                         self.draw_window(&mut local_fb, win, self.input.mouse_x, self.input.mouse_y, *dirty_rect);
@@ -1267,7 +1350,7 @@ impl WindowManager {
             }
 
             // 5. Draw Nebula Menu if open
-            if self.start_menu_open && dirty_rect.intersects(&Rect { x: 0, y: TOP_BAR_HEIGHT as isize, width: 210, height: 350 }) {
+            if self.start_menu_open && dirty_rect.intersects(&Rect { x: 0, y: TOP_BAR_HEIGHT as isize, width: 210, height: 385 }) {
                 self.draw_start_menu_optimized(&mut local_fb, self.input.mouse_x, self.input.mouse_y, *dirty_rect, locale);
             }
 
@@ -1377,15 +1460,13 @@ impl WindowManager {
         let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
         let title_height = font_height + 10;
 
-        // 1. Draw Border and Background FIRST
-        draw_rounded_rect(fb, win.x, win.y, win.width, win.height, 8, border_color, Some(clip));
-        // Redraw body over border to keep only 1px edge
-        draw_rounded_rect(fb, win.x + 1, win.y + 1, win.width - 2, win.height - 2, 7, body_color, Some(clip));
+        // 1. Draw Square Border and Background
+        draw_rect(fb, win.x, win.y, win.width, win.height, border_color, Some(clip));
+        // Inner body
+        draw_rect(fb, win.x + 1, win.y + 1, win.width - 2, win.height - 2, body_color, Some(clip));
 
-        // Draw title bar with rounded top corners
-        draw_rounded_rect(fb, win.x, win.y, win.width, title_height, 8, title_color, Some(clip));
-        // Cover the bottom rounding of the title bar to make it flush with the body
-        draw_rect(fb, win.x, win.y + (title_height / 2) as isize, win.width, title_height / 2, title_color, Some(clip));
+        // Draw square title bar
+        draw_rect(fb, win.x, win.y, win.width, title_height, title_color, Some(clip));
 
         // Draw title text
         // Clip text to title bar area to prevent spillover (especially with Large Text)
@@ -1536,23 +1617,14 @@ impl WindowManager {
         
         if let Some(l) = locale {
             let item_width = menu_width - 20;
-            let labels = [
-                (l.app_text_editor(), 15, 0x00_C0_C0_C0),
-                (l.app_calculator(), 55, 0x00_C0_C0_C0),
-                (l.app_paint(), 95, 0x00_C0_C0_C0),
-                (l.app_settings(), 135, 0x00_C0_C0_C0),
-                (l.app_terminal(), 175, 0x00_C0_C0_C0),
-                ("Task Manager", 215, 0x00_C0_C0_C0),
-                (l.btn_reboot(), menu_height as isize - 85, 0x00_FF_A0_40),
-                (l.btn_shutdown(), menu_height as isize - 45, 0x00_FF_60_60),
-            ];
+            let items = self.get_menu_items(l.as_ref());
 
             let light = 0x00_E0_E0_E0;
             let shadow = 0x00_40_40_40;
 
-            for (text, y_off, color) in labels {
+            for item in items {
                 let item_x = menu_x + 10;
-                let item_y = menu_y + y_off;
+                let item_y = menu_y + item.y;
                 let is_hovered = mouse_x >= item_x && mouse_x < item_x + item_width as isize && 
                                  mouse_y >= item_y && mouse_y < item_y + 30;
 
@@ -1560,7 +1632,7 @@ impl WindowManager {
                 // the region being refreshed.
                 if !clip.intersects(&Rect { x: item_x, y: item_y, width: item_width, height: 30 }) { continue; }
 
-                let bg = if is_hovered { 0x00_D0_D0_D0 } else { color };
+                let bg = if is_hovered { 0x00_D0_D0_D0 } else { item.color };
 
                 draw_rect(fb, item_x, item_y, item_width, 30, bg, Some(clip));
                 // Draw Bevel
@@ -1569,7 +1641,7 @@ impl WindowManager {
                 draw_rect(fb, item_x + item_width as isize - 1, item_y, 1, 30, shadow, Some(clip)); // Right
                 draw_rect(fb, item_x, item_y + 29, item_width, 1, shadow, Some(clip)); // Bottom
 
-                font::draw_string(fb, item_x + 10, item_y + 7, text, 0x00_000000, Some(clip));
+                font::draw_string(fb, item_x + 10, item_y + 7, &item.label, 0x00_000000, Some(clip));
             }
         }
     }
