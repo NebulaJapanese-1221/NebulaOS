@@ -33,6 +33,7 @@ pub trait Localisation: Send + Sync {
     fn info_uptime(&self) -> &'static str;
     fn preset_nebula(&self) -> &'static str;
     fn preset_sunset(&self) -> &'static str;
+    fn preset_midnight(&self) -> &'static str;
     fn settings_tab_language(&self) -> &'static str;
     fn lang_english(&self) -> &'static str;
     fn lang_japanese(&self) -> &'static str;
@@ -69,6 +70,7 @@ impl Localisation for EnUs {
     fn info_uptime(&self) -> &'static str { "Uptime:" }
     fn preset_nebula(&self) -> &'static str { "Nebula" }
     fn preset_sunset(&self) -> &'static str { "Sunset" }
+    fn preset_midnight(&self) -> &'static str { "Midnight" }
     fn settings_tab_language(&self) -> &'static str { "Language" }
     fn lang_english(&self) -> &'static str { "English" }
     fn lang_japanese(&self) -> &'static str { "Japanese" }
@@ -104,6 +106,7 @@ impl Localisation for ja_jp::JaJp {
     fn info_uptime(&self) -> &'static str { ja_jp::INFO_UPTIME }
     fn preset_nebula(&self) -> &'static str { ja_jp::PRESET_NEBULA }
     fn preset_sunset(&self) -> &'static str { ja_jp::PRESET_SUNSET }
+    fn preset_midnight(&self) -> &'static str { ja_jp::PRESET_MIDNIGHT }
     fn settings_tab_language(&self) -> &'static str { ja_jp::SETTINGS_TAB_LANGUAGE }
     fn lang_english(&self) -> &'static str { ja_jp::LANG_ENGLISH }
     fn lang_japanese(&self) -> &'static str { ja_jp::LANG_JAPANESE }

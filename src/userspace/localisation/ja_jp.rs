@@ -43,6 +43,7 @@ pub const INFO_UPTIME: &str = "稼働時間:";
 
 pub const PRESET_NEBULA: &str = "ネビュラ";
 pub const PRESET_SUNSET: &str = "夕焼け";
+pub const PRESET_MIDNIGHT: &str = "ミッドナイト";
 
 // New for language selection
 pub const SETTINGS_TAB_LANGUAGE: &str = "言語";

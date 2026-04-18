@@ -284,6 +284,9 @@ impl Settings {
 
                 let mut btn = Button::new(content_x + 90, presets_y + (font_height as isize + 10), btn_w, btn_h, locale.preset_sunset());
                 btn.bg_color = 0x00_80_40_20; btn.text_color = 0xFFFFFF; btn.draw(fb, 0, 0, Some(dirty_rect));
+
+                let mut btn = Button::new(content_x + 180, presets_y + (font_height as isize + 10), btn_w, btn_h, locale.preset_midnight());
+                btn.bg_color = 0x00_05_05_10; btn.text_color = 0xFFFFFF; btn.draw(fb, 0, 0, Some(dirty_rect));
             },
             Tab::Language => {
                 font::draw_string(fb, content_x, content_y, locale.settings_tab_language(), 0x00_FF_FF_FF, Some(dirty_rect));
@@ -466,6 +469,7 @@ impl App for Settings {
                             let btn_h = font_height + 9;
                             let btn_neb = Rect { x: 0, y: presets_y + (font_height as isize + 10), width: btn_w, height: btn_h };
                             let btn_sun = Rect { x: 90, y: presets_y + (font_height as isize + 10), width: btn_w, height: btn_h };
+                            let btn_mid = Rect { x: 180, y: presets_y + (font_height as isize + 10), width: btn_w, height: btn_h };
 
                             if btn_neb.contains(rel_x, rel_y) {
                                 DESKTOP_GRADIENT_START.store(0x00_10_20_40, Ordering::Relaxed);
@@ -475,6 +479,11 @@ impl App for Settings {
                             } else if btn_sun.contains(rel_x, rel_y) {
                                 DESKTOP_GRADIENT_START.store(0x00_40_10_10, Ordering::Relaxed);
                                 DESKTOP_GRADIENT_END.store(0x00_FF_80_40, Ordering::Relaxed);
+                                self.dirty.set(true);
+                                FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
+                            } else if btn_mid.contains(rel_x, rel_y) {
+                                DESKTOP_GRADIENT_START.store(0x00_02_02_05, Ordering::Relaxed);
+                                DESKTOP_GRADIENT_END.store(0x00_10_15_25, Ordering::Relaxed);
                                 self.dirty.set(true);
                                 FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
                             }
