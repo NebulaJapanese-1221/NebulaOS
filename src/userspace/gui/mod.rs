@@ -310,6 +310,26 @@ impl WindowManager {
             }
         }
 
+        // 1.5 Draw Blueprint Grid lines (Localized to center area)
+        if !high_contrast {
+            let grid_color = 0x00_1C_5A_B0; // Technical Lighter Blue
+            let grid_rect = Rect {
+                x: (screen_width - 640) / 2,
+                y: (screen_height - 320) / 2,
+                width: 640,
+                height: 320,
+            };
+
+            if let Some(grid_clip) = grid_rect.intersection(&dirty_rect) {
+                for x in (grid_rect.x..grid_rect.x + grid_rect.width as isize).step_by(40) {
+                    draw_rect(fb, x, grid_clip.y, 1, grid_clip.height, grid_color, Some(grid_clip));
+                }
+                for y in (grid_rect.y..grid_rect.y + grid_rect.height as isize).step_by(40) {
+                    draw_rect(fb, grid_clip.x, y, grid_clip.width, 1, grid_color, Some(grid_clip));
+                }
+            }
+        }
+
         let ver_str = format!("NebulaOS v{}", crate::kernel::VERSION);
 
         // 2. Draw "Under Construction" banner with diagonal stripes
