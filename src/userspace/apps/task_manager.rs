@@ -1,5 +1,5 @@
 use crate::drivers::framebuffer;
-use crate::userspace::gui::{self, font, Window, rect::Rect, progress_bar::ProgressBar};
+use crate::userspace::gui::{self, font, Window, rect::Rect};
 use super::app::{App, AppEvent};
 use alloc::boxed::Box;
 use alloc::format;
@@ -61,41 +61,16 @@ impl App for TaskManager {
 
         // --- System Statistics ---
         y += 10;
-        let stats_y_start = y;
         font::draw_string(fb, x, y, "System Statistics", 0x00_FF_FF_FF, Some(dirty_rect));
         y += font_height as isize + 8;
 
         let total_mem = crate::kernel::TOTAL_MEMORY.load(Ordering::Relaxed) / 1024 / 1024;
         let used_mem = ALLOCATOR.lock().used() / 1024 / 1024;
         let cpu_usage = crate::kernel::cpu::CPU_USAGE.load(Ordering::Relaxed);
-        let cpu_temp = crate::kernel::cpu::CPU_TEMP.load(Ordering::Relaxed);
 
         font::draw_string(fb, x, y, &format!("Mem: {} / {} MB", used_mem, total_mem), 0x00_E1_E1_E1, Some(dirty_rect));
         y += font_height as isize + 4;
         font::draw_string(fb, x, y, &format!("CPU: {}%", cpu_usage), 0x00_E1_E1_E1, Some(dirty_rect));
-        y += font_height as isize + 4;
-        font::draw_string(fb, x, y, &format!("Temp: {} C", cpu_temp), 0x00_AA_FF_AA, Some(dirty_rect));
-
-        // --- Vertical Progress Bars ---
-        let bar_h = 70;
-        let bar_w = 34; // Increased width to fit percentage text
-        let bars_x = win.x + win.width as isize - 90;
-        let bars_y = stats_y_start + font_height as isize + 8;
-
-        // CPU Usage Bar
-        let cpu_color = if cpu_usage > 80 { 0x00_FF_44_44 } else if cpu_usage > 50 { 0x00_FF_CC_00 } else { 0x00_00_CC_66 };
-        let mut cpu_bar = ProgressBar::new(bars_x, bars_y, bar_w, bar_h, cpu_usage, cpu_color);
-        cpu_bar.text = true;
-        cpu_bar.draw(fb, Some(dirty_rect));
-        font::draw_char(fb, bars_x + (bar_w as isize / 2) - 4, bars_y + bar_h as isize + 2, 'C', 0x00_80_80_80, Some(dirty_rect));
-
-        // Temperature Bar
-        let temp_x = bars_x + 40;
-        let temp_color = if cpu_temp > 75 { 0x00_FF_66_00 } else if cpu_temp > 45 { 0x00_FF_CC_00 } else { 0x00_00_AA_FF };
-        let mut temp_bar = ProgressBar::new(temp_x, bars_y, bar_w, bar_h, cpu_temp, temp_color);
-        temp_bar.text = true;
-        temp_bar.draw(fb, Some(dirty_rect));
-        font::draw_char(fb, temp_x + (bar_w as isize / 2) - 4, bars_y + bar_h as isize + 2, 'T', 0x00_80_80_80, Some(dirty_rect));
     }
 
     fn handle_event(&mut self, event: &AppEvent, win: &Window) -> Option<Rect> {

@@ -22,7 +22,7 @@ dependencies = [
 
 [[package]]
 name = "nebula_os"
-version = "0.0.3-dev"
+version = "0.0.3-dev3"
 dependencies = [
  "linked_list_allocator",
  "spin",

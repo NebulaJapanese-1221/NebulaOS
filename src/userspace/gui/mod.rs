@@ -14,7 +14,6 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 pub mod rect;
 use self::rect::Rect;
 pub mod button;
-pub mod progress_bar;
 use self::button::Button;
 use crate::userspace::localisation;
 use crate::userspace::localisation::Localisation;
@@ -221,13 +220,10 @@ pub struct WindowManager {
     cursor_style: CursorStyle,
     backbuffer: Vec<u32>,
     gradient_cache: Vec<u32>,
-    drag_rect: Option<Rect>,
     task_switcher_open: bool,
     task_switcher_index: usize,
     brightness_osd_timeout: usize,
     tooltip: Option<(alloc::string::String, isize, isize)>,
-    menu_anim_progress: usize, // 0 to 100
-    menu_anim_target: usize,   // 0 or 100
     last_grad_hash: u32,
 }
 
@@ -252,13 +248,10 @@ impl WindowManager {
             cursor_style: CursorStyle::Arrow,
             backbuffer: Vec::new(),
             gradient_cache: Vec::new(),
-            drag_rect: None,
             task_switcher_open: false,
             task_switcher_index: 0,
             brightness_osd_timeout: 0,
             tooltip: None,
-            menu_anim_progress: 0,
-            menu_anim_target: 0,
             last_grad_hash: 0,
         }
     }
@@ -310,52 +303,7 @@ impl WindowManager {
             }
         }
 
-        // 1.5 Draw Blueprint Grid lines (Localized to center area)
-        if !high_contrast {
-            let grid_color = 0x00_1C_5A_B0; // Technical Lighter Blue
-            let grid_rect = Rect {
-                x: (screen_width - 640) / 2,
-                y: (screen_height - 320) / 2,
-                width: 640,
-                height: 320,
-            };
-
-            if let Some(grid_clip) = grid_rect.intersection(&dirty_rect) {
-                for x in (grid_rect.x..grid_rect.x + grid_rect.width as isize).step_by(40) {
-                    draw_rect(fb, x, grid_clip.y, 1, grid_clip.height, grid_color, Some(grid_clip));
-                }
-                for y in (grid_rect.y..grid_rect.y + grid_rect.height as isize).step_by(40) {
-                    draw_rect(fb, grid_clip.x, y, grid_clip.width, 1, grid_color, Some(grid_clip));
-                }
-            }
-        }
-
         let ver_str = format!("NebulaOS v{}", crate::kernel::VERSION);
-
-        // 2. Draw "Under Construction" banner with diagonal stripes
-        let banner_text = "NebulaOS is Under Construction.";
-        let banner_w = font::string_width(banner_text);
-        let banner_x = (screen_width - banner_w as isize) / 2;
-        let banner_y = (screen_height / 2) as isize;
-        let (tape_x, tape_w, tape_h) = (banner_x - 20, banner_w + 40, 10usize);
-        
-        let top_y = banner_y - 18;
-        draw_rect(fb, tape_x, top_y, tape_w, tape_h, 0x00_FF_CC_00, Some(dirty_rect));
-        for i in (0..(tape_w as isize + tape_h as isize)).step_by(20) {
-            for dy in 0..tape_h as isize {
-                draw_rect(fb, tape_x + i - dy, top_y + dy, 10, 1, 0, Some(dirty_rect));
-            }
-        }
-
-        font::draw_string(fb, banner_x, banner_y, banner_text, 0x00_FF_CC_00, Some(dirty_rect));
-
-        let bot_y = banner_y + 22;
-        draw_rect(fb, tape_x, bot_y, tape_w, tape_h, 0x00_FF_CC_00, Some(dirty_rect));
-        for i in (0..(tape_w as isize + tape_h as isize)).step_by(20) {
-            for dy in 0..tape_h as isize {
-                draw_rect(fb, tape_x + i - dy, bot_y + dy, 10, 1, 0, Some(dirty_rect));
-            }
-        }
 
         font::draw_string(fb, screen_width - font::string_width(&ver_str) as isize - 10, screen_height - 60, &ver_str, 0x00_70_70_70, Some(dirty_rect));
     }
@@ -400,21 +348,6 @@ impl WindowManager {
                 }
             }
             drop(current_dt); // Release lock early
-        }
-
-        // Handle Start Menu animation (Slide effect)
-        if self.menu_anim_progress != self.menu_anim_target {
-            // Disable animation: Jump instantly to target state
-            let old_progress = self.menu_anim_progress;
-            self.menu_anim_progress = self.menu_anim_target;
-            self.start_menu_open = self.menu_anim_progress > 0;
-
-            if old_progress != self.menu_anim_progress {
-                let menu_h = 385;
-                let start_y = TOP_BAR_HEIGHT as isize;
-                let r = Rect { x: 0, y: start_y, width: 210, height: menu_h };
-                self.mark_dirty(r);
-            }
         }
 
         // Check for brightness changes (to trigger OSD popup)
@@ -502,12 +435,8 @@ impl WindowManager {
         // Mark the cursor's starting position as dirty ONCE before processing packets
         let initial_cursor_rect = self.get_cursor_rect();
 
-        let start_interaction_id = self.resize_win_id;
+        let start_interaction_id = self.resize_win_id.or(self.drag_win_id);
         let start_interaction_rect = start_interaction_id.and_then(|id| self.get_window_rect(id));
-
-            if let Some(rect) = self.drag_rect {
-                self.mark_dirty_outline(rect);
-            }
 
         // Poll all drivers and buffer events
         self.input.update(screen_width, screen_height);
@@ -526,35 +455,34 @@ impl WindowManager {
                     self.input.mouse_y = y;
 
                     if let Some(id) = self.resize_win_id {
-                if let Some(win) = self.windows.iter().find(|w| w.id == id) {
-                    let mut r = self.drag_rect.unwrap_or(win.rect());
+                if let Some(idx) = self.windows.iter().position(|w| w.id == id) {
                     let min_width: isize = 80;
                     let min_height: isize = 40;
+                    let mut r = self.windows[idx].rect();
 
-                    if self.resize_direction == ResizeDirection::Right || self.resize_direction == ResizeDirection::TopRight || self.resize_direction == ResizeDirection::BottomRight {
+                    if matches!(self.resize_direction, ResizeDirection::Right | ResizeDirection::TopRight | ResizeDirection::BottomRight) {
                         r.width = (r.width as isize + dx).max(min_width) as usize;
                     }
-                    if self.resize_direction == ResizeDirection::Bottom || self.resize_direction == ResizeDirection::BottomLeft || self.resize_direction == ResizeDirection::BottomRight {
+                    if matches!(self.resize_direction, ResizeDirection::Bottom | ResizeDirection::BottomLeft | ResizeDirection::BottomRight) {
                         r.height = (r.height as isize + dy).max(min_height) as usize;
                     }
-                    if self.resize_direction == ResizeDirection::Left || self.resize_direction == ResizeDirection::TopLeft || self.resize_direction == ResizeDirection::BottomLeft {
+                    if matches!(self.resize_direction, ResizeDirection::Left | ResizeDirection::TopLeft | ResizeDirection::BottomLeft) {
                         let new_width = r.width as isize - dx;
                         if new_width >= min_width { r.x += dx; r.width = new_width as usize; }
                     }
-                    if self.resize_direction == ResizeDirection::Top || self.resize_direction == ResizeDirection::TopLeft || self.resize_direction == ResizeDirection::TopRight {
+                    if matches!(self.resize_direction, ResizeDirection::Top | ResizeDirection::TopLeft | ResizeDirection::TopRight) {
                         let new_height = r.height as isize - dy;
                         if new_height >= min_height { r.y += dy; r.height = new_height as usize; }
                     }
-                    self.drag_rect = Some(r);
+                    let win = &mut self.windows[idx];
+                    win.x = r.x; win.y = r.y; win.width = r.width; win.height = r.height;
                 }
             }
             // If dragging, update window position based on the new final mouse position
             else if let Some(id) = self.drag_win_id {
-                if let Some(win) = self.windows.iter().find(|w| w.id == id) {
-                    // Don't move window, update drag_rect instead
-                    let new_x = self.input.mouse_x - self.drag_offset_x;
-                            let new_y = self.input.mouse_y - self.drag_offset_y;
-                    self.drag_rect = Some(Rect { x: new_x, y: new_y, width: win.width, height: win.height });
+                if let Some(win) = self.windows.iter_mut().find(|w| w.id == id) {
+                    win.x = self.input.mouse_x - self.drag_offset_x;
+                    win.y = self.input.mouse_y - self.drag_offset_y;
                 }
             }
                 }
@@ -696,10 +624,6 @@ impl WindowManager {
                     }
                 }
             }
-
-        if let Some(rect) = self.drag_rect {
-            self.mark_dirty_outline(rect);
-        }
 
             // Send MouseMove event to the active window if we are clicking/dragging on it
             if let Some(target_id) = self.click_target_id {
@@ -867,7 +791,7 @@ impl WindowManager {
                 // Start Menu Click
                 let btn_width = font::string_width(locale.start()) + 20;
                 if self.input.mouse_x >= 2 && self.input.mouse_x < (btn_width as isize + 2) {
-                    self.menu_anim_target = if self.menu_anim_target == 0 { 100 } else { 0 };
+                    self.start_menu_open = !self.start_menu_open;
                     self.mark_dirty(Rect { x: 0, y: 0, width: 210, height: 400 });
                     return;
                 }
@@ -961,7 +885,7 @@ impl WindowManager {
                     self.mark_dirty(Rect { x: 0, y: taskbar_y, width: 800, height: 40 });
                 }
 
-            } else if self.menu_anim_progress == 100 && self.input.mouse_x < 200 && self.input.mouse_y >= TOP_BAR_HEIGHT as isize {
+            } else if self.start_menu_open && self.input.mouse_x < 200 && self.input.mouse_y >= TOP_BAR_HEIGHT as isize {
                 // --- Nebula Menu Item Click Logic ---
                 let menu_y = TOP_BAR_HEIGHT as isize;
                 let rel_y = self.input.mouse_y - menu_y;
@@ -1048,7 +972,7 @@ impl WindowManager {
                         MenuAction::Reboot => { crate::kernel::power::reboot(); }
                         MenuAction::Shutdown => { crate::kernel::power::shutdown(); }
                     }
-                    self.menu_anim_target = 0; // Trigger slide-up after selection
+                    self.start_menu_open = false;
                 }
             } else {
                 // 2. Not a start button or menu click. Check for window interaction.
@@ -1104,7 +1028,6 @@ impl WindowManager {
                         self.resize_win_id = Some(win_id);
                         self.resize_direction = resize_dir;
                         self.drag_win_id = None;
-                        self.drag_rect = self.get_window_rect(win_id);
                     } else {
                         // Now that it's at the front, check for drag/close.
                         // Get window properties immutably first to avoid borrow conflicts.
@@ -1168,49 +1091,22 @@ impl WindowManager {
                                 self.drag_win_id = Some(win_id);
                                 self.drag_offset_x = self.input.mouse_x - top_win.x;
                                 self.drag_offset_y = self.input.mouse_y - top_win.y;
-                                self.drag_rect = Some(Rect { x: top_win.x, y: top_win.y, width: top_win.width, height: top_win.height });
                             }
                         }
                     }
                 } else {
                     // Clicked on desktop
                     self.click_target_id = None;
-                    if self.menu_anim_target == 100 {
-                        // Trigger slide-up animation when clicking desktop
-                        self.menu_anim_target = 0;
-                    }
+                    self.start_menu_open = false;
                 }
             }
         } else if let (MouseButton::Left, false) = (button, down) {
 
             if let Some(win_id) = self.resize_win_id {
-                if let Some(rect) = self.drag_rect {
-                    if let Some(old_rect) = self.get_window_rect(win_id) {
-                        self.mark_dirty(old_rect);
-                    }
-                    if let Some(win) = self.windows.iter_mut().find(|w| w.id == win_id) {
-                        win.x = rect.x; win.y = rect.y;
-                        win.width = rect.width; win.height = rect.height;
-                    }
-                    self.mark_dirty(rect);
-                }
                 self.resize_win_id = None;
                 self.resize_direction = ResizeDirection::None;
-                self.drag_rect = None;
             } else if let Some(win_id) = self.drag_win_id {
-                // Drag finished - Commit move
-                if let Some(rect) = self.drag_rect {
-                    if let Some(old_rect) = self.get_window_rect(win_id) {
-                        self.mark_dirty(old_rect);
-                    }
-                    if let Some(win) = self.windows.iter_mut().find(|w| w.id == win_id) {
-                        win.x = rect.x;
-                        win.y = rect.y;
-                    }
-                    self.mark_dirty(rect);
-                }
                 self.drag_win_id = None;
-                self.drag_rect = None;
             } else { // Only process content click if not dragging
                 if let Some(target_id) = self.click_target_id {
                     let mut event_coords = None;
@@ -1347,7 +1243,7 @@ impl WindowManager {
             // 1. Desktop Wallpaper and Decorative Elements
             self.draw_wallpaper(&mut local_fb, *dirty_rect, screen_width, screen_height);
 
-            // 2. Draw Windows with subtle shadows
+            // 2. Draw Windows
             for &win_id in &self.z_order {
                 if let Some(win) = self.windows.iter().find(|w| w.id == win_id) {
                     if win.minimized { continue; }
@@ -1386,15 +1282,6 @@ impl WindowManager {
             // Draw Brightness OSD
             if self.brightness_osd_timeout > 0 {
                 self.draw_brightness_osd(&mut local_fb, *dirty_rect);
-            }
-
-            // Draw Drag Overlay
-            if let Some(rect) = self.drag_rect {
-                let border_color = 0x00_FF_FF_FF; // White outline
-                draw_rect(&mut local_fb, rect.x, rect.y, rect.width, 2, border_color, Some(*dirty_rect)); // Top
-                draw_rect(&mut local_fb, rect.x, rect.y + rect.height as isize - 2, rect.width, 2, border_color, Some(*dirty_rect)); // Bottom
-                draw_rect(&mut local_fb, rect.x, rect.y, 2, rect.height, border_color, Some(*dirty_rect)); // Left
-                draw_rect(&mut local_fb, rect.x + rect.width as isize - 2, rect.y, 2, rect.height, border_color, Some(*dirty_rect)); // Right
             }
 
             // 6. Draw Tooltip
@@ -1462,8 +1349,7 @@ impl WindowManager {
     fn draw_win_btn(&self, fb: &mut framebuffer::Framebuffer, x: isize, y: isize, text: &str, color: u32, mouse_x: isize, mouse_y: isize, clip: Rect) {
         let rect = Rect { x, y, width: 16, height: 16 };
         if !clip.intersects(&rect) { return; }
-        let is_hovered = rect.contains(mouse_x, mouse_y);
-        let bg = if is_hovered { 0x00_00_50_A0 } else { color };
+        let bg = color; // Removed hover effect
         draw_rect(fb, x, y, 16, 16, bg, Some(clip));
         font::draw_string(fb, x + 4, y + 1, text, 0x00_FFFFFF, Some(clip));
     }
@@ -1615,32 +1501,18 @@ impl WindowManager {
         let menu_width = 200;
         let menu_height = 345;
         
-        // Calculate sliding Y position
-        let target_y = TOP_BAR_HEIGHT as isize;
-        let menu_y = target_y - (menu_height as isize * (100 - self.menu_anim_progress) as isize / 100);
+        let menu_y = TOP_BAR_HEIGHT as isize; // Animation removed, fixed position
         let menu_x = 0;
         let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
 
-        // Fading effect: Interpolate background color based on progress
-        let target_bg = if high_contrast { 0x00_00_00_00 } else { 0x00_1E_1E_1E };
-        let bg_color = if high_contrast {
-            target_bg
-        } else {
-            let desktop_bg = DESKTOP_GRADIENT_START.load(Ordering::Relaxed);
-            self.interpolate_gradient(desktop_bg, target_bg, self.menu_anim_progress as isize, 100)
-        };
+        let bg_color = if high_contrast { 0x00_00_00_00 } else { 0x00_1E_1E_1E };
 
         // 1. Draw Background (Flat design, no "effects")
         draw_rect(fb, menu_x, menu_y, menu_width, menu_height, bg_color, Some(clip));
-
-        // 2. Outlines removed to simplify UI as requested
         
         if let Some(l) = locale {
             let item_width = menu_width - 20;
             let items = self.get_menu_items(l.as_ref());
-
-            let light = 0x00_E0_E0_E0;
-            let shadow = 0x00_40_40_40;
 
             for item in items {
                 let item_x = menu_x + 10;
@@ -1655,12 +1527,6 @@ impl WindowManager {
                 let bg = if is_hovered { 0x00_D0_D0_D0 } else { item.color };
 
                 draw_rect(fb, item_x, item_y, item_width, 30, bg, Some(clip));
-                // Draw Bevel
-                draw_rect(fb, item_x, item_y, item_width, 1, light, Some(clip)); // Top
-                draw_rect(fb, item_x, item_y, 1, 30, light, Some(clip)); // Left
-                draw_rect(fb, item_x + item_width as isize - 1, item_y, 1, 30, shadow, Some(clip)); // Right
-                draw_rect(fb, item_x, item_y + 29, item_width, 1, shadow, Some(clip)); // Bottom
-
                 font::draw_string(fb, item_x + 10, item_y + 7, &item.label, 0x00_000000, Some(clip));
             }
         }

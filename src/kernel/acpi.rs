@@ -7,7 +7,6 @@ static PM1A_CNT_BLK: AtomicU32 = AtomicU32::new(0);
 static SHUTDOWN_CMD: AtomicU16 = AtomicU16::new(0);
 static BATTERY_BST_PTR: AtomicU32 = AtomicU32::new(0);
 static BATTERY_BIF_PTR: AtomicU32 = AtomicU32::new(0);
-static THERMAL_TMP_PTR: AtomicU32 = AtomicU32::new(0);
 static DSDT_PTR: AtomicU32 = AtomicU32::new(0);
 static DSDT_LEN: AtomicU32 = AtomicU32::new(0);
 
@@ -301,7 +300,6 @@ pub fn init() {
                 detect_ec(dsdt_data);
                 discover_ec_offsets(dsdt_data);
             detect_battery(dsdt_data);
-            detect_thermal(dsdt_data);
         }
 
         // Parse MADT for core count
@@ -420,14 +418,6 @@ fn detect_battery(dsdt_data: &[u8]) {
     }
 }
 
-fn detect_thermal(dsdt_data: &[u8]) {
-    // Search for _TMP (Temperature) method or object
-    if let Some(tmp_offset) = find_aml_object_bytecode(dsdt_data, b"_TMP") {
-        THERMAL_TMP_PTR.store(tmp_offset, Ordering::Relaxed);
-        crate::serial_println!("[ACPI] Thermal monitoring (_TMP) found at offset {:#x}", tmp_offset);
-    }
-}
-
 /// Evaluates a simple AML method that returns a Package of integers.
 /// Writes results into `out_buffer` and returns the number of elements parsed.
 fn evaluate_aml_method(method_bytecode_ptr: u32, dsdt_data: &[u8], out_buffer: &mut [u64]) -> Option<usize> {
@@ -471,47 +461,15 @@ fn evaluate_aml_method(method_bytecode_ptr: u32, dsdt_data: &[u8], out_buffer: &
     None
 }
 
-/// Evaluates an AML method that returns a single integer.
-fn evaluate_aml_integer_method(method_bytecode_ptr: u32, dsdt_data: &[u8]) -> Option<u64> {
-    if method_bytecode_ptr == 0 { return None; }
-    let method_offset = method_bytecode_ptr as usize;
-    if method_offset >= dsdt_data.len() { return None; }
-
-    let mut stream = AmlStream::new(dsdt_data, method_offset);
-    
-    stream.parse_name_string()?; // Skip name
-
-    // If it's a Name object instead of a Method, it might just be the integer prefix
-    if let Some(prefix) = stream.peek_u8() {
-        if prefix == AML_BYTE_PREFIX || prefix == AML_WORD_PREFIX || prefix == AML_DWORD_PREFIX || prefix == AML_ZERO_OP || prefix == AML_ONE_OP {
-            return stream.parse_integer();
-        }
-    }
-
-    if stream.read_u8()? != AML_METHOD_OP { return None; }
-    let pkg_start = stream.offset;
-    let pkg_len = stream.skip_pkg_length()?;
-    let scope_end = (pkg_start + pkg_len).min(dsdt_data.len());
-    stream.read_u8()?; // NumArgs
-
-    while stream.offset < scope_end {
-        if stream.read_u8()? == AML_RETURN_OP {
-            return stream.parse_integer();
-        }
-    }
-    None
-}
-
 /// Periodically called to synchronize ACPI state with kernel drivers.
 pub fn update_power_status() {
     let bst_ptr = BATTERY_BST_PTR.load(Ordering::Relaxed);
     let bif_ptr = BATTERY_BIF_PTR.load(Ordering::Relaxed);
-    let tmp_ptr = THERMAL_TMP_PTR.load(Ordering::Relaxed);
     let dsdt_addr = DSDT_PTR.load(Ordering::Relaxed);
     let dsdt_len = DSDT_LEN.load(Ordering::Relaxed);
 
     // DSDT not cached yet or no power-related devices were discovered
-    if dsdt_addr == 0 || (bst_ptr == 0 && bif_ptr == 0 && tmp_ptr == 0) {
+    if dsdt_addr == 0 || (bst_ptr == 0 && bif_ptr == 0) {
         return;
     }
 
@@ -549,15 +507,6 @@ pub fn update_power_status() {
                 let is_charging = (state_flags & 0x02) != 0;
                 crate::drivers::battery::BATTERY.lock().update_status(remaining_capacity, is_charging, design_capacity, full_charge_capacity, cycle_count);
             }
-        }
-    }
-
-    // 3. Evaluate Temperature
-    if tmp_ptr != 0 {
-        if let Some(decikelvins) = evaluate_aml_integer_method(tmp_ptr, dsdt_data) {
-            // Decikelvins to Celsius: (K / 10) - 273.15
-            let celsius = (decikelvins as i64 / 10) - 273;
-            crate::kernel::cpu::CPU_TEMP.store(celsius.max(0) as usize, Ordering::Relaxed);
         }
     }
 }

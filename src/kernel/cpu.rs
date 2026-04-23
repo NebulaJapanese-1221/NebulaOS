@@ -6,8 +6,6 @@ use core::sync::atomic::{AtomicUsize, AtomicBool, AtomicU32, Ordering};
 pub static CPU_BRAND: Mutex<Option<String>> = Mutex::new(None);
 // Global atomic to store current CPU usage percentage (0-100).
 pub static CPU_USAGE: AtomicUsize = AtomicUsize::new(0);
-// Global atomic to store current CPU temperature in Celsius.
-pub static CPU_TEMP: AtomicUsize = AtomicUsize::new(0);
 pub static IS_IDLE: AtomicBool = AtomicBool::new(false);
 pub static POWER_SAVE: AtomicBool = AtomicBool::new(false);
 

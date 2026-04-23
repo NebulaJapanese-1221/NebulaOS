@@ -7,7 +7,6 @@ All notable changes to NebulaOS will be documented in this file. The format is b
 - Revamped Settings App and added Power Settings and Display Settings.
 - Implemented dynamic CPU frequency detection and calibrated NOP-based delay loops for consistent timing across hardware.
 - Synchronized boot sequence and UI animations to the system timer, fixing the 'too fast' execution on real hardware.
-- Enhanced Task Manager bars with automatic percentage text and better visibility.
 - Optimized ACPI power status updates by caching DSDT pointers, significantly reducing CPU overhead in the GUI loop.
 - Improved overall system responsiveness and fixed 'soft' hangs during battery polling.
 ### Added
@@ -15,8 +14,6 @@ All notable changes to NebulaOS will be documented in this file. The format is b
 - Added "Midnight" localization strings to both English and Japanese (`ja_jp.rs`).
 - UI button for the Midnight theme in the Settings app under the "Theme" tab.
 - Added 'NebulaBrowser' app (experimental/non-functional mockup).
-- Added thermal zone (_TZ) monitoring support in ACPI.
-- Added CPU Temperature display to Task Manager.
 - Added a ProgressBar component to the GUI.
 ### Fixed
 - Fixed 'Clear' button in Paint app by returning a dirty rectangle to the GUI manager.
