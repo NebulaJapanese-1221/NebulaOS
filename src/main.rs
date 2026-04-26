@@ -14,6 +14,9 @@ mod kernel;
 // Import the drivers module
 mod drivers;
 
+// Import the utility module
+pub mod utils;
+
 // Import the userspace module
 mod userspace;
 

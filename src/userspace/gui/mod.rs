@@ -1,13 +1,11 @@
 //! GUI components for NebulaOS.
 
-use crate::drivers::mouse;
 use crate::drivers::framebuffer::{self, FRAMEBUFFER};
 use crate::drivers::rtc::{self, CURRENT_DATETIME, TIME_NEEDS_UPDATE};
-use crate::drivers::keyboard;
 use alloc::vec::Vec;
 use alloc::string::ToString;
 use alloc::{format, vec};
-use crate::userspace::apps::{app::{App, AppEvent}, calculator::Calculator, editor::TextEditor, paint::Paint, settings::Settings, terminal::Terminal, task_manager::TaskManager, nebula_browser::NebulaBrowser};
+use crate::userspace::apps::{app::AppEvent, calculator::Calculator, editor::TextEditor, paint::Paint, settings::Settings, terminal::Terminal, task_manager::TaskManager, nebula_browser::NebulaBrowser};
 use spin::Mutex;
 use alloc::boxed::Box;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -15,12 +13,14 @@ pub mod rect;
 use self::rect::Rect;
 pub mod button;
 use self::button::Button;
-use crate::userspace::localisation;
-use crate::userspace::localisation::Localisation;
+pub mod cursor;
+
+use crate::userspace::localisation::{self, Localisation};
 
 // Re-export fonts from their new location so existing references to gui::font work
 pub use crate::userspace::fonts::font;
 
+use self::cursor::{CursorStyle, draw_cursor};
 const MAX_WINDOWS: usize = 10;
 pub const TOP_BAR_HEIGHT: usize = 32; // Slightly taller for better readability
 
@@ -31,33 +31,6 @@ pub static SHOW_WALLPAPER_GRADIENT: AtomicBool = AtomicBool::new(true);
 pub static HIGH_CONTRAST: AtomicBool = AtomicBool::new(false);
 pub static LARGE_TEXT: AtomicBool = AtomicBool::new(false);
 pub static MOUSE_SENSITIVITY: AtomicU32 = AtomicU32::new(10); // 1.0x scale
-
-#[derive(Clone)]
-pub struct Window {
-    pub id: usize,
-    pub x: isize,
-    pub y: isize,
-    pub width: usize,
-    pub height: usize,    
-    pub color: u32, // Now an RGB color value
-    pub title: &'static str,
-    pub content: WindowContent,
-    pub minimized: bool,
-    pub maximized: bool,
-    pub restore_rect: Option<Rect>,
-}
-
-impl Window {
-    pub fn rect(&self) -> Rect {
-        Rect { x: self.x, y: self.y, width: self.width, height: self.height }
-    }
-}
-
-#[derive(Clone)]
-pub enum WindowContent {
-    App(Box<dyn App>),
-    None,
-} 
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MenuAction {
@@ -80,18 +53,6 @@ struct MenuEntry {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CursorStyle {
-    Arrow,
-    Hand,
-    IBeam,
-    Crosshair,
-    ResizeNS, // North-South
-    ResizeEW, // East-West
-    ResizeNESW, // North-East South-West
-    ResizeNWSE, // North-West South-East
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ResizeDirection {
     None,
     Left,
@@ -102,103 +63,6 @@ enum ResizeDirection {
     TopRight,
     BottomLeft,
     BottomRight,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MouseButton {
-    Left,
-    Right,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum InputEvent {
-    MouseMove { x: isize, y: isize, dx: isize, dy: isize },
-    MouseButton { button: MouseButton, down: bool, x: isize, y: isize },
-    Scroll { delta: isize },
-    KeyPress { key: char },
-}
-
-pub struct InputManager {
-    pub mouse_x: isize,
-    pub mouse_y: isize,
-    pub left_button_pressed: bool,
-    pub right_button_pressed: bool,
-    pub alt_pressed: bool,
-    pub ctrl_pressed: bool,
-    pub shift_pressed: bool,
-    pub fractional_x: isize,
-    pub fractional_y: isize,
-    pub event_queue: Vec<InputEvent>,
-}
-
-impl InputManager {
-    pub const fn new() -> Self {
-        Self {
-            mouse_x: 40,
-            mouse_y: 12,
-            left_button_pressed: false,
-            right_button_pressed: false,
-            alt_pressed: false,
-            ctrl_pressed: false,
-            shift_pressed: false,
-            fractional_x: 0,
-            fractional_y: 0,
-            event_queue: Vec::new(),
-        }
-    }
-
-    pub fn update(&mut self, max_w: isize, max_h: isize) {
-        self.event_queue.clear();
-
-        while let Some(packet) = mouse::get_packet() {
-            let sens = MOUSE_SENSITIVITY.load(Ordering::Relaxed) as isize;
-            
-            // Calculate total accumulated movement (current packet + previous remainder)
-            let tx = (packet.x as isize * sens) + self.fractional_x;
-            let ty = (-(packet.y as isize) * sens) + self.fractional_y;
-            
-            // Extract whole pixels to move
-            let dx = tx / 10;
-            let dy = ty / 10;
-            
-            // Store the remainder for the next packet
-            self.fractional_x = tx % 10;
-            self.fractional_y = ty % 10;
-            
-            self.mouse_x = (self.mouse_x + dx).clamp(0, max_w - 1);
-            self.mouse_y = (self.mouse_y + dy).clamp(0, max_h - 1);
-
-            if dx != 0 || dy != 0 {
-                self.event_queue.push(InputEvent::MouseMove { x: self.mouse_x, y: self.mouse_y, dx, dy });
-            }
-
-            let left = (packet.buttons & 0x1) != 0;
-            let right = (packet.buttons & 0x2) != 0;
-
-            if left != self.left_button_pressed {
-                self.left_button_pressed = left;
-                self.event_queue.push(InputEvent::MouseButton { button: MouseButton::Left, down: left, x: self.mouse_x, y: self.mouse_y });
-            }
-            if right != self.right_button_pressed {
-                self.right_button_pressed = right;
-                self.event_queue.push(InputEvent::MouseButton { button: MouseButton::Right, down: right, x: self.mouse_x, y: self.mouse_y });
-            }
-
-            if packet.wheel != 0 {
-                self.event_queue.push(InputEvent::Scroll { delta: packet.wheel as isize });
-            }
-        }
-
-        // Poll modifier states from the keyboard driver
-        self.alt_pressed = keyboard::is_alt_pressed(); 
-        self.ctrl_pressed = keyboard::is_ctrl_pressed();
-        self.shift_pressed = keyboard::is_shift_pressed();
-
-        while let Some(key) = keyboard::get_char() {
-            // Interrupts are handled inside get_char, so this is safe to loop
-            self.event_queue.push(InputEvent::KeyPress { key });
-        }
-    }
 }
 
 pub struct WindowManager {
@@ -1290,7 +1154,7 @@ impl WindowManager {
             }
 
             // 5. Draw Mouse Cursor
-            self.draw_cursor(&mut local_fb, self.input.mouse_x, self.input.mouse_y, *dirty_rect);
+            cursor::draw_cursor(&mut local_fb, self.cursor_style, self.input.mouse_x, self.input.mouse_y, *dirty_rect);
         }
 
 
@@ -1631,192 +1495,6 @@ impl WindowManager {
             let bar_color = 0x00_FF_CC_00; // Orange/Yellow for brightness
             draw_rect(fb, x + 10, y + 35, 180 * brightness_level as usize / 100, 15, bar_color, Some(clip));
         }
-    }
-
-    fn draw_cursor(&self, fb: &mut framebuffer::Framebuffer, x: isize, y: isize, clip: Rect) {
-        let (width, height) = if let Some(ref info) = fb.info {
-            (info.width as isize, info.height as isize)
-        } else {
-            return;
-        };
-
-        let (mut draw_x, mut draw_y) = (x, y);
-        if self.cursor_style == CursorStyle::Crosshair {
-            // Center the crosshair on the mouse coordinates
-            draw_x -= 6;
-            draw_y -= 8;
-        }
-
-        // Standard Arrow Cursor Bitmap (12x17)
-            // 0 = Transparent, 1 = Black Border, 2 = White Fill
-            let cursor_bitmap = match self.cursor_style {
-                CursorStyle::Arrow => [
-                    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [1, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [1, 2, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [1, 2, 2, 2, 1, 0, 0, 0, 0, 0, 0, 0],
-                    [1, 2, 2, 2, 2, 1, 0, 0, 0, 0, 0, 0],
-                    [1, 2, 2, 2, 2, 2, 1, 0, 0, 0, 0, 0],
-                    [1, 2, 2, 2, 2, 2, 2, 1, 0, 0, 0, 0],
-                    [1, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0, 0],
-                    [1, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0],
-                    [1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0],
-                    [1, 2, 2, 1, 2, 2, 1, 0, 0, 0, 0, 0],
-                    [1, 2, 1, 0, 1, 2, 2, 1, 0, 0, 0, 0],
-                    [1, 1, 0, 0, 1, 2, 2, 1, 0, 0, 0, 0],
-                    [1, 0, 0, 0, 0, 1, 2, 2, 1, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 1, 2, 2, 1, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
-                ],
-                CursorStyle::ResizeNS => [
-                    [0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 1, 2, 1, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 1, 2, 2, 2, 1, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 1, 2, 1, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 1, 2, 1, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 1, 2, 1, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 1, 2, 1, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 1, 2, 1, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 1, 2, 1, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 1, 2, 1, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 1, 2, 2, 2, 1, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 1, 2, 1, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                ],
-                CursorStyle::Hand => [
-                    [0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 1, 2, 2, 1, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 1, 2, 2, 1, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 1, 2, 2, 1, 0, 1, 1, 1, 0, 0],
-                    [0, 0, 1, 2, 2, 1, 1, 2, 2, 2, 1, 0],
-                    [0, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 1],
-                    [1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1],
-                    [1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1],
-                    [1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1],
-                    [1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1],
-                    [1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1],
-                    [0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0],
-                    [0, 0, 1, 2, 2, 2, 2, 2, 2, 1, 0, 0],
-                    [0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                ],
-                CursorStyle::IBeam => [
-                    [1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                ],
-                CursorStyle::Crosshair => [
-                    [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1],
-                    [1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                ],
-                CursorStyle::ResizeEW => [
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0],
-                    [0, 1, 2, 1, 0, 0, 0, 0, 0, 1, 2, 1],
-                    [1, 2, 2, 2, 1, 1, 1, 1, 1, 2, 2, 2],
-                    [0, 1, 2, 1, 0, 0, 0, 0, 0, 1, 2, 1],
-                    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                ],
-                CursorStyle::ResizeNWSE => [
-                    [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [1, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 1, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 1, 2, 1, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 1, 2, 1, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 1, 2, 1, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 1, 2, 1, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 1, 2, 1, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 1, 2, 1, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 1, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 1],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                ],
-                CursorStyle::ResizeNESW => [
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 1],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 1, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 1, 2, 1, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 1, 2, 1, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 1, 2, 1, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 1, 2, 1, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 1, 2, 1, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 1, 2, 1, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 1, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [1, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                ],
-            };
-
-            for (dy, row) in cursor_bitmap.iter().enumerate() {
-                for (dx, &pixel) in row.iter().enumerate() {
-                    if pixel == 0 { continue; }
-
-                    let color = if pixel == 1 { 0x00_00_00_00 } else { 0x00_FF_FF_FF };
-                    let px = draw_x + dx as isize;
-                    let py = draw_y + dy as isize;
-
-                    if clip.contains(px, py) && px >= 0 && py >= 0 && px < width && py < height {
-                        fb.set_pixel(px as usize, py as usize, color);
-                    }
-                }
-            }
     }
 }
 

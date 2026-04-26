@@ -18,6 +18,7 @@ Included in the userspace:
 *   **Text Editor**
 *   **Paint**
 *   **Task Manager**: Monitor running processes and system resources.
+*   **NebulaBrowser**: (Currently non-functional as there is no network driver)
 
 ## 🛠️ Build & Run
 
