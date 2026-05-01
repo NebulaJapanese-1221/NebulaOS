@@ -99,12 +99,18 @@ pub static KEY_BUFFER: Mutex<KeyBuffer> = Mutex::new(KeyBuffer::new());
 
 /// Retreives the next char from the buffer, if any.
 pub fn get_char() -> Option<char> {
-    // Disable interrupts to prevent deadlock with the interrupt handler
-    unsafe { asm!("cli", options(nomem, nostack)); }
-    let mut kb = KEY_BUFFER.lock(); 
-    let c = kb.pop();
-    drop(kb); // Release lock before re-enabling interrupts
-    unsafe { asm!("sti", options(nomem, nostack)); }
+    let c;
+    unsafe {
+        let flags: u32;
+        asm!("pushfd; pop {}", out(reg) flags, options(nomem, nostack));
+        asm!("cli", options(nomem, nostack));
+        
+        let mut kb = KEY_BUFFER.lock();
+        c = kb.pop();
+        drop(kb);
+
+        if (flags & 0x200) != 0 { asm!("sti", options(nomem, nostack)); }
+    }
     c
 }
 

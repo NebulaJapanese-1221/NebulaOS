@@ -65,12 +65,12 @@ impl ProgressBar {
         if self.text {
             let font_height = if super::LARGE_TEXT.load(core::sync::atomic::Ordering::Relaxed) { 32 } else { 16 };
             let text_val = alloc::format!("{}%", progress);
-            let tw = font::string_width(&text_val);
+            let tw = font::string_width(text_val.as_str());
             
             let tx = self.rect.x + (self.rect.width as isize - tw as isize) / 2;
             let ty = self.rect.y + (self.rect.height as isize - font_height as isize) / 2;
             
-            font::draw_string(fb, tx, ty, &text_val, self.text_color, Some(draw_clip));
+            font::draw_string(fb, tx, ty, text_val.as_str(), self.text_color, Some(draw_clip));
         }
     }
 }

@@ -5,7 +5,7 @@ use crate::drivers::rtc::{self, CURRENT_DATETIME, TIME_NEEDS_UPDATE};
 use alloc::vec::Vec;
 use alloc::string::ToString;
 use alloc::{format, vec};
-use crate::userspace::apps::{app::AppEvent, calculator::Calculator, editor::TextEditor, paint::Paint, settings::Settings, terminal::Terminal, task_manager::TaskManager, nebula_browser::NebulaBrowser};
+use crate::userspace::apps::{app::{App, AppEvent}, calculator::Calculator, editor::TextEditor, paint::Paint, settings::Settings, terminal::Terminal, task_manager::TaskManager, nebula_browser::NebulaBrowser};
 use spin::Mutex;
 use alloc::boxed::Box;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -20,9 +20,199 @@ use crate::userspace::localisation::{self, Localisation};
 // Re-export fonts from their new location so existing references to gui::font work
 pub use crate::userspace::fonts::font;
 
-use self::cursor::{CursorStyle, draw_cursor};
+use self::cursor::CursorStyle;
 const MAX_WINDOWS: usize = 10;
 pub const TOP_BAR_HEIGHT: usize = 32; // Slightly taller for better readability
+
+/// Sentinel rectangle used to signal that a window should be closed.
+pub const CLOSE_SIGNAL_RECT: Rect = Rect { x: -1, y: -1, width: 0, height: 0 };
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
+}
+
+pub enum InputEvent {
+    MouseMove { x: isize, y: isize, dx: isize, dy: isize },
+    MouseButton { button: MouseButton, down: bool, x: isize, y: isize },
+    Scroll { delta: isize },
+    KeyPress { key: char },
+}
+
+pub struct InputManager {
+    pub mouse_x: isize,
+    pub mouse_y: isize,
+    pub lbutton: bool,
+    pub rbutton: bool,
+    pub mbutton: bool,
+    pub ctrl_pressed: bool,
+    pub shift_pressed: bool,
+    pub alt_pressed: bool,
+    pub event_queue: Vec<InputEvent>,
+}
+
+impl InputManager {
+    pub const fn new() -> Self {
+        Self {
+            mouse_x: 400, mouse_y: 300,
+            lbutton: false, rbutton: false, mbutton: false,
+            ctrl_pressed: false, shift_pressed: false, alt_pressed: false,
+            event_queue: Vec::new(),
+        }
+    }
+
+    pub fn update(&mut self, screen_width: isize, screen_height: isize) {
+        // Handle Mouse Input
+        while let Some(packet) = crate::drivers::mouse::get_packet() {
+            let dx = packet.x as isize;
+            let dy = -packet.y as isize;
+
+            let old_x = self.mouse_x;
+            let old_y = self.mouse_y;
+
+            self.mouse_x = (self.mouse_x + dx).clamp(0, screen_width - 1);
+            self.mouse_y = (self.mouse_y + dy).clamp(0, screen_height - 1);
+
+            // OOM Prevention: Cap the event queue. If it's too full, we drop 
+            // old movements to keep the system alive.
+            if self.event_queue.len() > 128 {
+                self.event_queue.clear();
+                return;
+            }
+
+            if old_x != self.mouse_x || old_y != self.mouse_y {
+                self.event_queue.push(InputEvent::MouseMove { x: self.mouse_x, y: self.mouse_y, dx: self.mouse_x - old_x, dy: self.mouse_y - old_y });
+            }
+
+            let left_down = (packet.buttons & 1) != 0;
+            if left_down != self.lbutton {
+                self.lbutton = left_down;
+                self.event_queue.push(InputEvent::MouseButton { button: MouseButton::Left, down: self.lbutton, x: self.mouse_x, y: self.mouse_y });
+            }
+            let right_down = (packet.buttons & 2) != 0;
+            if right_down != self.rbutton {
+                self.rbutton = right_down;
+                self.event_queue.push(InputEvent::MouseButton { button: MouseButton::Right, down: self.rbutton, x: self.mouse_x, y: self.mouse_y });
+            }
+        }
+
+        // Handle Keyboard Input
+        while let Some(key) = crate::drivers::keyboard::get_char() {
+            self.ctrl_pressed = crate::drivers::keyboard::is_ctrl_pressed();
+            self.alt_pressed = crate::drivers::keyboard::is_alt_pressed();
+            self.shift_pressed = crate::drivers::keyboard::is_shift_pressed();
+            self.event_queue.push(InputEvent::KeyPress { key });
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ErrorLevel {
+    Info,
+    Warning,
+    Moderate,
+    Critical,
+}
+
+#[derive(Clone)]
+pub struct MessageBox {
+    pub message: alloc::string::String,
+    pub icon_color: u32,
+}
+
+impl App for MessageBox {
+    fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window, clip: Rect) {
+        let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
+        let title_height = font_height + 10;
+        
+        // Icon background
+        draw_rect(fb, win.x + 15, win.y + title_height as isize + 15, 32, 32, self.icon_color, Some(clip));
+        // Simple '!' symbol
+        font::draw_char(fb, win.x + 27, win.y + title_height as isize + 23, '!', 0xFFFFFFFF, Some(clip));
+
+        // Message text
+        font::draw_string(fb, win.x + 60, win.y + title_height as isize + 23, self.message.as_str(), 0xFFFFFFFF, Some(clip));
+
+        // OK Button
+        let mut ok_btn = Button::new(win.x + win.width as isize - 70, win.y + win.height as isize - 35, 60, 25, "OK");
+        ok_btn.bg_color = 0x00_44_44_44;
+        ok_btn.draw(fb, 0, 0, Some(clip));
+    }
+
+    fn handle_event(&mut self, event: &AppEvent, _win: &Window) -> Option<Rect> {
+        if let AppEvent::MouseClick { x, y, width, height } = event {
+            let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
+            let title_height = font_height + 10;
+            
+            let ok_btn = Button::new(*width as isize - 70, *height as isize - title_height as isize - 35, 60, 25, "OK");
+            if ok_btn.contains(*x, *y) {
+                return Some(CLOSE_SIGNAL_RECT);
+            }
+        }
+        None
+    }
+
+    fn box_clone(&self) -> Box<dyn App> {
+        Box::new(self.clone())
+    }
+}
+
+pub static PENDING_SYSTEM_ERRORS: Mutex<Vec<(ErrorLevel, &'static str, alloc::string::String)>> = Mutex::new(Vec::new());
+
+pub fn push_system_error(level: ErrorLevel, title: &'static str, message: alloc::string::String) {
+    PENDING_SYSTEM_ERRORS.lock().push((level, title, message));
+}
+
+#[derive(Clone)]
+pub enum WindowContent {
+    App(Box<dyn crate::userspace::apps::app::App>),
+}
+
+#[derive(Clone)]
+pub struct Window {
+    pub id: usize,
+    pub x: isize,
+    pub y: isize,
+    pub width: usize,
+    pub height: usize,
+    pub title: &'static str,
+    pub color: u32,
+    pub content: WindowContent,
+    pub minimized: bool,
+    pub maximized: bool,
+    pub restore_rect: Option<Rect>,
+}
+
+impl Window {
+    pub fn rect(&self) -> Rect {
+        Rect { x: self.x, y: self.y, width: self.width, height: self.height }
+    }
+
+    /// Returns a deep clone of the window, including the application state.
+    pub fn deep_clone(&self) -> Self {
+        Self {
+            content: self.content.clone(),
+            ..self.clone()
+        }
+    }
+}
+
+impl Clone for Window {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            x: self.x, y: self.y,
+            width: self.width, height: self.height,
+            title: self.title,
+            color: self.color,
+            content: WindowContent::MetadataOnly, // Shallow clone by default for performance
+            minimized: self.minimized, maximized: self.maximized,
+            restore_rect: self.restore_rect,
+        }
+    }
+}
 
 pub static DESKTOP_GRADIENT_START: AtomicU32 = AtomicU32::new(0x00_0F_11_1A); // Deep Navy
 pub static DESKTOP_GRADIENT_END: AtomicU32 = AtomicU32::new(0x00_24_3B_55);   // Nebula Blue
@@ -89,6 +279,7 @@ pub struct WindowManager {
     brightness_osd_timeout: usize,
     tooltip: Option<(alloc::string::String, isize, isize)>,
     last_grad_hash: u32,
+    last_power_poll: usize,
 }
 
 impl WindowManager {
@@ -117,7 +308,27 @@ impl WindowManager {
             brightness_osd_timeout: 0,
             tooltip: None,
             last_grad_hash: 0,
+            last_power_poll: 0,
         }
+    }
+
+    pub fn spawn_error_popup(&mut self, title: &'static str, message: &str, level: ErrorLevel) {
+        let (win_color, icon_color) = match level {
+            ErrorLevel::Info => (0x00_1E_1E_1E, 0x00_00_78_D4),
+            ErrorLevel::Warning => (0x00_2D_2D_00, 0x00_FF_D7_00),
+            ErrorLevel::Moderate => (0x00_3D_1F_00, 0x00_FF_8C_00),
+            ErrorLevel::Critical => (0x00_3D_00_00, 0x00_E8_11_23),
+        };
+
+        let content = MessageBox { message: message.to_string(), icon_color };
+        let width = 360; let height = 100;
+        let x = 220; let y = 150 + (self.windows.len() as isize * 25);
+
+        self.add_window(Window {
+            id: 0, x, y, width, height, title, color: win_color,
+            content: WindowContent::App(Box::new(content)),
+            minimized: false, maximized: false, restore_rect: None,
+        });
     }
 
     pub fn add_window(&mut self, mut window: Window) {
@@ -131,7 +342,22 @@ impl WindowManager {
     }
 
     fn mark_dirty(&mut self, rect: Rect) {
-        self.dirty_rects.push(rect);
+        // OOM Prevention: If we have too many dirty rects, the heap might be 
+        // struggling. Collapse all updates into one full screen redraw to
+        // stop the Vec from allocating more memory.
+        if self.dirty_rects.len() > 100 {
+            self.dirty_rects.clear();
+            FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
+        } else if !FULL_REDRAW_REQUESTED.load(Ordering::Relaxed) {
+            // Try to reserve space for 1 more rect. 
+            // If it fails, we avoid the panic and fall back to a full redraw.
+            if self.dirty_rects.try_reserve(1).is_err() {
+                self.dirty_rects.clear();
+                FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
+            } else {
+                self.dirty_rects.push(rect);
+            }
+        }
     }
 
     fn get_menu_items(&self, l: &dyn Localisation) -> Vec<MenuEntry> {
@@ -169,7 +395,12 @@ impl WindowManager {
 
         let ver_str = format!("NebulaOS v{}", crate::kernel::VERSION);
 
-        font::draw_string(fb, screen_width - font::string_width(&ver_str) as isize - 10, screen_height - 60, &ver_str, 0x00_70_70_70, Some(dirty_rect));
+        font::draw_string(fb, screen_width - font::string_width(ver_str.as_str()) as isize - 10, screen_height - 60, ver_str.as_str(), 0x00_70_70_70, Some(dirty_rect));
+
+        if crate::kernel::IS_SAFE_MODE.load(Ordering::Relaxed) {
+            let safe_str = "[ SAFE MODE ]";
+            font::draw_string(fb, 20, screen_height - 60, safe_str, 0x00_FF_55_55, Some(dirty_rect));
+        }
     }
 
     fn mark_dirty_outline(&mut self, rect: Rect) {
@@ -196,6 +427,14 @@ impl WindowManager {
 
         // Synchronize hardware power status (Battery/Thermal)
         crate::kernel::acpi::update_power_status();
+
+        // Process pending system errors from the kernel
+        {
+            let mut errors = PENDING_SYSTEM_ERRORS.lock();
+            while let Some((level, title, msg)) = errors.pop() {
+                self.spawn_error_popup(title, msg.as_str(), level);
+            }
+        }
 
         // Check if time needs update
         if TIME_NEEDS_UPDATE.load(Ordering::Relaxed) {
@@ -248,16 +487,14 @@ impl WindowManager {
             (800, 600) // Fallback
         };
 
-        // Notify non-minimized windows of system ticks for periodic state updates (like blinking cursors)
-        let current_tick = crate::kernel::process::TICKS.load(Ordering::Relaxed);
+        // Notify non-minimized windows of system ticks
         for i in 0..self.windows.len() {
             if !self.windows[i].minimized {
-                // Snapshot window info to pass to the event handler safely
+                // Snapshot window info (metadata) to pass to the event handler safely
                 let win_info = self.windows[i].clone();
-                if let WindowContent::App(app) = &mut self.windows[i].content {
-                    if let Some(dirty_rect) = app.handle_event(&AppEvent::Tick { tick_count: current_tick }, &win_info) {
-                        self.mark_dirty(dirty_rect);
-                    }
+                let WindowContent::App(app) = &mut self.windows[i].content;
+                if let Some(dirty_rect) = app.handle_event(&AppEvent::Tick { tick_count: current_tick }, &win_info) {
+                    self.mark_dirty(dirty_rect);
                 }
             }
         }
@@ -354,10 +591,9 @@ impl WindowManager {
                 if let Some(target_id) = self.click_target_id {
                     if let Some(idx) = self.windows.iter().position(|w| w.id == target_id) {
                         let win = self.windows[idx].clone();
-                        if let WindowContent::App(app) = &mut self.windows[idx].content {
-                            let dirty = app.handle_event(&AppEvent::Scroll { delta: delta * 3, width: win.width, height: win.height }, &win);
-                            self.mark_dirty(dirty.unwrap_or_else(|| win.rect()));
-                        }
+                        let WindowContent::App(app) = &mut self.windows[idx].content;
+                        let dirty = app.handle_event(&AppEvent::Scroll { delta: delta * 3, width: win.width, height: win.height }, &win);
+                        self.mark_dirty(dirty.unwrap_or_else(|| win.rect()));
                     }
                 }
             }
@@ -443,10 +679,9 @@ impl WindowManager {
                              if let Some(&top_win_id) = self.z_order.last() {
                                 let win = self.windows.iter().find(|w| w.id == top_win_id).unwrap().clone();
                                 let win_mut = self.windows.iter_mut().find(|w| w.id == top_win_id).unwrap();
-                                if let WindowContent::App(app) = &mut win_mut.content {
-                                    let dirty = app.handle_event(&AppEvent::KeyPress { key }, &win);
-                                    self.mark_dirty(dirty.unwrap_or_else(|| win.rect()));
-                                }
+                                let WindowContent::App(app) = &mut win_mut.content;
+                                let dirty = app.handle_event(&AppEvent::KeyPress { key }, &win);
+                                self.mark_dirty(dirty.unwrap_or_else(|| win.rect()));
                             }
                         }
                     }
@@ -501,13 +736,12 @@ impl WindowManager {
                         };
                         let win_snap = self.windows[idx].clone();
                         
-                        if let WindowContent::App(app) = &mut self.windows[idx].content {
-                            let rel_x = self.input.mouse_x - win_x;
-                            let rel_y = self.input.mouse_y - (win_y + title_height as isize);
-                            if rel_x >= 0 && rel_x < win_w as isize && rel_y >= 0 && rel_y < win_h.saturating_sub(title_height) as isize {
-                                let dirty = app.handle_event(&AppEvent::MouseMove { x: rel_x, y: rel_y, width: win_w, height: win_h }, &win_snap);
-                                if let Some(r) = dirty { self.mark_dirty(r); }
-                            }
+                        let WindowContent::App(app) = &mut self.windows[idx].content;
+                        let rel_x = self.input.mouse_x - win_x;
+                        let rel_y = self.input.mouse_y - (win_y + title_height as isize);
+                        if rel_x >= 0 && rel_x < win_w as isize && rel_y >= 0 && rel_y < win_h.saturating_sub(title_height) as isize {
+                            let dirty = app.handle_event(&AppEvent::MouseMove { x: rel_x, y: rel_y, width: win_w, height: win_h }, &win_snap);
+                            if let Some(r) = dirty { self.mark_dirty(r); }
                         }
                     }
                 }
@@ -542,13 +776,13 @@ impl WindowManager {
         }
 
         // 2. Check Window buttons and resize borders
-        if let Some(&top_win_id) = self.z_order.last() {
+        let locale_lock = localisation::CURRENT_LOCALE.lock();
+        if let (Some(&top_win_id), Some(locale)) = (self.z_order.last(), locale_lock.as_ref()) {
             if let Some(win) = self.windows.iter().find(|w| w.id == top_win_id) {
                 if !win.minimized {
                     let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
                     let title_height = font_height + 6;
                     
-                    // Check if over window control buttons (Close, Max, Min)
                     if self.input.mouse_y >= win.y && self.input.mouse_y < win.y + title_height as isize {
                         if self.input.mouse_x >= win.x + win.width as isize - 70 {
                             new_style = CursorStyle::Hand;
@@ -584,18 +818,13 @@ impl WindowManager {
                         } else if in_x_body && in_y_body {
                             let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
                             let title_height = font_height + 6;
-
-                            // If inside window but not on border/buttons, check for text apps
                             if self.input.mouse_y >= win.y + title_height as isize {
-                                let locale_lock = localisation::CURRENT_LOCALE.lock();
-                                if let Some(locale) = locale_lock.as_ref() {
-                                    if win.title == locale.app_terminal() || win.title == locale.app_text_editor() {
-                                        new_style = CursorStyle::IBeam;
-                                    } else if win.title == locale.app_paint() {
-                                        let toolbar_height = 40;
-                                        if self.input.mouse_y >= win.y + title_height as isize + toolbar_height {
-                                            new_style = CursorStyle::Crosshair;
-                                        }
+                                if win.title == locale.app_terminal() || win.title == locale.app_text_editor() {
+                                    new_style = CursorStyle::IBeam;
+                                } else if win.title == locale.app_paint() {
+                                    let toolbar_height = 40;
+                                    if self.input.mouse_y >= win.y + title_height as isize + toolbar_height {
+                                        new_style = CursorStyle::Crosshair;
                                     }
                                 }
                             }
@@ -966,10 +1195,10 @@ impl WindowManager {
             }
         } else if let (MouseButton::Left, false) = (button, down) {
 
-            if let Some(win_id) = self.resize_win_id {
+            if let Some(_win_id) = self.resize_win_id {
                 self.resize_win_id = None;
                 self.resize_direction = ResizeDirection::None;
-            } else if let Some(win_id) = self.drag_win_id {
+            } else if let Some(_win_id) = self.drag_win_id {
                 self.drag_win_id = None;
             } else { // Only process content click if not dragging
                 if let Some(target_id) = self.click_target_id {
@@ -985,11 +1214,24 @@ impl WindowManager {
                     }
 
                     if let Some((rel_x, rel_y)) = event_coords {
+                        // Take the snapshot BEFORE getting the mutable borrow of self.windows
                         let win_snap = self.windows.iter().find(|w| w.id == target_id).unwrap().clone();
                         if let Some(win) = self.windows.iter_mut().find(|w| w.id == target_id) {
-                             if let WindowContent::App(app) = &mut win.content {
-                                let dirty = app.handle_event(&AppEvent::MouseClick { x: rel_x, y: rel_y, width: win.width, height: win.height }, &win_snap);
-                                self.mark_dirty(dirty.unwrap_or_else(|| win_snap.rect()));
+                            let WindowContent::App(app) = &mut win.content;
+                            if let Some(dirty) = app.handle_event(&AppEvent::MouseClick { x: rel_x, y: rel_y, width: win.width, height: win.height }, &win_snap) {
+                                if dirty.x == -1 && dirty.y == -1 && dirty.width == 0 {
+                                    // Close Signal Received
+                                    let id_to_remove = target_id;
+                                    self.windows.retain(|w| w.id != id_to_remove);
+                                    self.z_order.retain(|&id| id != id_to_remove);
+                                    self.mark_dirty(win_snap.rect());
+                                    // Redraw taskbar to update window list
+                                    self.mark_dirty(Rect { x: 0, y: screen_height - 40, width: screen_width as usize, height: 40 });
+                                } else {
+                                    self.mark_dirty(dirty);
+                                }
+                            } else {
+                                self.mark_dirty(win_snap.rect());
                             }
                         }
                     }
@@ -1062,6 +1304,13 @@ impl WindowManager {
         // Ensure local backbuffer is sized correctly
         let buffer_size = fb_info.width * fb_info.height;
         if self.backbuffer.len() != buffer_size {
+            // Attempt to reserve the exact amount needed for the screen.
+            // If this fails, we cannot draw the GUI backbuffer.
+            if self.backbuffer.try_reserve_exact(buffer_size.saturating_sub(self.backbuffer.len())).is_err() {
+                // Fail-safe: Push a system error if there's enough room, 
+                // otherwise, this frame is dropped.
+                return;
+            }
             self.backbuffer.resize(buffer_size, 0);
         }
 
@@ -1210,7 +1459,7 @@ impl WindowManager {
         ((rv as u32) << 16) | ((gv as u32) << 8) | (bv as u32)
     }
 
-    fn draw_win_btn(&self, fb: &mut framebuffer::Framebuffer, x: isize, y: isize, text: &str, color: u32, mouse_x: isize, mouse_y: isize, clip: Rect) {
+    fn draw_win_btn(&self, fb: &mut framebuffer::Framebuffer, x: isize, y: isize, text: &str, color: u32, _mouse_x: isize, _mouse_y: isize, clip: Rect) {
         let rect = Rect { x, y, width: 16, height: 16 };
         if !clip.intersects(&rect) { return; }
         let bg = color; // Removed hover effect
@@ -1267,9 +1516,8 @@ impl WindowManager {
 
         if let Some(r) = clip.intersection(&content_rect).and_then(|r| r.intersection(&screen_rect)) {
             fb.set_clip(r.x as usize, r.y as usize, r.width, r.height);
-            if let WindowContent::App(app) = &win.content {
-                app.draw(fb, win, r);
-            }
+            let WindowContent::App(app) = &win.content;
+            app.draw(fb, win, r);
             fb.clear_clip();
         }
     }

@@ -15,6 +15,10 @@ iso: build
 	echo '  multiboot /boot/kernel.bin' >> isofiles/boot/grub/grub.cfg
 	echo '  boot' >> isofiles/boot/grub/grub.cfg
 	echo '}' >> isofiles/boot/grub/grub.cfg
+	echo 'menuentry "NebulaOS (Safe Mode)" {' >> isofiles/boot/grub/grub.cfg
+	echo '  multiboot /boot/kernel.bin safemode' >> isofiles/boot/grub/grub.cfg
+	echo '  boot' >> isofiles/boot/grub/grub.cfg
+	echo '}' >> isofiles/boot/grub/grub.cfg
 	grub-mkrescue -o nebula_os.iso isofiles
 	rm -r isofiles
 

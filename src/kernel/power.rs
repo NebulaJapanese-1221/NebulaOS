@@ -17,12 +17,16 @@ pub fn shutdown() {
             let width = info.width;
             let height = info.height;
             
+            // Clear the animation area to prevent smearing
+            let clear_color = 0x00_050515; // Matching the boot screen background
+            crate::userspace::gui::draw_rect(&mut fb, (width / 2) as isize - 150, (height / 2) as isize - 60, 300, 120, clear_color, None);
+
             let msg = "NebulaOS is powering off...";
             let x = (width / 2).saturating_sub((msg.len() * 8) / 2);
             font::draw_string(&mut fb, x as isize, (height / 2) as isize - 40, msg, 0x00_AAAAAA, None);
             
             // Draw the spinner animation
-            crate::kernel::draw_spinner(&mut fb, (width / 2) as isize, (height / 2) as isize);
+            crate::kernel::boot::draw_spinner(&mut fb, (width / 2) as isize, (height / 2) as isize);
             // Optimized blit
             fb.present_rect(width / 2 - 150, height / 2 - 60, 300, 120);
         }

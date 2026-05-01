@@ -1,8 +1,5 @@
-#[cfg(not(test))]
-use core::panic::PanicInfo;
 use core::arch::asm; 
 use crate::drivers::framebuffer::FRAMEBUFFER;
-use crate::userspace::fonts::font;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 pub mod io;
 pub mod interrupts;
@@ -17,146 +14,25 @@ pub mod paging; // Make paging module public
 pub mod process;
 pub mod cpu;
 pub mod elf;
+pub mod boot;
+pub mod panic;
+pub mod jit;
 
 pub const VERSION: &str = "0.0.3-dev3";
 
 pub static TOTAL_MEMORY: AtomicUsize = AtomicUsize::new(0);
 pub static CPU_CORES: AtomicUsize = AtomicUsize::new(1);
-static BOOT_ANIM_FRAME: AtomicUsize = AtomicUsize::new(0);
-static BOOT_ANIM_RUNNING: AtomicBool = AtomicBool::new(true);
-static BOOT_PROGRESS_DISPLAY: AtomicUsize = AtomicUsize::new(0);
+pub static IS_SAFE_MODE: AtomicBool = AtomicBool::new(false);
 
-/// Pre-calculated offsets for a 12-spoke loading wheel (30-degree increments).
-const SPOKE_OFFSETS: [(isize, isize); 12] = [
-    (0, -20), (10, -17), (17, -10), (20, 0),
-    (17, 10), (10, 17), (0, 20), (-10, 17),
-    (-17, 10), (-20, 0), (-17, -10), (-10, -17)
-];
+/// Executes a buffer of native machine code. 
+/// This is the entry point for JIT-compiled architecture-independent logic.
+pub unsafe fn execute_jit_code(code: &[u8]) {
+    // Ensure the memory is marked as executable in the page tables
+    paging::make_executable(code.as_ptr() as usize, code.len());
 
-/// Pre-assembled u32 colors for the spinner to avoid runtime bit-shifting and matching.
-const SPINNER_COLORS: [u32; 12] = [
-    0x00_FF_FF_FF, 0x00_64_C8_FF, 0x00_50_96_FF, 0x00_3C_64_C8, 0x00_28_3C_96, 0x00_14_1E_50,
-    0x00_0F_0F_28, 0x00_0F_0F_28, 0x00_0F_0F_28, 0x00_0F_0F_28, 0x00_0F_0F_28, 0x00_0F_0F_28,
-];
-
-pub(crate) fn draw_spinner(fb: &mut crate::drivers::framebuffer::Framebuffer, cx: isize, cy: isize) {
-    let frame = if BOOT_ANIM_RUNNING.load(Ordering::Relaxed) {
-        BOOT_ANIM_FRAME.fetch_add(2, Ordering::Relaxed) // Slower, smoother rotation
-    } else {
-        BOOT_ANIM_FRAME.load(Ordering::Relaxed)
-    };
-    
-    let head = (frame % 12) as usize;
-    
-    for i in 0..12 {
-        let color = SPINNER_COLORS[(i + 12 - head) % 12];
-        let (dx, dy) = SPOKE_OFFSETS[i];
-
-        // Draw the spoke as a series of pixels. Stepping by 2 provides a smooth appearance 
-        // while reducing writes and calculations by ~50%.
-        for r in (8..=20).step_by(2) {
-            let px = cx + (dx * r as isize / 20);
-            let py = cy + (dy * r as isize / 20);
-            fb.set_pixel(px as usize, py as usize, color);
-        }
-    }
-}
-
-fn draw_boot_screen_content(fb: &mut crate::drivers::framebuffer::Framebuffer, status: &str, progress: usize) {
-    let (width, height) = match fb.info.as_ref() {
-        Some(info) => (info.width, info.height),
-        None => return,
-    };
-
-    // Optimized: Only clear the central active area to maintain high FPS
-    let clear_rect = crate::userspace::gui::rect::Rect {
-        x: (width / 2) as isize - 210,
-        y: (height / 2) as isize - 20,
-        width: 420,
-        height: 160,
-    };
-    crate::userspace::gui::draw_rect(fb, clear_rect.x, clear_rect.y, clear_rect.width, clear_rect.height, 0x00_050515, None);
-
-    let title = "NebulaOS";
-    let x_title = (width / 2).saturating_sub((title.len() * 8) / 2);
-    let y_title = (height / 2).saturating_sub(8); // True vertical center for logo
-    
-    font::draw_string(fb, x_title as isize, y_title as isize, title, 0x00_FFFFFF, None);
-
-    // Optimized Reflection: Draw once with a fixed dim color to save cycles
-    font::draw_string(fb, x_title as isize, y_title as isize + 14, title, 0x00_151535, None);
-
-    // Draw bike-spoke spinner below the title
-    draw_spinner(fb, (width / 2) as isize, (height / 2) as isize + 45);
-
-    // Draw status message
-    let x_status = (width / 2).saturating_sub((status.len() * 8) / 2);
-    font::draw_string(fb, x_status as isize, (height / 2) as isize + 85, status, 0x00_CCCCCC, None);
-
-    // Draw progress bar
-    draw_progress_bar_internal(fb, progress, width, height);
-}
-
-fn draw_boot_screen(status: &str, progress: usize) {
-    let mut fb = FRAMEBUFFER.lock();
-    let (width, height) = match fb.info.as_ref() {
-        Some(info) => (info.width, info.height),
-        None => return,
-    };
-
-    draw_boot_screen_content(&mut fb, status, progress);
-    // Optimized present covering the new vertically shifted group
-    fb.present_rect(width / 2 - 210, (height / 2).saturating_sub(15), 420, 150);
-}
-
-fn add_boot_status(status: &str, target_progress: usize) {
-    let current = BOOT_PROGRESS_DISPLAY.load(Ordering::Relaxed);
-    if target_progress > current {
-        for p in current..=target_progress {
-            BOOT_PROGRESS_DISPLAY.store(p, Ordering::Relaxed);
-            draw_boot_screen(status, p);
-
-                // Use the new TSC-based high precision delay. 
-                // This works perfectly regardless of whether interrupts are enabled or disabled.
-                cpu::spin_wait_us(10000); // 10ms
-        }
-    } else {
-        draw_boot_screen(status, target_progress);
-    }
-}
-
-fn draw_progress_bar_internal(fb: &mut crate::drivers::framebuffer::Framebuffer, progress: usize, width: usize, height: usize) {
-    let info = if let Some(i) = fb.info.as_ref() { i } else { return };
-    let buffer = if let Some(b) = fb.draw_buffer.as_mut() { b } else { return };
-
-    let bar_width = 400;
-    let bar_height = 4;
-    let x = (width / 2).saturating_sub(bar_width / 2);
-    let y = (height / 2) + 120;
-    
-    // Draw border
-    for j in -1..(bar_height as isize + 1) {
-        let py = (y as isize + j) as usize;
-        buffer[py * info.width + x - 1] = 0x00_444444;
-        buffer[py * info.width + x + bar_width] = 0x00_444444;
-    }
-    for i in 0..bar_width {
-        buffer[(y - 1) * info.width + x + i] = 0x00_444444;
-        buffer[(y + bar_height) * info.width + x + i] = 0x00_444444;
-    }
-
-    // Draw background
-    for py in y..(y + bar_height) {
-        let offset = py * info.width + x;
-        buffer[offset..offset + bar_width].fill(0x00_202020);
-    }
-    
-    // Draw progress
-    let filled_width = (bar_width * progress) / 100;
-    for py in y..(y + bar_height) {
-        let offset = py * info.width + x;
-        buffer[offset..offset + filled_width].fill(0x00_00AAFF);
-    }
+    let code_ptr = code.as_ptr() as *const ();
+    let func: extern "C" fn() = core::mem::transmute(code_ptr);
+    func();
 }
 
 // Entry point called by boot assembly
@@ -167,6 +43,22 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
 
     // Initialize Serial Port
     crate::drivers::serial::SERIAL1.lock().init(); 
+
+    // Parse Multiboot command line for "safemode"
+    unsafe {
+        // Pointer math using usize for multiarch safety
+        let cmdline_ptr = *((multiboot_info_ptr + 16) as *const usize);
+        if cmdline_ptr != 0 {
+            let ptr = cmdline_ptr as *const u8;
+            let mut len = 0;
+            // Scan for null terminator with a safety limit
+            while *ptr.add(len) != 0 && len < 256 { len += 1; }
+            let cmdline = core::str::from_utf8_unchecked(core::slice::from_raw_parts(ptr, len));
+            if cmdline.contains("safemode") {
+                IS_SAFE_MODE.store(true, Ordering::Relaxed);
+            }
+        }
+    }
 
     // --- Early hardware discovery and initialization ---
     let heap_region = allocator::find_heap_region(multiboot_info_ptr);
@@ -194,7 +86,7 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
             let (width, height) = (fb_info.1, fb_info.2);
             let mut fb = FRAMEBUFFER.lock();
             fb.clear(0x00_050515); // Full clear only once on entry
-            draw_boot_screen_content(&mut fb, "Starting NebulaOS...", 0);
+            boot::draw_boot_screen_content(&mut fb, "Starting NebulaOS...", 0);
             
             // Immediately present the boot screen content without the slow fade-in animation
             fb.present_rect(width / 2 - 210, (height / 2).saturating_sub(15), 420, 150);
@@ -205,43 +97,55 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     
     // Initialize GDT and TSS
     gdt::init();
-    add_boot_status("Initializing GDT...", 10);
+    boot::add_boot_status("System Core Initializing...", 15);
 
     // Set PIT frequency for scheduler (e.g., 1000 Hz)
     crate::drivers::pit::set_frequency(1000);
 
     // Initialize IDT (but do not enable interrupts yet)
     interrupts::init();
-    add_boot_status("Interrupts Initialized", 20); 
+    boot::add_boot_status("Setting Up Interrupts...", 25); 
 
     // Initialize the mouse driver (polls for ACKs, so interrupts must be disabled)
     crate::drivers::mouse::initialize();
-    add_boot_status("Mouse Driver Initialized", 40);
+    boot::add_boot_status("Mouse Driver Initialized", 40);
 
     // Initialize the keyboard driver
     crate::drivers::keyboard::init();
-    add_boot_status("Keyboard Driver Initialized", 50);
+    boot::add_boot_status("Keyboard Driver Initialized", 50);
+
+    // Safe Mode Check: If Left Shift is held, enter Safe Mode
+    if crate::drivers::keyboard::is_shift_pressed() {
+        IS_SAFE_MODE.store(true, Ordering::Relaxed);
+        boot::add_boot_status("ENTERING SAFE MODE...", 52);
+    }
 
     // Initialize the brightness driver
-    crate::drivers::brightness::BRIGHTNESS.lock().init();
-    add_boot_status("Brightness Driver Initialized", 60);
+    if !IS_SAFE_MODE.load(Ordering::Relaxed) {
+        crate::drivers::brightness::BRIGHTNESS.lock().init();
+        boot::add_boot_status("Brightness Driver Initialized", 60);
+    }
 
     // Now it is safe to enable interrupts
     interrupts::enable_interrupts();
-    add_boot_status("Interrupts Enabled", 70);
+    boot::add_boot_status("Hardware Signals Active", 70);
 
     // Calibrate NOP loops while PIT is running for hardware-consistent delays
     cpu::calibrate_delay();
 
-    // Initialize ACPI
-    acpi::init();
-    add_boot_status("ACPI Subsystem Ready", 80);
+    // Initialize ACPI (Skipped in Safe Mode to prevent power-related hangs)
+    if !IS_SAFE_MODE.load(Ordering::Relaxed) {
+        acpi::init();
+        boot::add_boot_status("Power Management Ready", 80);
+    } else {
+        boot::add_boot_status("ACPI Bypassed", 80);
+    }
 
     // Initialize CPU Info detection (CPUID)
     cpu::init();
-    add_boot_status("CPU Topology Detected", 90);
+    boot::add_boot_status("System Discovery Complete", 95);
 
-    add_boot_status("Launching Desktop Environment...", 100);
+    boot::add_boot_status("Launching Desktop Environment...", 100);
 
     // Fade out boot screen
     {
@@ -251,8 +155,8 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
             None => (800, 600),
         };
         // Skip the fade-out and present the final boot state before launching the GUI
-        BOOT_ANIM_RUNNING.store(false, Ordering::Relaxed); // Freeze the spinner
-        draw_boot_screen_content(&mut fb, "Launching Desktop Environment...", 100);
+        boot::BOOT_ANIM_RUNNING.store(false, Ordering::Relaxed); // Freeze the spinner
+        boot::draw_boot_screen_content(&mut fb, "Launching Desktop Environment...", 100);
         fb.present_rect(width / 2 - 210, (height / 2).saturating_sub(15), 420, 150);
     }
     
@@ -261,6 +165,15 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     
     crate::userspace::gui::init();
     
+    // Notify user if Safe Mode is active via a non-blocking popup
+    if IS_SAFE_MODE.load(Ordering::Relaxed) {
+        crate::userspace::gui::push_system_error(
+            crate::userspace::gui::ErrorLevel::Warning,
+            "System Information",
+            alloc::string::String::from("Safe Mode active: Power management and SMP disabled.")
+        );
+    }
+
     // Halt loop (The scheduler will hijack execution on the next timer tick)
     loop {
         crate::userspace::gui::update();
@@ -271,36 +184,5 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
         unsafe { asm!("hlt") };
         // Mark as active immediately after waking up
         crate::kernel::cpu::IS_IDLE.store(false, Ordering::Relaxed);
-    }
-}
-
-#[cfg(not(test))]
-#[panic_handler]
-fn panic(info: &PanicInfo) -> ! {    
-    // Disable interrupts to prevent further issues during panic
-    unsafe { core::arch::asm!("cli") };
-
-    crate::serial_println!("\nKERNEL PANIC\n{}", info);
-    unsafe { exceptions::print_stack_trace(); }
-
-    // Draw to screen
-    let mut fb = FRAMEBUFFER.lock();
-    fb.clear(0x00_CC0000); // Red (RSOD)
-    
-    font::draw_string(&mut fb, 30, 30, ":(", 0xFFFFFFFF, None);
-    font::draw_string(&mut fb, 30, 60, "NebulaOS ran into a problem and needs to restart.", 0xFFFFFFFF, None);
-
-    let mut writer = exceptions::PanicWriter::new(&mut fb, 30, 90);
-    use core::fmt::Write;
-    let _ = writeln!(writer, "Stop Code: KERNEL_PANIC");
-    let _ = writeln!(writer, "Details: {}", info);
-    let _ = writeln!(writer, "\nTechnical Information:\n----------------------");
-    unsafe { exceptions::print_stack_trace_to(&mut writer); }
-    
-    fb.present();
-
-    loop {
-        // Halt the CPU to prevent further execution
-        unsafe { asm!("cli; hlt", options(nomem, nostack)); }
     }
 }
