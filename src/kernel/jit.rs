@@ -71,12 +71,80 @@ impl JitFunction {
         }
     }
 
+    /// Calculates the native byte size of an IR instruction for the current architecture.
+    fn instr_size(&self, instr: &Instruction) -> usize {
+        #[cfg(target_arch = "x86_64")]
+        {
+            return match instr {
+                Instruction::Ret => 1,
+                Instruction::LoadImm(_, _) => 10,
+                Instruction::Load(_, _) | Instruction::Store(_, _) => 3,
+                Instruction::Mov(dst, src) => if dst.0 == src.0 { 0 } else { 3 },
+                Instruction::Add(dst, src1, _) | Instruction::Sub(dst, src1, _) | 
+                Instruction::And(dst, src1, _) | Instruction::Or(dst, src1, _) | 
+                Instruction::Xor(dst, src1, _) => {
+                    let base = 3;
+                    if dst.0 != src1.0 { base + 3 } else { base }
+                }
+                Instruction::Mul(dst, src1, _) => {
+                    let base = 4;
+                    if dst.0 != src1.0 { base + 3 } else { base }
+                }
+                Instruction::Cmp(_, _) => 3,
+                Instruction::Jmp(_) => 5,
+                Instruction::JmpEq(_) | Instruction::JmpNe(_) | Instruction::JmpLt(_) |
+                Instruction::JmpGt(_) | Instruction::JmpGe(_) | Instruction::JmpLe(_) => 6,
+                Instruction::SysCall(_) => 7,
+                Instruction::Shl(_, _, _) | Instruction::Shr(_, _, _) => 4, // REX.W + D3 /4 or /5 + ModR/M
+                _ => 0,
+            };
+        }
+        #[cfg(target_arch = "x86")]
+        {
+            return match instr {
+                Instruction::Ret => 1,
+                Instruction::LoadImm(_, _) => 5,
+                _ => 2,
+            };
+        }
+        0
+    }
+
+    /// Maps a virtual register to a safe physical register index,
+    /// ensuring we avoid restricted registers like RSP (4) and RBP (5).
+    fn get_phys_reg(&self, vreg: VReg) -> u8 {
+        #[cfg(target_arch = "x86_64")]
+        {
+            // Available: RAX(0), RCX(1), RDX(2), RBX(3), RSI(6), RDI(7), R8-R15(8-15)
+            let safe_regs: [u8; 14] = [0, 1, 2, 3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+            return safe_regs[(vreg.0 as usize) % safe_regs.len()];
+        }
+        #[cfg(target_arch = "x86")]
+        {
+            // Available: EAX(0), ECX(1), EDX(2), EBX(3), ESI(6), EDI(7)
+            let safe_regs: [u8; 6] = [0, 1, 2, 3, 6, 7];
+            return safe_regs[(vreg.0 as usize) % safe_regs.len()];
+        }
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+        0
+    }
+
     /// Basic translation stub. 
     /// This will eventually iterate through ir_code and emit x86/x86_64 opcodes.
     pub fn compile(&mut self) -> Result<(), &'static str> {
         self.native_code.clear();
 
-        for instr in &self.ir_code {
+        // PASS 1: Calculate byte offsets for every IR instruction
+        let mut instr_offsets = alloc::vec![0usize; self.ir_code.len() + 1];
+        for i in 0..self.ir_code.len() {
+            instr_offsets[i + 1] = instr_offsets[i] + self.instr_size(&self.ir_code[i]);
+        }
+
+        // PASS 2: Emit native machine code
+        for i in 0..self.ir_code.len() {
+            let instr = &self.ir_code[i];
+            let next_instr_addr = instr_offsets[i + 1];
+
             match instr {
                 Instruction::Ret => {
                     // Native x86 'ret' opcode
@@ -86,17 +154,19 @@ impl JitFunction {
                     #[cfg(target_arch = "x86")]
                     {
                         // MOV reg, imm32
+                        let p_reg = self.get_phys_reg(reg);
                         // Opcode 0xB8 + reg_index
-                        self.native_code.push(0xB8 + reg.0);
+                        self.native_code.push(0xB8 + p_reg);
                         let bytes = (*val as u32).to_le_bytes();
                         self.native_code.extend_from_slice(&bytes);
                     }
                     #[cfg(target_arch = "x86_64")]
                     {
                         // MOVABS rax, imm64 (Standard 64-bit load)
+                        let p_reg = self.get_phys_reg(reg);
                         // REX.W + 0xB8 + reg_index
                         self.native_code.push(0x48);
-                        self.native_code.push(0xB8 + reg.0);
+                        self.native_code.push(0xB8 + p_reg);
                         let bytes = (*val as u64).to_le_bytes();
                         self.native_code.extend_from_slice(&bytes);
                     }
@@ -105,131 +175,187 @@ impl JitFunction {
                     #[cfg(target_arch = "x86_64")]
                     {
                         // MOV r64, [r64] -> REX.W + 0x8B + ModR/M
+                        let p_dst = self.get_phys_reg(*dst);
+                        let p_addr = self.get_phys_reg(*addr);
                         let mut rex = 0x48;
-                        if dst.0 > 7 { rex |= 0x04; } // REX.R (dst)
-                        if addr.0 > 7 { rex |= 0x01; } // REX.B (base addr)
+                        if p_dst > 7 { rex |= 0x04; } // REX.R (dst)
+                        if p_addr > 7 { rex |= 0x01; } // REX.B (base addr)
                         self.native_code.push(rex);
                         self.native_code.push(0x8B);
-                        // Mod=00 (register indirect), Reg=dst, R/M=addr
-                        // Note: addr.0 == 4 (RSP) or 5 (RBP) requires special handling (SIB/Disp)
-                        self.native_code.push(((dst.0 & 7) << 3) | (addr.0 & 7));
+                        self.native_code.push(((p_dst & 7) << 3) | (p_addr & 7));
                     }
                 }
                 Instruction::Store(addr, src) => {
                     #[cfg(target_arch = "x86_64")]
                     {
                         // MOV [r64], r64 -> REX.W + 0x89 + ModR/M
+                        let p_src = self.get_phys_reg(*src);
+                        let p_addr = self.get_phys_reg(*addr);
                         let mut rex = 0x48;
-                        if src.0 > 7 { rex |= 0x04; } // REX.R (src)
-                        if addr.0 > 7 { rex |= 0x01; } // REX.B (base addr)
+                        if p_src > 7 { rex |= 0x04; } 
+                        if p_addr > 7 { rex |= 0x01; } // REX.B (base addr)
                         self.native_code.push(rex);
                         self.native_code.push(0x89);
-                        // Mod=00 (register indirect), Reg=src, R/M=addr
-                        self.native_code.push(((src.0 & 7) << 3) | (addr.0 & 7));
+                        self.native_code.push(((p_src & 7) << 3) | (p_addr & 7));
                     }
                 }
                 Instruction::Mov(dst, src) => {
                     #[cfg(target_arch = "x86_64")]
                     {
-                        if dst.0 != src.0 {
+                        let p_dst = self.get_phys_reg(*dst);
+                        let p_src = self.get_phys_reg(*src);
+                        if p_dst != p_src {
                             // MOV r/m64, r64 -> REX.W + 0x89 + ModR/M
                             let mut rex = 0x48; // REX.W
-                            if src.0 > 7 { rex |= 0x04; } // REX.R bit
-                            if dst.0 > 7 { rex |= 0x01; } // REX.B bit
+                            if p_src > 7 { rex |= 0x04; }
+                            if p_dst > 7 { rex |= 0x01; }
                             self.native_code.push(rex);
                             self.native_code.push(0x89);
-                            self.native_code.push(0xC0 | ((src.0 & 7) << 3) | (dst.0 & 7));
+                            self.native_code.push(0xC0 | ((p_src & 7) << 3) | (p_dst & 7));
                         }
                     }
                 }
                 Instruction::Add(dst, src1, src2) => {
                     #[cfg(target_arch = "x86_64")]
                     {
+                        let p_dst = self.get_phys_reg(*dst);
+                        let p_src1 = self.get_phys_reg(*src1);
+                        let p_src2 = self.get_phys_reg(*src2);
+
                         // 1. Ensure dst contains src1: MOV dst, src1
-                        if dst.0 != src1.0 {
+                        if p_dst != p_src1 {
                             let mut rex = 0x48;
-                            if src1.0 > 7 { rex |= 0x04; }
-                            if dst.0 > 7 { rex |= 0x01; }
+                            if p_src1 > 7 { rex |= 0x04; }
+                            if p_dst > 7 { rex |= 0x01; }
                             self.native_code.push(rex);
                             self.native_code.push(0x89);
-                            self.native_code.push(0xC0 | ((src1.0 & 7) << 3) | (dst.0 & 7));
+                            self.native_code.push(0xC0 | ((p_src1 & 7) << 3) | (p_dst & 7));
                         }
                         // 2. Perform addition: ADD dst, src2
-                        // ADD r/m64, r64 -> REX.W + 0x01 + ModR/M
                         let mut rex = 0x48;
-                        if src2.0 > 7 { rex |= 0x04; }
-                        if dst.0 > 7 { rex |= 0x01; }
+                        if p_src2 > 7 { rex |= 0x04; }
+                        if p_dst > 7 { rex |= 0x01; }
                         self.native_code.push(rex);
                         self.native_code.push(0x01);
-                        self.native_code.push(0xC0 | ((src2.0 & 7) << 3) | (dst.0 & 7));
+                        self.native_code.push(0xC0 | ((p_src2 & 7) << 3) | (p_dst & 7));
                     }
                 }
                 Instruction::Sub(dst, src1, src2) => {
                     #[cfg(target_arch = "x86_64")]
                     {
+                        let p_dst = self.get_phys_reg(*dst);
+                        let p_src1 = self.get_phys_reg(*src1);
+                        let p_src2 = self.get_phys_reg(*src2);
+
                         // 1. Ensure dst contains src1: MOV dst, src1
-                        if dst.0 != src1.0 {
+                        if p_dst != p_src1 {
                             let mut rex = 0x48;
-                            if src1.0 > 7 { rex |= 0x04; }
-                            if dst.0 > 7 { rex |= 0x01; }
+                            if p_src1 > 7 { rex |= 0x04; }
+                            if p_dst > 7 { rex |= 0x01; }
                             self.native_code.push(rex);
                             self.native_code.push(0x89);
-                            self.native_code.push(0xC0 | ((src1.0 & 7) << 3) | (dst.0 & 7));
+                            self.native_code.push(0xC0 | ((p_src1 & 7) << 3) | (p_dst & 7));
                         }
                         // 2. Perform subtraction: SUB dst, src2
-                        // SUB r/m64, r64 -> REX.W + 0x29 + ModR/M
                         let mut rex = 0x48;
-                        if src2.0 > 7 { rex |= 0x04; }
-                        if dst.0 > 7 { rex |= 0x01; }
+                        if p_src2 > 7 { rex |= 0x04; }
+                        if p_dst > 7 { rex |= 0x01; }
                         self.native_code.push(rex);
                         self.native_code.push(0x29);
-                        self.native_code.push(0xC0 | ((src2.0 & 7) << 3) | (dst.0 & 7));
+                        self.native_code.push(0xC0 | ((p_src2 & 7) << 3) | (p_dst & 7));
                     }
                 }
                 Instruction::Mul(dst, src1, src2) => {
                     #[cfg(target_arch = "x86_64")]
                     {
-                        if dst.0 != src1.0 {
-                            self.native_code.extend_from_slice(&[0x48, 0x89, 0xC0 | ((src1.0 & 7) << 3) | (dst.0 & 7)]);
+                        let p_dst = self.get_phys_reg(*dst);
+                        let p_src1 = self.get_phys_reg(*src1);
+                        let p_src2 = self.get_phys_reg(*src2);
+
+                        if p_dst != p_src1 {
+                            let mut rex = 0x48;
+                            if p_src1 > 7 { rex |= 0x04; }
+                            if p_dst > 7 { rex |= 0x01; }
+                            self.native_code.push(rex);
+                            self.native_code.push(0x89);
+                            self.native_code.push(0xC0 | ((p_src1 & 7) << 3) | (p_dst & 7));
                         }
                         // IMUL r64, r/m64 -> REX.W + 0x0F 0xAF + ModR/M
                         self.native_code.push(0x48);
                         self.native_code.push(0x0F);
                         self.native_code.push(0xAF);
-                        self.native_code.push(0xC0 | ((src2.0 & 7) << 3) | (dst.0 & 7));
+                        self.native_code.push(0xC0 | ((p_src2 & 7) << 3) | (p_dst & 7));
                     }
                 }
                 Instruction::And(dst, src1, src2) => {
                     #[cfg(target_arch = "x86_64")]
                     {
-                        if dst.0 != src1.0 { self.native_code.extend_from_slice(&[0x48, 0x89, 0xC0 | ((src1.0 & 7) << 3) | (dst.0 & 7)]); }
-                        self.native_code.extend_from_slice(&[0x48, 0x21, 0xC0 | ((src2.0 & 7) << 3) | (dst.0 & 7)]);
+                        let p_dst = self.get_phys_reg(*dst);
+                        let p_src1 = self.get_phys_reg(*src1);
+                        let p_src2 = self.get_phys_reg(*src2);
+
+                        if p_dst != p_src1 { self.native_code.extend_from_slice(&[0x48, 0x89, 0xC0 | ((p_src1 & 7) << 3) | (p_dst & 7)]); }
+                        self.native_code.extend_from_slice(&[0x48, 0x21, 0xC0 | ((p_src2 & 7) << 3) | (p_dst & 7)]);
                     }
                 }
                 Instruction::Or(dst, src1, src2) => {
                     #[cfg(target_arch = "x86_64")]
                     {
-                        if dst.0 != src1.0 { self.native_code.extend_from_slice(&[0x48, 0x89, 0xC0 | ((src1.0 & 7) << 3) | (dst.0 & 7)]); }
-                        self.native_code.extend_from_slice(&[0x48, 0x09, 0xC0 | ((src2.0 & 7) << 3) | (dst.0 & 7)]);
+                        let p_dst = self.get_phys_reg(*dst);
+                        let p_src1 = self.get_phys_reg(*src1);
+                        let p_src2 = self.get_phys_reg(*src2);
+
+                        if p_dst != p_src1 { self.native_code.extend_from_slice(&[0x48, 0x89, 0xC0 | ((p_src1 & 7) << 3) | (p_dst & 7)]); }
+                        self.native_code.extend_from_slice(&[0x48, 0x09, 0xC0 | ((p_src2 & 7) << 3) | (p_dst & 7)]);
                     }
                 }
                 Instruction::Xor(dst, src1, src2) => {
                     #[cfg(target_arch = "x86_64")]
                     {
-                        if dst.0 != src1.0 { self.native_code.extend_from_slice(&[0x48, 0x89, 0xC0 | ((src1.0 & 7) << 3) | (dst.0 & 7)]); }
-                        self.native_code.extend_from_slice(&[0x48, 0x31, 0xC0 | ((src2.0 & 7) << 3) | (dst.0 & 7)]);
+                        let p_dst = self.get_phys_reg(*dst);
+                        let p_src1 = self.get_phys_reg(*src1);
+                        let p_src2 = self.get_phys_reg(*src2);
+
+                        if p_dst != p_src1 { self.native_code.extend_from_slice(&[0x48, 0x89, 0xC0 | ((p_src1 & 7) << 3) | (p_dst & 7)]); }
+                        self.native_code.extend_from_slice(&[0x48, 0x31, 0xC0 | ((p_src2 & 7) << 3) | (p_dst & 7)]);
+                    }
+                }
+                Instruction::Shl(dst, src, count) => {
+                    #[cfg(target_arch = "x86_64")]
+                    {
+                        let p_dst = self.get_phys_reg(*dst);
+                        let p_src = self.get_phys_reg(*src);
+                        let p_count = self.get_phys_reg(*count); // Expecting this to be CL (RCX & 7 == 1)
+
+                        if p_dst != p_src { self.native_code.extend_from_slice(&[0x48, 0x89, 0xC0 | ((p_src & 7) << 3) | (p_dst & 7)]); }
+                        self.native_code.extend_from_slice(&[0x48, 0xD3, 0xE0 | (p_dst & 7)]); // SHL R/M64, CL
+                    }
+                }
+                Instruction::Shr(dst, src, count) => {
+                    #[cfg(target_arch = "x86_64")]
+                    {
+                        let p_dst = self.get_phys_reg(*dst);
+                        let p_src = self.get_phys_reg(*src);
+                        let p_count = self.get_phys_reg(*count); // Expecting this to be CL (RCX & 7 == 1)
+
+                        if p_dst != p_src { self.native_code.extend_from_slice(&[0x48, 0x89, 0xC0 | ((p_src & 7) << 3) | (p_dst & 7)]); }
+                        self.native_code.extend_from_slice(&[0x48, 0xD3, 0xE8 | (p_dst & 7)]); // SHR R/M64, CL
                     }
                 }
                 Instruction::Cmp(v1, v2) => {
                     #[cfg(target_arch = "x86_64")]
                     {
-                        self.native_code.extend_from_slice(&[0x48, 0x39, 0xC0 | ((v2.0 & 7) << 3) | (v1.0 & 7)]);
+                        let p_v1 = self.get_phys_reg(*v1);
+                        let p_v2 = self.get_phys_reg(*v2);
+                        self.native_code.extend_from_slice(&[0x48, 0x39, 0xC0 | ((p_v2 & 7) << 3) | (p_v1 & 7)]);
                     }
                     #[cfg(target_arch = "x86")]
                     {
                         // CMP r/m32, r32 -> 0x39 + ModR/M
+                        let p_v1 = self.get_phys_reg(*v1);
+                        let p_v2 = self.get_phys_reg(*v2);
                         self.native_code.push(0x39);
-                        self.native_code.push(0xC0 | ((v2.0 & 7) << 3) | (v1.0 & 7));
+                        self.native_code.push(0xC0 | ((p_v2 & 7) << 3) | (p_v1 & 7));
                     }
                 }
                 Instruction::Jmp(target_idx) => {

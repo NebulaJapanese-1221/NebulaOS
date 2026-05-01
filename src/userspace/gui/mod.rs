@@ -168,6 +168,7 @@ pub fn push_system_error(level: ErrorLevel, title: &'static str, message: alloc:
 #[derive(Clone)]
 pub enum WindowContent {
     App(Box<dyn crate::userspace::apps::app::App>),
+    MetadataOnly, // Used for snapshots to avoid expensive app state cloning
 }
 
 #[derive(Clone)]
@@ -487,14 +488,17 @@ impl WindowManager {
             (800, 600) // Fallback
         };
 
+        let current_tick = crate::kernel::process::TICKS.load(Ordering::Relaxed);
+
         // Notify non-minimized windows of system ticks
         for i in 0..self.windows.len() {
             if !self.windows[i].minimized {
                 // Snapshot window info (metadata) to pass to the event handler safely
                 let win_info = self.windows[i].clone();
-                let WindowContent::App(app) = &mut self.windows[i].content;
-                if let Some(dirty_rect) = app.handle_event(&AppEvent::Tick { tick_count: current_tick }, &win_info) {
-                    self.mark_dirty(dirty_rect);
+                if let WindowContent::App(app) = &mut self.windows[i].content {
+                    if let Some(dirty_rect) = app.handle_event(&AppEvent::Tick { tick_count: current_tick }, &win_info) {
+                        self.mark_dirty(dirty_rect);
+                    }
                 }
             }
         }
@@ -591,9 +595,10 @@ impl WindowManager {
                 if let Some(target_id) = self.click_target_id {
                     if let Some(idx) = self.windows.iter().position(|w| w.id == target_id) {
                         let win = self.windows[idx].clone();
-                        let WindowContent::App(app) = &mut self.windows[idx].content;
-                        let dirty = app.handle_event(&AppEvent::Scroll { delta: delta * 3, width: win.width, height: win.height }, &win);
-                        self.mark_dirty(dirty.unwrap_or_else(|| win.rect()));
+                        if let WindowContent::App(app) = &mut self.windows[idx].content {
+                            let dirty = app.handle_event(&AppEvent::Scroll { delta: delta * 3, width: win.width, height: win.height }, &win);
+                            self.mark_dirty(dirty.unwrap_or_else(|| win.rect()));
+                        }
                     }
                 }
             }
@@ -679,9 +684,10 @@ impl WindowManager {
                              if let Some(&top_win_id) = self.z_order.last() {
                                 let win = self.windows.iter().find(|w| w.id == top_win_id).unwrap().clone();
                                 let win_mut = self.windows.iter_mut().find(|w| w.id == top_win_id).unwrap();
-                                let WindowContent::App(app) = &mut win_mut.content;
-                                let dirty = app.handle_event(&AppEvent::KeyPress { key }, &win);
-                                self.mark_dirty(dirty.unwrap_or_else(|| win.rect()));
+                                if let WindowContent::App(app) = &mut win_mut.content {
+                                    let dirty = app.handle_event(&AppEvent::KeyPress { key }, &win);
+                                    self.mark_dirty(dirty.unwrap_or_else(|| win.rect()));
+                                }
                             }
                         }
                     }
@@ -736,12 +742,13 @@ impl WindowManager {
                         };
                         let win_snap = self.windows[idx].clone();
                         
-                        let WindowContent::App(app) = &mut self.windows[idx].content;
-                        let rel_x = self.input.mouse_x - win_x;
-                        let rel_y = self.input.mouse_y - (win_y + title_height as isize);
-                        if rel_x >= 0 && rel_x < win_w as isize && rel_y >= 0 && rel_y < win_h.saturating_sub(title_height) as isize {
-                            let dirty = app.handle_event(&AppEvent::MouseMove { x: rel_x, y: rel_y, width: win_w, height: win_h }, &win_snap);
-                            if let Some(r) = dirty { self.mark_dirty(r); }
+                        if let WindowContent::App(app) = &mut self.windows[idx].content {
+                            let rel_x = self.input.mouse_x - win_x;
+                            let rel_y = self.input.mouse_y - (win_y + title_height as isize);
+                            if rel_x >= 0 && rel_x < win_w as isize && rel_y >= 0 && rel_y < win_h.saturating_sub(title_height) as isize {
+                                let dirty = app.handle_event(&AppEvent::MouseMove { x: rel_x, y: rel_y, width: win_w, height: win_h }, &win_snap);
+                                if let Some(r) = dirty { self.mark_dirty(r); }
+                            }
                         }
                     }
                 }
@@ -1217,21 +1224,22 @@ impl WindowManager {
                         // Take the snapshot BEFORE getting the mutable borrow of self.windows
                         let win_snap = self.windows.iter().find(|w| w.id == target_id).unwrap().clone();
                         if let Some(win) = self.windows.iter_mut().find(|w| w.id == target_id) {
-                            let WindowContent::App(app) = &mut win.content;
-                            if let Some(dirty) = app.handle_event(&AppEvent::MouseClick { x: rel_x, y: rel_y, width: win.width, height: win.height }, &win_snap) {
-                                if dirty.x == -1 && dirty.y == -1 && dirty.width == 0 {
-                                    // Close Signal Received
-                                    let id_to_remove = target_id;
-                                    self.windows.retain(|w| w.id != id_to_remove);
-                                    self.z_order.retain(|&id| id != id_to_remove);
-                                    self.mark_dirty(win_snap.rect());
-                                    // Redraw taskbar to update window list
-                                    self.mark_dirty(Rect { x: 0, y: screen_height - 40, width: screen_width as usize, height: 40 });
+                            if let WindowContent::App(app) = &mut win.content {
+                                if let Some(dirty) = app.handle_event(&AppEvent::MouseClick { x: rel_x, y: rel_y, width: win.width, height: win.height }, &win_snap) {
+                                    if dirty.x == -1 && dirty.y == -1 && dirty.width == 0 {
+                                        // Close Signal Received
+                                        let id_to_remove = target_id;
+                                        self.windows.retain(|w| w.id != id_to_remove);
+                                        self.z_order.retain(|&id| id != id_to_remove);
+                                        self.mark_dirty(win_snap.rect());
+                                        // Redraw taskbar to update window list
+                                        self.mark_dirty(Rect { x: 0, y: screen_height - 40, width: screen_width as usize, height: 40 });
+                                    } else {
+                                        self.mark_dirty(dirty);
+                                    }
                                 } else {
-                                    self.mark_dirty(dirty);
+                                    self.mark_dirty(win_snap.rect());
                                 }
-                            } else {
-                                self.mark_dirty(win_snap.rect());
                             }
                         }
                     }
@@ -1516,8 +1524,9 @@ impl WindowManager {
 
         if let Some(r) = clip.intersection(&content_rect).and_then(|r| r.intersection(&screen_rect)) {
             fb.set_clip(r.x as usize, r.y as usize, r.width, r.height);
-            let WindowContent::App(app) = &win.content;
-            app.draw(fb, win, r);
+            if let WindowContent::App(app) = &win.content {
+                app.draw(fb, win, r);
+            }
             fb.clear_clip();
         }
     }
