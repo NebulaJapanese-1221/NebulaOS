@@ -5,10 +5,21 @@ All notable changes to NebulaOS will be documented in this file. The format is b
 ## [0.0.3] - In Progress
 ### Added
 - Added basic audio support via AC97
+- Added a C-Major startup chime played upon hardware discovery.
 - Added PCI support
 - Added various UI improvements
 - Added USB support
 - Added a file manager.
+- Expanded Theme settings with gradient end-color customization.
+- Added support for Vertical, Horizontal, and Radial gradient styles in Theme settings.
+- Moved date and time display to the center of the top bar.
+- Added a volume status indicator to the top right of the top bar.
+- Added a semi-functional network indicator to the top bar.
+- Added advanced support for networking and ethernet.
+- Grouped status indicators into a single clickable cluster in the top right to open the system menu.
+- Added a quick-launch shortcut for the Settings app within the system menu.
+- Added more support for multiarch
+- Made NebulaBrowser functional.
 
 ## [0.0.3-dev3] - 2026-05-01
 ### Changed

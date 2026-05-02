@@ -112,6 +112,33 @@ impl pci::PciDriver for Ac97Driver {
 
 pub static AC97_DRIVER: Ac97Driver = Ac97Driver;
 
+/// Plays a pleasant C-Major chime upon system startup.
+pub fn play_startup_chime() {
+    let nabm = NABM_BASE.load(Ordering::Relaxed);
+    if nabm == 0 {
+        return;
+    }
+
+    unsafe {
+        // Fill the PCM buffer with an additive C-Major triad chord (C5, E5, G5)
+        // At 44100Hz, periods of 84, 66, and 56 samples approximate these notes.
+        for i in 0..4096 {
+            let v1 = if (i % 84) < 42 { 1000 } else { -1000 }; // ~523Hz (C5)
+            let v2 = if (i % 66) < 33 { 1000 } else { -1000 }; // ~668Hz (E5)
+            let v3 = if (i % 56) < 28 { 1000 } else { -1000 }; // ~787Hz (G5)
+            PCM_BUFFER[i] = v1 + v2 + v3;
+        }
+
+        BDL[0].pointer = &PCM_BUFFER as *const _ as u32;
+        BDL[0].length = 4096;
+        BDL[0].flags = 0x8000; // IOC
+
+        io::outb(nabm + 0x15, 0); // Last Valid Index
+        let ctrl = io::inb(nabm + 0x1B);
+        io::outb(nabm + 0x1B, ctrl | 0x01); // Run
+    }
+}
+
 pub fn play_tone(frequency: u32) {
     let nabm = NABM_BASE.load(Ordering::Relaxed);
     if frequency == 0 || nabm == 0 {

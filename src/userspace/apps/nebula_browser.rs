@@ -2,12 +2,29 @@ use crate::drivers::framebuffer;
 use crate::userspace::gui::{self, font, Window, rect::Rect, button::Button};
 use super::app::{App, AppEvent};
 use alloc::boxed::Box;
-use alloc::string::String;
+use alloc::string::{String, ToString};
+use core::sync::atomic::Ordering;
+
+#[derive(Clone, PartialEq)]
+enum BrowserState {
+    Idle,
+    ResolvingDns,
+    Connecting,
+    SendingRequest,
+    ReceivingData,
+}
 
 #[derive(Clone)]
 pub struct NebulaBrowser {
     pub url_buffer: String,
     pub is_editing: bool,
+    pub current_page: String,
+    pub is_loading: bool,
+    pub show_settings: bool,
+    pub homepage: String,
+    pub history_cleared: bool,
+    state: BrowserState,
+    remote_ip: Option<smoltcp::wire::IpAddress>,
 }
 
 impl NebulaBrowser {
@@ -15,6 +32,27 @@ impl NebulaBrowser {
         Self {
             url_buffer: String::from("nebula://welcome"),
             is_editing: false,
+            current_page: String::from("Welcome to NebulaOS"),
+            is_loading: false,
+            show_settings: false,
+            homepage: String::from("nebula://welcome"),
+            history_cleared: false,
+            state: BrowserState::Idle,
+            remote_ip: None,
+        }
+    }
+
+    fn render_mock_web(&self, fb: &mut framebuffer::Framebuffer, x: isize, y: isize, content: &str, clip: Rect) {
+        // Simple Symbolic Parser:
+        // <blue>Text</blue> -> Draws text in blue
+        // <br> -> New line
+        let mut cur_y = y;
+        let lines = content.split("<br>");
+        for line in lines {
+            let color = if line.contains("<blue>") { 0x00_55_AA_FF } else { 0x00_FFFFFF };
+            let clean_text = line.replace("<blue>", "").replace("</blue>", "");
+            font::draw_string(fb, x, cur_y, &clean_text, color, Some(clip));
+            cur_y += 20;
         }
     }
 }
@@ -44,6 +82,10 @@ impl App for NebulaBrowser {
 
         let home_btn = Button::new(win.x + 95, toolbar_y + 5, 26, 26, "H");
         home_btn.draw(fb, 0, 0, Some(dirty_rect));
+
+        // Settings Button (Right side)
+        let settings_btn = Button::new(win.x + win.width as isize - 85, toolbar_y + 5, 30, 26, "S");
+        settings_btn.draw(fb, 0, 0, Some(dirty_rect));
 
         // URL Bar
         let url_bar_x = win.x + 125;
@@ -100,11 +142,88 @@ impl App for NebulaBrowser {
             AppEvent::KeyPress { key } if self.is_editing => {
                 match *key {
                     '\x08' => { self.url_buffer.pop(); } // Backspace
-                    '\n' => { self.is_editing = false; } // Enter to submit/blur
+                    '\n' => { 
+                        self.is_editing = false; 
+                        self.is_loading = true;
+                        self.current_page = format!("Loaded: {}", self.url_buffer);
+                    }
                     c if !c.is_control() => { self.url_buffer.push(c); }
                     _ => {}
                 }
                 return Some(_win.rect());
+            }
+            AppEvent::Tick { .. } => {
+                if !self.is_loading { return None; }
+
+                let mut sockets_guard = crate::kernel::net::SOCKET_SET.lock();
+                let sockets = sockets_guard.as_mut()?;
+                let mut dirty = false;
+
+                match self.state {
+                    BrowserState::ResolvingDns => {
+                        let handle = *crate::kernel::net::DNS_HANDLE.lock()?;
+                        let dns_socket = sockets.get_mut::<smoltcp::socket::dns::Socket>(handle);
+                        match dns_socket.get_query_result() {
+                            Ok(addrs) => {
+                                if let Some(addr) = addrs.first() {
+                                    self.remote_ip = Some(*addr);
+                                    self.state = BrowserState::Connecting;
+                                    
+                                    // Start TCP Connect
+                                    let tcp_handle = *crate::kernel::net::HTTP_HANDLE.lock()?;
+                                    let tcp_socket = sockets.get_mut::<smoltcp::socket::tcp::Socket>(tcp_handle);
+                                    let local_port = 49152 + (crate::kernel::process::TICKS.load(Ordering::Relaxed) % 16384) as u16;
+                                    tcp_socket.connect(crate::kernel::net::INTERFACE.lock().as_mut().unwrap().context(), (*addr, 80), local_port).unwrap();
+                                    dirty = true;
+                                }
+                            }
+                            Err(smoltcp::socket::dns::GetQueryResultError::Pending) => {},
+                            _ => { self.is_loading = false; dirty = true; }
+                        }
+                    }
+                    BrowserState::Connecting => {
+                        let handle = *crate::kernel::net::HTTP_HANDLE.lock()?;
+                        let tcp_socket = sockets.get_mut::<smoltcp::socket::tcp::Socket>(handle);
+                        if tcp_socket.is_active() && tcp_socket.state() == smoltcp::socket::tcp::State::Established {
+                            self.state = BrowserState::SendingRequest;
+                            dirty = true;
+                        }
+                    }
+                    BrowserState::SendingRequest => {
+                        let handle = *crate::kernel::net::HTTP_HANDLE.lock()?;
+                        let tcp_socket = sockets.get_mut::<smoltcp::socket::tcp::Socket>(handle);
+                        if tcp_socket.can_send() {
+                            let host = self.url_buffer.trim_start_matches("http://").split('/').next().unwrap_or("");
+                            let request = format!("GET / HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n", host);
+                            tcp_socket.send_slice(request.as_bytes()).unwrap();
+                            self.state = BrowserState::ReceivingData;
+                            dirty = true;
+                        }
+                    }
+                    BrowserState::ReceivingData => {
+                        let handle = *crate::kernel::net::HTTP_HANDLE.lock()?;
+                        let tcp_socket = sockets.get_mut::<smoltcp::socket::tcp::Socket>(handle);
+                        if tcp_socket.can_recv() {
+                            tcp_socket.recv(|data| {
+                                let response = String::from_utf8_lossy(data);
+                                // Simple extraction of body after \r\n\r\n
+                                if let Some(body_start) = response.find("\r\n\r\n") {
+                                    self.current_page = response[body_start + 4..].to_string();
+                                } else {
+                                    self.current_page = response.to_string();
+                                }
+                                (data.len(), ())
+                            }).unwrap();
+                        }
+                        if !tcp_socket.is_active() || tcp_socket.state() == smoltcp::socket::tcp::State::Closed {
+                            self.is_loading = false;
+                            self.state = BrowserState::Idle;
+                            dirty = true;
+                        }
+                    }
+                    _ => {}
+                }
+                if dirty { return Some(_win.rect()); }
             }
             _ => {}
         }

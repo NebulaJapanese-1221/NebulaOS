@@ -11,6 +11,8 @@ pub enum CursorStyle {
     ResizeEW, // East-West
     ResizeNESW, // North-East South-West
     ResizeNWSE, // North-West South-East
+    Wait,
+    Help,
 }
 
 const CURSOR_ARROW: [[u8; 12]; 17] = [
@@ -173,6 +175,46 @@ const CURSOR_RESIZE_NESW: [[u8; 12]; 17] = [
     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
 ];
 
+const CURSOR_WAIT: [[u8; 12]; 17] = [
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1],
+    [0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0],
+    [0, 0, 1, 2, 2, 2, 2, 2, 2, 1, 0, 0],
+    [0, 0, 0, 1, 2, 2, 2, 2, 1, 0, 0, 0],
+    [0, 0, 0, 0, 1, 2, 2, 1, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0],
+    [0, 0, 0, 1, 2, 2, 2, 2, 1, 0, 0, 0],
+    [0, 0, 1, 2, 2, 2, 2, 2, 2, 1, 0, 0],
+    [0, 1, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0],
+    [1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+];
+
+const CURSOR_HELP: [[u8; 12]; 17] = [
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0],
+    [1, 2, 1, 0, 0, 0, 1, 2, 2, 2, 1, 0],
+    [1, 2, 2, 1, 0, 0, 0, 0, 1, 2, 1, 0],
+    [1, 2, 2, 2, 1, 0, 0, 0, 1, 2, 1, 0],
+    [1, 2, 2, 2, 2, 1, 0, 0, 1, 1, 0, 0],
+    [1, 2, 2, 2, 2, 2, 1, 0, 1, 1, 0, 0],
+    [1, 2, 2, 2, 2, 2, 2, 1, 0, 0, 0, 0],
+    [1, 2, 2, 2, 2, 2, 2, 2, 1, 1, 0, 0],
+    [1, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0],
+    [1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0],
+    [1, 2, 2, 1, 2, 2, 1, 0, 0, 0, 0, 0],
+    [1, 2, 1, 0, 1, 2, 2, 1, 0, 0, 0, 0],
+    [1, 1, 0, 0, 1, 2, 2, 1, 0, 0, 0, 0],
+    [1, 0, 0, 0, 0, 1, 2, 2, 1, 0, 0, 0],
+    [0, 0, 0, 0, 0, 1, 2, 2, 1, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
+];
+
 /// Draws the cursor at the specified location using the given style.
 pub fn draw_cursor(fb: &mut Framebuffer, style: CursorStyle, x: isize, y: isize, clip: Rect) {
     let (width, height) = if let Some(ref info) = fb.info {
@@ -196,6 +238,8 @@ pub fn draw_cursor(fb: &mut Framebuffer, style: CursorStyle, x: isize, y: isize,
         CursorStyle::ResizeEW => &CURSOR_RESIZE_EW,
         CursorStyle::ResizeNWSE => &CURSOR_RESIZE_NWSE,
         CursorStyle::ResizeNESW => &CURSOR_RESIZE_NESW,
+        CursorStyle::Wait => &CURSOR_WAIT,
+        CursorStyle::Help => &CURSOR_HELP,
     };
 
     for (dy, row) in bitmap.iter().enumerate() {

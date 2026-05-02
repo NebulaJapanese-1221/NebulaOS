@@ -20,6 +20,7 @@ pub mod jit;
 pub mod audio;
 pub mod pci;
 pub mod usb;
+pub mod net;
 
 pub const VERSION: &str = "0.0.3";
 
@@ -148,6 +149,9 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     // Discover and initialize hardware drivers via PCI
     pci::init_drivers();
     boot::add_boot_status("PCI Hardware Initialized", 85);
+
+    // Play startup sound
+    audio::play_startup_chime();
 
     // Initialize CPU Info detection (CPUID)
     cpu::init();

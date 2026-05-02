@@ -23,10 +23,10 @@ iso: build
 	rm -r isofiles
 
 run: iso
-	qemu-system-i386 -cdrom nebula_os.iso -m 1024 -cpu max -accel kvm -accel tcg -serial stdio
+	qemu-system-i386 -cdrom nebula_os.iso -m 1024 -cpu max -accel kvm -accel tcg -serial stdio -netdev user,id=mynet0 -device rtl8139,netdev=mynet0
 
 run-x64: iso
-	qemu-system-x86_64 -cdrom nebula_os.iso -m 1024 -cpu max -accel kvm -accel tcg -serial stdio
+	qemu-system-x86_64 -cdrom nebula_os.iso -m 1024 -cpu max -accel kvm -accel tcg -serial stdio -netdev user,id=mynet0 -device rtl8139,netdev=mynet0
 
 clean:
 	cargo clean

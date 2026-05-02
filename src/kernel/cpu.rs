@@ -14,7 +14,27 @@ static TOTAL_CYCLES: AtomicU32 = AtomicU32::new(0);
 pub static LOOPS_PER_MS: AtomicUsize = AtomicUsize::new(2000000); // Sensible fallback for ~2GHz CPUs
 pub static CYCLES_PER_US: AtomicUsize = AtomicUsize::new(2000);    // Default 2MHz for TSC fallback
 
+/// Enables SSE support on x86/x86_64 processors.
+/// This sets the OSFXSR and OSXMMEXCPT bits in CR4 and configures CR0.
+fn enable_sse() {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    unsafe {
+        let mut cr0: usize;
+        asm!("mov {}, cr0", out(reg) cr0);
+        cr0 &= !(1 << 2); // Clear CR0.EM (bit 2)
+        cr0 |= 1 << 1;    // Set CR0.MP (bit 1)
+        asm!("mov cr0, {}", in(reg) cr0);
+
+        let mut cr4: usize;
+        asm!("mov {}, cr4", out(reg) cr4);
+        cr4 |= 1 << 9;    // Set CR4.OSFXSR (bit 9)
+        cr4 |= 1 << 10;   // Set CR4.OSXMMEXCPT (bit 10)
+        asm!("mov cr4, {}", in(reg) cr4);
+    }
+}
+
 pub fn init() {
+    enable_sse();
     let mut brand = String::with_capacity(48);
     
     // Check maximum extended function

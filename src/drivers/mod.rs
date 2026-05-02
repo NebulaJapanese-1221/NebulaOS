@@ -10,3 +10,4 @@ pub mod pit;
 pub mod brightness;
 pub mod battery;
 pub mod ec;
+pub mod ethernet;

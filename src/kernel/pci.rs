@@ -80,6 +80,7 @@ pub fn rescan_bus() {
     let drivers: &[&dyn PciDriver] = &[
         &crate::kernel::audio::AC97_DRIVER,
         &crate::kernel::usb::USB_DRIVER,
+        &crate::drivers::ethernet::ETHERNET_DRIVER, // Add placeholder Ethernet driver
     ];
 
     let mut attached = ATTACHED_DEVICES.lock();

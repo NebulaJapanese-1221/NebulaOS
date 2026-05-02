@@ -39,6 +39,36 @@ pub enum Instruction {
     Shr(VReg, VReg, VReg),
     /// Compare two registers and store result in flags
     Cmp(VReg, VReg),
+    /// Add two floating-point registers: VReg(Dst) = VReg(Src1) + VReg(Src2)
+    FAdd(VReg, VReg, VReg),
+    /// Subtract two floating-point registers: VReg(Dst) = VReg(Src1) - VReg(Src2)
+    FSub(VReg, VReg, VReg),
+    /// Multiply two floating-point registers: VReg(Dst) = VReg(Src1) * VReg(Src2)
+    FMul(VReg, VReg, VReg),
+    /// Divide two floating-point registers: VReg(Dst) = VReg(Src1) / VReg(Src2)
+    FDiv(VReg, VReg, VReg),
+    /// Add two double-precision registers: VReg(Dst) = VReg(Src1) + VReg(Src2)
+    DAdd(VReg, VReg, VReg),
+    /// Subtract two double-precision registers
+    DSub(VReg, VReg, VReg),
+    /// Multiply two double-precision registers
+    DMul(VReg, VReg, VReg),
+    /// Divide two double-precision registers
+    DDiv(VReg, VReg, VReg),
+    /// Vector Add (Packed Single/Double): VReg(Dst) = VReg(Src1) + VReg(Src2)
+    VAdd(VReg, VReg, VReg),
+    /// Vector Subtract
+    VSub(VReg, VReg, VReg),
+    /// Vector Multiply
+    VMul(VReg, VReg, VReg),
+    /// Vector Divide
+    VDiv(VReg, VReg, VReg),
+    /// Vector Bitwise XOR
+    VXor(VReg, VReg, VReg),
+    /// Vector Bitwise AND
+    VAnd(VReg, VReg, VReg),
+    /// Vector Bitwise OR
+    VOr(VReg, VReg, VReg),
     /// Unconditional jump to a relative instruction offset
     Jmp(usize),
     /// Jump if equal to a relative instruction offset
@@ -98,6 +128,10 @@ impl JitFunction {
                 Instruction::JmpGt(_) | Instruction::JmpGe(_) | Instruction::JmpLe(_) => 6,
                 Instruction::SysCall(_) => 7,
                 Instruction::Shl(_, _, _) | Instruction::Shr(_, _, _) => 4, // REX.W + D3 /4 or /5 + ModR/M
+                Instruction::FAdd(_, _, _) | Instruction::FSub(_, _, _) | Instruction::FMul(_, _, _) | Instruction::FDiv(_, _, _) |
+                Instruction::DAdd(_, _, _) | Instruction::DSub(_, _, _) | Instruction::DMul(_, _, _) | Instruction::DDiv(_, _, _) |
+                Instruction::VAdd(_, _, _) | Instruction::VSub(_, _, _) | Instruction::VMul(_, _, _) | Instruction::VDiv(_, _, _) |
+                Instruction::VXor(_, _, _) | Instruction::VAnd(_, _, _) | Instruction::VOr(_, _, _) => 6, // Prefix + REX + 0F + Op + ModRM
                 _ => 0,
             };
         }
@@ -125,6 +159,10 @@ impl JitFunction {
                 Instruction::SysCall(_) => 7,
                 Instruction::Div(_, _, _) => 8, // Max size for x86: MOV EAX, src1 (2) + XOR EDX, EDX (2) + DIV src2 (2) + MOV dst, EAX (2)
                 Instruction::Shl(_, _, _) | Instruction::Shr(_, _, _) => 4, // MOV src, dst (2) + SHL/SHR (2)
+                Instruction::FAdd(_, _, _) | Instruction::FSub(_, _, _) | Instruction::FMul(_, _, _) | Instruction::FDiv(_, _, _) |
+                Instruction::DAdd(_, _, _) | Instruction::DSub(_, _, _) | Instruction::DMul(_, _, _) | Instruction::DDiv(_, _, _) |
+                Instruction::VAdd(_, _, _) | Instruction::VSub(_, _, _) | Instruction::VMul(_, _, _) | Instruction::VDiv(_, _, _) |
+                Instruction::VXor(_, _, _) | Instruction::VAnd(_, _, _) | Instruction::VOr(_, _, _) => 5,
             };
         }
         #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
@@ -146,6 +184,16 @@ impl JitFunction {
             let safe_regs: [u8; 6] = [0, 1, 2, 3, 6, 7];
             return safe_regs[(vreg.0 as usize) % safe_regs.len()];
         }
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+        0
+    }
+
+    /// Maps a virtual register to a physical XMM register index (0-7 or 0-15).
+    fn get_phys_freg(&self, vreg: VReg) -> u8 {
+        #[cfg(target_arch = "x86_64")]
+        { return vreg.0 % 16; }
+        #[cfg(target_arch = "x86")]
+        { return vreg.0 % 8; }
         #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
         0
     }
@@ -425,6 +473,82 @@ impl JitFunction {
                         self.native_code.extend_from_slice(&[0x48, 0xD3, 0xE8 | (p_dst & 7)]); // SHR R/M64, CL
                     }
                 }
+                Instruction::FAdd(_d, _s1, _s2) | Instruction::FSub(_d, _s1, _s2) | 
+                Instruction::FMul(_d, _s1, _s2) | Instruction::FDiv(_d, _s1, _s2) |
+                Instruction::DAdd(_d, _s1, _s2) | Instruction::DSub(_d, _s1, _s2) | 
+                Instruction::DMul(_d, _s1, _s2) | Instruction::DDiv(_d, _s1, _s2) |
+                Instruction::VAdd(_d, _s1, _s2) | Instruction::VSub(_d, _s1, _s2) | 
+                Instruction::VMul(_d, _s1, _s2) | Instruction::VDiv(_d, _s1, _s2) => {
+                    #[cfg(target_arch = "x86_64")]
+                    {
+                        let p_dst = self.get_phys_freg(*_d);
+                        let p_s1 = self.get_phys_freg(*_s1);
+                        let p_s2 = self.get_phys_freg(*_s2);
+                        
+                        let (prefix, opcode) = match instr {
+                            Instruction::FAdd(..) => (Some(0xF3), 0x58),
+                            Instruction::FSub(..) => (Some(0xF3), 0x5C),
+                            Instruction::FMul(..) => (Some(0xF3), 0x59),
+                            Instruction::FDiv(..) => (Some(0xF3), 0x5E),
+                            Instruction::DAdd(..) => (Some(0xF2), 0x58),
+                            Instruction::DSub(..) => (Some(0xF2), 0x5C),
+                            Instruction::DMul(..) => (Some(0xF2), 0x59),
+                            Instruction::DDiv(..) => (Some(0xF2), 0x5E),
+                            Instruction::VAdd(..) => (None, 0x58),
+                            Instruction::VSub(..) => (None, 0x5C),
+                            Instruction::VMul(..) => (None, 0x59),
+                            Instruction::VDiv(..) => (None, 0x5E),
+                            _ => (None, 0x00),
+                        };
+
+                        // 1. Move s1 to dst if needed
+                        if p_dst != p_s1 {
+                            if let Some(p) = prefix { self.native_code.push(p); }
+                            let mut rex = 0x40;
+                            if p_dst > 7 { rex |= 0x04; }
+                            if p_s1 > 7 { rex |= 0x01; }
+                            if rex > 0x40 { self.native_code.push(rex); }
+                            self.native_code.extend_from_slice(&[0x0F, 0x10, 0xC0 | ((p_dst & 7) << 3) | (p_s1 & 7)]);
+                        }
+                        
+                        // 2. Perform arithmetic
+                        if let Some(p) = prefix { self.native_code.push(p); }
+                        let mut rex = 0x40;
+                        if p_dst > 7 { rex |= 0x04; }
+                        if p_s2 > 7 { rex |= 0x01; }
+                        if rex > 0x40 { self.native_code.push(rex); }
+                        self.native_code.extend_from_slice(&[0x0F, opcode, 0xC0 | ((p_dst & 7) << 3) | (p_s2 & 7)]);
+                    }
+                }
+                Instruction::VXor(_d, _s1, _s2) | Instruction::VAnd(_d, _s1, _s2) | Instruction::VOr(_d, _s1, _s2) => {
+                    #[cfg(target_arch = "x86_64")]
+                    {
+                        let p_dst = self.get_phys_freg(*_d);
+                        let p_s1 = self.get_phys_freg(*_s1);
+                        let p_s2 = self.get_phys_freg(*_s2);
+                        
+                        let opcode = match instr {
+                            Instruction::VXor(..) => 0x57, // XORPS
+                            Instruction::VAnd(..) => 0x54, // ANDPS
+                            Instruction::VOr(..)  => 0x56, // ORPS
+                            _ => 0x00,
+                        };
+
+                        if p_dst != p_s1 {
+                            let mut rex = 0x40;
+                            if p_dst > 7 { rex |= 0x04; }
+                            if p_s1 > 7 { rex |= 0x01; }
+                            if rex > 0x40 { self.native_code.push(rex); }
+                            self.native_code.extend_from_slice(&[0x0F, 0x10, 0xC0 | ((p_dst & 7) << 3) | (p_s1 & 7)]);
+                        }
+                        
+                        let mut rex = 0x40;
+                        if p_dst > 7 { rex |= 0x04; }
+                        if p_s2 > 7 { rex |= 0x01; }
+                        if rex > 0x40 { self.native_code.push(rex); }
+                        self.native_code.extend_from_slice(&[0x0F, opcode, 0xC0 | ((p_dst & 7) << 3) | (p_s2 & 7)]);
+                    }
+                }
                 Instruction::Cmp(v1, v2) => {
                     #[cfg(target_arch = "x86_64")]
                     {
@@ -487,10 +611,6 @@ impl JitFunction {
                     // NebulaOS uses int 0x80 as the gateway to the kernel syscall dispatcher.
                     self.native_code.push(0xCD);
                     self.native_code.push(0x80);
-                }
-                _ => {
-                    // TODO: Implement other IR to Native mappings
-                    return Err("Instruction not yet supported by JIT backend");
                 }
             }
         }

@@ -14,6 +14,7 @@ use self::rect::Rect;
 pub mod button;
 use self::button::Button;
 pub mod cursor;
+pub mod icons;
 
 use crate::userspace::localisation::{self, Localisation};
 
@@ -108,6 +109,13 @@ impl InputManager {
     }
 }
 
+/// Represents an entry in a context menu.
+#[derive(Clone)]
+pub struct ContextMenuItem {
+    pub label: alloc::string::String,
+    pub enabled: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ErrorLevel {
     Info,
@@ -129,8 +137,7 @@ impl App for MessageBox {
         
         // Icon background
         draw_rect(fb, win.x + 15, win.y + title_height as isize + 15, 32, 32, self.icon_color, Some(clip));
-        // Simple '!' symbol
-        font::draw_char(fb, win.x + 27, win.y + title_height as isize + 23, '!', 0xFFFFFFFF, Some(clip));
+        draw_icon(fb, &icons::WARNING, win.x + 25, win.y + title_height as isize + 25, 0xFFFFFFFF, clip);
 
         // Message text
         font::draw_string(fb, win.x + 60, win.y + title_height as isize + 23, self.message.as_str(), 0xFFFFFFFF, Some(clip));
@@ -219,7 +226,7 @@ impl Clone for Window {
 pub static DESKTOP_GRADIENT_START: AtomicU32 = AtomicU32::new(0x00_0F_11_1A); // Deep Navy
 pub static DESKTOP_GRADIENT_END: AtomicU32 = AtomicU32::new(0x00_24_3B_55);   // Nebula Blue
 pub static FULL_REDRAW_REQUESTED: AtomicBool = AtomicBool::new(false);
-pub static SHOW_WALLPAPER_GRADIENT: AtomicBool = AtomicBool::new(true);
+pub static WALLPAPER_MODE: AtomicU32 = AtomicU32::new(0); // 0: Gradient, 1: Solid, 2: Construction
 pub static HIGH_CONTRAST: AtomicBool = AtomicBool::new(false);
 pub static LARGE_TEXT: AtomicBool = AtomicBool::new(false);
 pub static MOUSE_SENSITIVITY: AtomicU32 = AtomicU32::new(10); // 1.0x scale
@@ -284,6 +291,8 @@ pub struct WindowManager {
     tooltip: Option<(alloc::string::String, isize, isize)>,
     last_grad_hash: u32,
     last_power_poll: usize,
+    last_click_tick: usize,
+    last_click_win_id: Option<usize>,
 }
 
 impl WindowManager {
@@ -314,6 +323,8 @@ impl WindowManager {
             tooltip: None,
             last_grad_hash: 0,
             last_power_poll: 0,
+            last_click_tick: 0,
+            last_click_win_id: None,
         }
     }
 
@@ -389,16 +400,57 @@ impl WindowManager {
 
         let r = dirty_rect.intersection(&screen_rect).unwrap();
         let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
+        let mode = WALLPAPER_MODE.load(Ordering::Relaxed);
+        let style = GRADIENT_STYLE.load(Ordering::Relaxed);
         
         // 1. Draw Gradient/Solid Background
-        for y in r.y..(r.y + r.height as isize) {
-            let color = if high_contrast { 0 } else { self.gradient_cache[y as usize] };
+        if !high_contrast && mode == 2 {
+            // Diagonal Construction Stripes
             if let Some(buf) = fb.draw_buffer.as_mut() {
-                let offset = (y as usize * screen_width as usize) + r.x as usize;
-                buf[offset..offset + r.width].fill(color);
+                for y in r.y..(r.y + r.height as isize) {
+                    let line_offset = y as usize * screen_width as usize;
+                    for x in r.x..(r.x + r.width as isize) {
+                        buf[line_offset + x as usize] = if ((x + y) / 32) % 2 == 0 { 0x00_E1_AD_01 } else { 0x00_1A_1A_1A };
+                    }
+                }
+            }
+            let msg = "NebulaOS is under construction";
+            let msg_w = font::string_width(msg) as isize;
+            font::draw_string(fb, (screen_width - msg_w) / 2, screen_height / 2, msg, 0x00_FFFFFF, Some(dirty_rect));
+        } else {
+            if let Some(buf) = fb.draw_buffer.as_mut() {
+                for y in r.y..(r.y + r.height as isize) {
+                    let offset = (y as usize * screen_width as usize) + r.x as usize;
+                    if high_contrast {
+                        buf[offset..offset + r.width].fill(0x00_000000);
+                    } else if mode == 1 {
+                        buf[offset..offset + r.width].fill(DESKTOP_GRADIENT_START.load(Ordering::Relaxed));
+                    } else if style == 2 {
+                        // Radial Gradient
+                        let cx = screen_width / 2;
+                        let cy = screen_height / 2;
+                        let max_dist_sq = (cx * cx + cy * cy) as isize;
+                        let g_start = DESKTOP_GRADIENT_START.load(Ordering::Relaxed);
+                        let g_end = DESKTOP_GRADIENT_END.load(Ordering::Relaxed);
+                        let dy = y - cy;
+                        for x in r.x..(r.x + r.width as isize) {
+                            let dx = x - cx;
+                            let dist_sq = dx * dx + dy * dy;
+                            buf[offset + (x - r.x) as usize] = self.interpolate_gradient(g_start, g_end, dist_sq, max_dist_sq);
+                        }
+                    } else if style == 0 {
+                        // Vertical Linear
+                        buf[offset..offset + r.width].fill(self.gradient_cache[y as usize]);
+                    } else {
+                        // Horizontal Linear
+                        for x in 0..r.width {
+                            buf[offset + x] = self.gradient_cache[r.x as usize + x];
+                        }
+                    }
+                }
             }
         }
-
+        
         let ver_str = format!("NebulaOS v{}", crate::kernel::VERSION);
 
         font::draw_string(fb, screen_width - font::string_width(ver_str.as_str()) as isize - 10, screen_height - 60, ver_str.as_str(), 0x00_70_70_70, Some(dirty_rect));
@@ -614,6 +666,22 @@ impl WindowManager {
             }
                 }
                 InputEvent::Scroll { delta } => {
+                if self.input.mouse_y < TOP_BAR_HEIGHT as isize {
+                    let rel_x = screen_width - self.input.mouse_x;
+                    if rel_x >= 35 && rel_x < 80 { // Volume indicator area
+                        // Direct Volume Control via Scrolling on Top Bar
+                        let cur = crate::kernel::audio::MASTER_VOLUME.load(Ordering::Relaxed);
+                        crate::kernel::audio::set_master_volume(if delta > 0 { cur.saturating_add(5) } else { cur.saturating_sub(5) });
+                        self.mark_dirty(Rect { x: screen_width - 160, y: 0, width: 160, height: TOP_BAR_HEIGHT });
+                        return;
+                    } else if rel_x >= 80 && rel_x < 125 { // Brightness indicator area
+                        // Direct Brightness Control via Scrolling on Top Bar
+                        crate::drivers::brightness::increment_master_brightness(if delta > 0 { 5 } else { -5 });
+                        self.mark_dirty(Rect { x: screen_width - 160, y: 0, width: 160, height: TOP_BAR_HEIGHT });
+                        return;
+                    }
+                }
+
                 if let Some(target_id) = self.click_target_id {
                     if let Some(idx) = self.windows.iter().position(|w| w.id == target_id) {
                         let win = self.windows[idx].clone();
@@ -801,14 +869,17 @@ impl WindowManager {
         let is_over_system_menu = self.system_menu_open && self.input.mouse_x >= (screen_width - 190) && self.input.mouse_y >= TOP_BAR_HEIGHT as isize;
         let is_over_taskbar = self.input.mouse_y >= screen_height - 40;
 
-        if is_over_top_bar || is_over_start_menu || is_over_system_menu || is_over_taskbar {
+        // Hit area for Status Cluster (right side of top bar)
+        let is_over_status = self.input.mouse_y < TOP_BAR_HEIGHT as isize && self.input.mouse_x >= (screen_width - 200);
+
+        if is_over_top_bar || is_over_start_menu || is_over_system_menu || is_over_taskbar || is_over_status {
             new_style = CursorStyle::Hand;
         }
 
         // 2. Check Window buttons and resize borders
         let locale_lock = localisation::CURRENT_LOCALE.lock();
         let locale = locale_lock.as_ref();
-        if let (Some(&top_win_id), Some(l)) = (self.z_order.last(), locale) {
+        if let (Some(&top_win_id), Some(_l)) = (self.z_order.last(), locale) {
             if let Some(win) = self.windows.iter().find(|w| w.id == top_win_id) {
                 if !win.minimized {
                     let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
@@ -826,7 +897,7 @@ impl WindowManager {
         const BORDER_SIZE: isize = 5;
 
         // Check top-most window first for hover effect, but only if not currently resizing
-        if self.resize_win_id.is_none() {
+        if self.resize_win_id.is_none() && self.drag_win_id.is_none() {
             if let (Some(&top_win_id), Some(l)) = (self.z_order.last(), locale) {
                 if let Some(win) = self.windows.iter().find(|w| w.id == top_win_id) {
                     if !win.minimized && !win.maximized {
@@ -877,7 +948,45 @@ impl WindowManager {
             let taskbar_height: usize = 40;
             let taskbar_y = screen_height - taskbar_height as isize;
 
-            // Check if right click is on desktop (not on taskbar)
+            // 1. Check if right-click is over a window
+            let mut clicked_win_id = None;
+            for &win_id in self.z_order.iter().rev() {
+                if let Some(win) = self.windows.iter().find(|w| w.id == win_id) {
+                    if win.minimized || matches!(win.content, WindowContent::MetadataOnly) { continue; }
+                    if win.rect().contains(self.input.mouse_x, self.input.mouse_y) {
+                        clicked_win_id = Some(win_id);
+                        break;
+                    }
+                }
+            }
+
+            if let Some(win_id) = clicked_win_id {
+                // Focus and bring to front
+                if let Some(pos) = self.z_order.iter().position(|&id| id == win_id) {
+                    let id = self.z_order.remove(pos);
+                    self.z_order.push(id);
+                }
+
+                // Send event to app
+                let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
+                let title_height = font_height + 6;
+                let win_snap = self.windows.iter().find(|w| w.id == win_id).unwrap().clone();
+                
+                let rel_x = self.input.mouse_x - win_snap.x;
+                let rel_y = self.input.mouse_y - (win_snap.y + title_height as isize);
+
+                if let Some(win) = self.windows.iter_mut().find(|w| w.id == win_id) {
+                    if let WindowContent::App(app) = &mut win.content {
+                        if let Some(dirty) = app.handle_event(&AppEvent::MouseRightClick { x: rel_x, y: rel_y, width: win.width, height: win.height }, &win_snap) {
+                            self.mark_dirty(dirty);
+                        }
+                    }
+                }
+                self.context_menu_open = false;
+                return;
+            }
+
+            // 2. Check if right click is on desktop (not on taskbar)
             if self.input.mouse_y < taskbar_y {
                  // Mark old menu dirty if open
                  if self.context_menu_open {
@@ -920,12 +1029,24 @@ impl WindowManager {
                     return;
                 }
 
-                // System Menu Click (Top Right)
-                let menu_btn_x = screen_width - 10 - 26;
-                if self.input.mouse_x >= menu_btn_x && self.input.mouse_x < (menu_btn_x + 26) {
-                    self.system_menu_open = !self.system_menu_open;
-                    self.start_menu_open = false;
-                    self.mark_dirty(Rect { x: screen_width - 210, y: 0, width: 210, height: 160 });
+                // Status Indicators Area Click (Cluster)
+                // Adjusted to include the new network indicator
+                if self.input.mouse_x >= (screen_width - 200) {
+                    let rel_x = screen_width - self.input.mouse_x;
+                    if rel_x < 35 { // Dropdown arrow area
+                        // Clicked Dropdown area: Toggle System Menu
+                        self.system_menu_open = !self.system_menu_open;
+                        self.start_menu_open = false;
+                        self.mark_dirty(Rect { x: screen_width - 210, y: 0, width: 210, height: 210 });
+                    } else if rel_x < 80 { // Volume indicator area
+                        // Clicked Volume area: Quick Mute Toggle
+                        crate::kernel::audio::toggle_mute();
+                        self.mark_dirty(Rect { x: screen_width - 200, y: 0, width: 200, height: TOP_BAR_HEIGHT });
+                    } else if rel_x < 125 { // Brightness indicator area
+                        // Clicked Brightness area: No direct action for now, but could toggle OSD
+                        self.brightness_osd_timeout = 60; // Just show OSD for now
+                        self.mark_dirty(Rect { x: screen_width - 200, y: 0, width: 200, height: TOP_BAR_HEIGHT });
+                    }
                     return;
                 }
 
@@ -941,12 +1062,13 @@ impl WindowManager {
                 let menu_width = 180;
                 let menu_x = screen_width - menu_width as isize - 10;
                 let menu_y = TOP_BAR_HEIGHT as isize;
-                let menu_rect = Rect { x: menu_x, y: menu_y, width: menu_width, height: 145 };
+                let menu_rect = Rect { x: menu_x, y: menu_y, width: menu_width, height: 185 };
                 
                 if menu_rect.contains(self.input.mouse_x, self.input.mouse_y) {
                     let btn_m = Button::new(menu_x + 65, menu_y + 38, 16, 16, "-");
                     let btn_p = Button::new(menu_x + 130, menu_y + 38, 16, 16, "+");
                     let btn_mute = Button::new(menu_x + 10, menu_y + 65, 160, 25, "");
+                    let btn_settings = Button::new(menu_x + 10, menu_y + 150, 160, 25, "Settings...");
                     
                     if btn_m.contains(self.input.mouse_x, self.input.mouse_y) {
                         let cur = crate::kernel::audio::MASTER_VOLUME.load(Ordering::Relaxed);
@@ -959,6 +1081,19 @@ impl WindowManager {
                     } else if btn_mute.contains(self.input.mouse_x, self.input.mouse_y) {
                         crate::kernel::audio::toggle_mute();
                         self.mark_dirty(menu_rect);
+                    } else if btn_settings.contains(self.input.mouse_x, self.input.mouse_y) {
+                        self.system_menu_open = false;
+                        let settings_title = locale.app_settings();
+                        if !self.windows.iter().any(|w| w.title == settings_title) {
+                            self.add_window(Window {
+                                id: 0, x: 250, y: 150, width: 300, height: 420,
+                                color: 0x00_40_20_40,
+                                title: settings_title,
+                                content: WindowContent::App(Box::new(Settings::new())),
+                                minimized: false, maximized: false, is_system: false, restore_rect: None,
+                            });
+                        }
+                        self.mark_dirty(Rect { x: 0, y: 0, width: screen_width as usize, height: screen_height as usize });
                     } else {
                         // Check Brightness Slider Click
                         let slider_y = menu_y + 125;
@@ -1080,7 +1215,7 @@ impl WindowManager {
                     let settings_open = self.windows.iter().any(|w| w.title == locale.app_settings());
                     if !settings_open {
                         self.add_window(Window {
-                            id: 0, x: 250, y: 250, width: 300, height: 300,
+                            id: 0, x: 250, y: 150, width: 300, height: 420,
                             color: 0x00_40_20_40, // Dark Purple
                             title: locale.app_settings(),
                             content: WindowContent::App(Box::new(Settings::new())),
@@ -1306,8 +1441,18 @@ impl WindowManager {
                         // Take the snapshot BEFORE getting the mutable borrow of self.windows
                         let win_snap = self.windows.iter().find(|w| w.id == target_id).unwrap().clone();
                         if let Some(win) = self.windows.iter_mut().find(|w| w.id == target_id) {
+                            let current_tick = crate::kernel::process::TICKS.load(Ordering::Relaxed);
+                            let is_double = self.last_click_win_id == Some(target_id) && 
+                                            current_tick < self.last_click_tick + 500;
+                            
+                            let event = if is_double {
+                                AppEvent::MouseDoubleClick { x: rel_x, y: rel_y, width: win.width, height: win.height }
+                            } else {
+                                AppEvent::MouseClick { x: rel_x, y: rel_y, width: win.width, height: win.height }
+                            };
+
                             if let WindowContent::App(app) = &mut win.content {
-                                if let Some(dirty) = app.handle_event(&AppEvent::MouseClick { x: rel_x, y: rel_y, width: win.width, height: win.height }, &win_snap) {
+                                if let Some(dirty) = app.handle_event(&event, &win_snap) {
                                     if dirty.x == -1 && dirty.y == -1 && dirty.width == 0 {
                                         // Close Signal Received
                                         let id_to_remove = target_id;
@@ -1323,6 +1468,9 @@ impl WindowManager {
                                     self.mark_dirty(win_snap.rect());
                                 }
                             }
+
+                            self.last_click_tick = if is_double { 0 } else { current_tick };
+                            self.last_click_win_id = if is_double { None } else { Some(target_id) };
                         }
                     }
                 }
@@ -1407,13 +1555,13 @@ impl WindowManager {
         // Optimized Gradient: Only update cache when screen size or colors change
         let g_start = DESKTOP_GRADIENT_START.load(Ordering::Relaxed);
         let g_end = DESKTOP_GRADIENT_END.load(Ordering::Relaxed);
-        let g_mode = SHOW_WALLPAPER_GRADIENT.load(Ordering::Relaxed);
-        let g_hash = g_start ^ g_end ^ (g_mode as u32);
+        let mode = WALLPAPER_MODE.load(Ordering::Relaxed);
+        let g_hash = g_start ^ g_end ^ mode;
 
         if self.gradient_cache.len() != fb_info.height || self.last_grad_hash != g_hash {
             self.gradient_cache.resize(fb_info.height, 0);
             for y in 0..fb_info.height {
-                self.gradient_cache[y] = if g_mode { self.interpolate_gradient(g_start, g_end, y as isize, fb_info.height as isize) } else { g_start };
+                self.gradient_cache[y] = if mode == 0 { self.interpolate_gradient(g_start, g_end, y as isize, fb_info.height as isize) } else { g_start };
             }
             self.last_grad_hash = g_hash;
         }
@@ -1584,21 +1732,20 @@ impl WindowManager {
         }
     }
 
-    fn interpolate_gradient(&self, start: u32, end: u32, y: isize, height: isize) -> u32 {
+    fn interpolate_gradient(&self, start: u32, end: u32, current_val: isize, max_val: isize) -> u32 {
         let (r1, g1, b1) = (((start >> 16) & 0xFF) as isize, ((start >> 8) & 0xFF) as isize, (start & 0xFF) as isize);
         let (r2, g2, b2) = (((end >> 16) & 0xFF) as isize, ((end >> 8) & 0xFF) as isize, (end & 0xFF) as isize);
-        let rv = r1 + ((r2 - r1) * y) / height;
-        let gv = g1 + ((g2 - g1) * y) / height;
-        let bv = b1 + ((b2 - b1) * y) / height;
+        let rv = r1 + ((r2 - r1) * current_val) / max_val;
+        let gv = g1 + ((g2 - g1) * current_val) / max_val;
+        let bv = b1 + ((b2 - b1) * current_val) / max_val;
         ((rv as u32) << 16) | ((gv as u32) << 8) | (bv as u32)
     }
 
-    fn draw_win_btn(&self, fb: &mut framebuffer::Framebuffer, x: isize, y: isize, text: &str, color: u32, _mouse_x: isize, _mouse_y: isize, clip: Rect) {
+    fn draw_win_btn(&self, fb: &mut framebuffer::Framebuffer, x: isize, y: isize, icon: &[[u8; 12]; 12], color: u32, clip: Rect) {
         let rect = Rect { x, y, width: 16, height: 16 };
         if !clip.intersects(&rect) { return; }
-        let bg = color; // Removed hover effect
-        draw_rect(fb, x, y, 16, 16, bg, Some(clip));
-        font::draw_string(fb, x + 4, y + 1, text, 0x00_FFFFFF, Some(clip));
+        draw_rect(fb, x, y, 16, 16, color, Some(clip));
+        draw_icon(fb, icon, x + 2, y + 2, 0x00_FFFFFF, clip);
     }
 
     fn draw_window(&self, fb: &mut framebuffer::Framebuffer, win: &Window, mouse_x: isize, mouse_y: isize, clip: Rect) {
@@ -1633,10 +1780,11 @@ impl WindowManager {
 
         // Window control buttons
         let btn_y = win.y + 3;
-        // Optimized button drawing to avoid expensive heap allocations for simple window controls
-        self.draw_win_btn(fb, win.x + win.width as isize - 20, btn_y, "x", 0x00_C0_40_40, mouse_x, mouse_y, clip);
-        self.draw_win_btn(fb, win.x + win.width as isize - 40, btn_y, "+", title_color, mouse_x, mouse_y, clip);
-        self.draw_win_btn(fb, win.x + win.width as isize - 60, btn_y, "-", title_color, mouse_x, mouse_y, clip);
+        self.draw_win_btn(fb, win.x + win.width as isize - 20, btn_y, &icons::CLOSE, 0x00_C0_40_40, clip);
+        
+        let max_icon = if win.maximized { &icons::RESTORE } else { &icons::MAXIMIZE };
+        self.draw_win_btn(fb, win.x + win.width as isize - 40, btn_y, max_icon, title_color, clip);
+        self.draw_win_btn(fb, win.x + win.width as isize - 60, btn_y, &icons::MINIMIZE, title_color, clip);
 
         // 2. Draw Content LAST (Ensures it is on top of the window background)
         let content_rect = Rect {
@@ -1725,24 +1873,36 @@ impl WindowManager {
         let battery_info = crate::drivers::battery::BATTERY.lock().get_info();
         let clock_text_width = font::string_width(clock_text) + 10;
         
-        let mut cursor_x = width as isize - 10;
+        let clock_x = (width as isize - clock_text_width as isize) / 2;
+        font::draw_string(fb, clock_x, 5, clock_text, 0x00_FFFFFF, Some(clip));
 
-        // System Menu Button (Top Right)
-        let menu_btn_w = 26;
-        cursor_x -= menu_btn_w;
-        let mut menu_btn = Button::new(cursor_x, 3, menu_btn_w as usize, TOP_BAR_HEIGHT - 6, "v");
-        if !high_contrast { menu_btn.bg_color = 0x00_44_44_44; }
-        menu_btn.draw(fb, self.input.mouse_x, self.input.mouse_y, Some(clip));
-        cursor_x -= 10;
+        let mut cursor_x = width as isize - 15;
+        
+        // Dropdown Arrow
+        draw_icon(fb, &icons::DROPDOWN, cursor_x - 14, 10, 0x00_AAAAAA, clip);
+        cursor_x -= 20;
+
+        // Volume Indicator
+        let vol_ind_w = 45; // Icon + "100%"
+        cursor_x -= vol_ind_w;
+        draw_volume_indicator(fb, cursor_x, 7, clip);
+        cursor_x -= 5;
+
+        // Brightness Indicator
+        let bright_ind_w = 45; // Icon + "100%"
+        cursor_x -= bright_ind_w;
+        draw_brightness_indicator(fb, cursor_x, 7, clip);
+        cursor_x -= 5;
+
+        // Network Indicator
+        let net_ind_w = 40; // Icon + "100%"
+        cursor_x -= net_ind_w;
+        draw_network_indicator(fb, cursor_x, 7, clip);
 
         if battery_info.health > 0 {
-            cursor_x -= 75; // Battery indicator width
+            cursor_x -= 85; // Battery width + padding
             draw_battery_indicator(fb, cursor_x, 7, clip);
-            cursor_x -= 10; // Spacing between battery and clock
         }
-
-        cursor_x -= clock_text_width as isize;
-        font::draw_string(fb, cursor_x, 5, clock_text, 0x00_FFFFFF, Some(clip));
     }
 
     fn draw_start_menu_optimized(&self, fb: &mut framebuffer::Framebuffer, mouse_x: isize, mouse_y: isize, mut clip: Rect, locale: Option<&alloc::sync::Arc<dyn Localisation>>) {
@@ -1896,7 +2056,7 @@ impl WindowManager {
     fn draw_system_menu_optimized(&self, fb: &mut framebuffer::Framebuffer, mouse_x: isize, mouse_y: isize, mut clip: Rect) {
         let width = if let Some(ref info) = fb.info { info.width } else { return };
         let menu_width = 180;
-        let menu_height = 145;
+        let menu_height = 185;
         let menu_x = width as isize - menu_width as isize - 10;
         let menu_y = TOP_BAR_HEIGHT as isize;
 
@@ -1944,6 +2104,97 @@ impl WindowManager {
         // Handle
         let handle_x = menu_x + 10 + (bright as isize * slider_w as isize / 100);
         draw_rect(fb, handle_x - 4, slider_y, 8, 14, 0x00_FF_CC_00, Some(clip));
+
+        // Settings Shortcut Button
+        let btn_settings = Button::new(menu_x + 10, menu_y + 150, 160, 25, "Settings...");
+        btn_settings.draw(fb, mouse_x, mouse_y, Some(clip));
+    }
+}
+
+/// Draws a volume icon and percentage on the top bar.
+pub fn draw_volume_indicator(fb: &mut framebuffer::Framebuffer, x: isize, y: isize, clip: Rect) {
+    let vol = crate::kernel::audio::MASTER_VOLUME.load(Ordering::Relaxed);
+    let muted = crate::kernel::audio::IS_MUTED.load(Ordering::Relaxed);
+
+    let icon_bmp = if muted { &icons::VOL_MUTE } else { &icons::VOL_HIGH };
+    let icon_color = if muted { 0x00_FF_40_40 } else { 0x00_FFFFFF };
+    draw_icon(fb, icon_bmp, x, y + 3, icon_color, clip);
+
+    // Draw percentage if not muted
+    if !muted {
+        let s = format!("{}%", vol);
+        font::draw_string(fb, x + 15, y + 5, s.as_str(), 0x00_FFFFFF, Some(clip));
+    }
+}
+
+/// Draws a brightness icon and percentage on the top bar.
+pub fn draw_brightness_indicator(fb: &mut framebuffer::Framebuffer, x: isize, y: isize, clip: Rect) {
+    let bright = crate::drivers::brightness::BRIGHTNESS_LEVEL.load(Ordering::Relaxed);
+    
+    draw_icon(fb, &icons::BRIGHTNESS, x, y + 3, 0x00_FF_CC_00, clip);
+
+    // Draw percentage
+    let s = format!("{}%", bright);
+    font::draw_string(fb, x + 15, y + 5, s.as_str(), 0x00_FFFFFF, Some(clip));
+}
+
+/// Draws a network signal strength icon and percentage on the top bar.
+pub fn draw_network_indicator(fb: &mut framebuffer::Framebuffer, x: isize, y: isize, clip: Rect) {
+    let signal = crate::kernel::net::NETWORK_SIGNAL_STRENGTH.load(Ordering::Relaxed);
+    let conn_type = crate::kernel::net::CONNECTION_TYPE.load(Ordering::Relaxed);
+
+    let icon_bmp = if conn_type == crate::kernel::net::ConnectionType::Ethernet as u8 {
+        &icons::NET_ETHERNET
+    } else if conn_type == crate::kernel::net::ConnectionType::Wifi as u8 {
+        &icons::NET_WIFI
+    } else {
+        &icons::NET_WIFI // Disconnected wifi icon or similar
+    };
+
+    let icon_color = if conn_type == 0 { 0x00_FF_40_40 } else { 0x00_FFFFFF };
+    draw_icon(fb, icon_bmp, x, y + 3, icon_color, clip);
+
+    // Draw percentage
+    let s = format!("{}%", signal);
+    font::draw_string(fb, x + 15, y + 5, s.as_str(), 0x00_FFFFFF, Some(clip));
+}
+
+/// Draws a 12x12 bitmap icon at the specified location.
+pub fn draw_icon(fb: &mut framebuffer::Framebuffer, bitmap: &[[u8; 12]; 12], x: isize, y: isize, color: u32, clip: Rect) {
+    for (dy, row) in bitmap.iter().enumerate() {
+        for (dx, &pixel) in row.iter().enumerate() {
+            if pixel == 1 {
+                let px = x + dx as isize;
+                let py = y + dy as isize;
+                if clip.contains(px, py) {
+                    fb.set_pixel(px as usize, py as usize, color);
+                }
+            }
+        }
+    }
+}
+
+/// Generic helper to draw a context menu at a specific location.
+pub fn draw_context_menu_box(fb: &mut framebuffer::Framebuffer, x: isize, y: isize, items: &[ContextMenuItem], mouse_x: isize, mouse_y: isize, clip: Rect) {
+    let item_h = 25;
+    let width = 150;
+    let height = items.len() * item_h + 10;
+    
+    // Draw Background
+    draw_rect(fb, x, y, width, height, 0x00_2D_2D_30, Some(clip));
+    draw_rect(fb, x, y, width, 1, 0x00_FFFFFF, Some(clip)); // Top Border
+
+    for (i, item) in items.iter().enumerate() {
+        let ix = x + 5;
+        let iy = y + 5 + (i as isize * item_h as isize);
+        let is_hovered = mouse_x >= x && mouse_x < x + width as isize && mouse_y >= iy && mouse_y < iy + item_h as isize;
+        
+        if is_hovered && item.enabled {
+            draw_rect(fb, x + 2, iy, width - 4, item_h, 0x00_3E_3E_42, Some(clip));
+        }
+        
+        let color = if item.enabled { 0x00_FFFFFF } else { 0x00_80_80_80 };
+        font::draw_string(fb, ix + 5, iy + 5, item.label.as_str(), color, Some(clip));
     }
 }
 

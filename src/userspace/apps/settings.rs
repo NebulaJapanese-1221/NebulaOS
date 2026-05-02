@@ -7,7 +7,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 use crate::userspace::gui::{DESKTOP_GRADIENT_START, DESKTOP_GRADIENT_END, FULL_REDRAW_REQUESTED, HIGH_CONTRAST, LARGE_TEXT, MOUSE_SENSITIVITY};
-use crate::userspace::gui::SHOW_WALLPAPER_GRADIENT;
+use crate::userspace::gui::WALLPAPER_MODE;
 use crate::userspace::localisation::{self, Language};
 use crate::kernel::cpu::CPU_BRAND;
 use core::cell::{Cell, RefCell};
@@ -23,6 +23,7 @@ enum Tab {
     Mouse,
     Power,
     Display,
+    Network,
 }
 
 #[derive(Clone)]
@@ -66,6 +67,7 @@ impl Settings {
             (Tab::Mouse, locale.settings_tab_mouse().into()),
             (Tab::Power, String::from("Power")),
             (Tab::Display, String::from("Display")),
+            (Tab::Network, String::from("Network")),
         ]
     }
 
@@ -267,14 +269,46 @@ impl Settings {
                 let bx_pos = slider_x + ((b_val as usize * slider_w) / 255) as isize;
                 crate::userspace::gui::draw_rect(fb, bx_pos - 2, by - 4, 4, 10, 0x00_FF_FF_FF, Some(dirty_rect));
 
+                // End Color Sliders
+                let end_label_y = content_y + (font_height as isize + 9) + 65;
+                font::draw_string(fb, content_x, end_label_y, "Gradient End", 0x00_FF_FF_FF, Some(dirty_rect));
+                
+                let end_color = DESKTOP_GRADIENT_END.load(Ordering::Relaxed);
+                let re_val = (end_color >> 16) & 0xFF;
+                let ge_val = (end_color >> 8) & 0xFF;
+                let be_val = end_color & 0xFF;
+
+                // Red End
+                let rey = end_label_y + (font_height as isize + 9);
+                font::draw_string(fb, content_x, rey - 4, "R", 0x00_FF_40_40, Some(dirty_rect));
+                crate::userspace::gui::draw_rect(fb, slider_x, rey, slider_w, slider_h, 0x00_80_80_80, Some(dirty_rect));
+                let rex_pos = slider_x + ((re_val as usize * slider_w) / 255) as isize;
+                crate::userspace::gui::draw_rect(fb, rex_pos - 2, rey - 4, 4, 10, 0x00_FF_FF_FF, Some(dirty_rect));
+
+                // Green End
+                let gey = rey + 20;
+                font::draw_string(fb, content_x, gey - 4, "G", 0x00_40_FF_40, Some(dirty_rect));
+                crate::userspace::gui::draw_rect(fb, slider_x, gey, slider_w, slider_h, 0x00_80_80_80, Some(dirty_rect));
+                let gex_pos = slider_x + ((ge_val as usize * slider_w) / 255) as isize;
+                crate::userspace::gui::draw_rect(fb, gex_pos - 2, gey - 4, 4, 10, 0x00_FF_FF_FF, Some(dirty_rect));
+
+                // Blue End
+                let bey = gey + 20;
+                font::draw_string(fb, content_x, bey - 4, "B", 0x00_40_40_FF, Some(dirty_rect));
+                crate::userspace::gui::draw_rect(fb, slider_x, bey, slider_w, slider_h, 0x00_80_80_80, Some(dirty_rect));
+                let bex_pos = slider_x + ((be_val as usize * slider_w) / 255) as isize;
+                crate::userspace::gui::draw_rect(fb, bex_pos - 2, bey - 4, 4, 10, 0x00_FF_FF_FF, Some(dirty_rect));
+
                 // Color Preview
-                let preview_y = content_y + (font_height as isize + 9) + 60;
+                let preview_y = content_y + (font_height as isize + 9) + 140;
                 font::draw_string(fb, content_x, preview_y + 4, locale.label_preview(), 0x00_CC_CC_CC, Some(dirty_rect));
                 crate::userspace::gui::draw_rect(fb, content_x + 70, preview_y, 40, 16, start_color, Some(dirty_rect));
+                crate::userspace::gui::draw_rect(fb, content_x + 115, preview_y, 40, 16, end_color, Some(dirty_rect));
                 crate::userspace::gui::draw_rect(fb, content_x + 70, preview_y, 40, 1, 0xFFFFFF, Some(dirty_rect)); // Border
+                crate::userspace::gui::draw_rect(fb, content_x + 115, preview_y, 40, 1, 0xFFFFFF, Some(dirty_rect)); // Border
 
                 // Presets
-                let presets_y = content_y + (font_height as isize + 9) + 90;
+                let presets_y = content_y + (font_height as isize + 9) + 160;
                 font::draw_string(fb, content_x, presets_y, locale.label_presets(), 0x00_FF_FF_FF, Some(dirty_rect));
                 
                 let btn_w = 80;
@@ -338,11 +372,49 @@ impl Settings {
                 btn_800.draw(fb, 0, 0, Some(dirty_rect));
                 btn_1024.draw(fb, 0, 0, Some(dirty_rect));
 
-                let use_grad = SHOW_WALLPAPER_GRADIENT.load(Ordering::Relaxed);
-                let wall_text = if use_grad { "Wallpaper: [Gradient]" } else { "Wallpaper: [Solid]" };
+                let mode = WALLPAPER_MODE.load(Ordering::Relaxed);
+                let wall_text = match mode {
+                    0 => "Wallpaper: [Gradient]",
+                    1 => "Wallpaper: [Solid]",
+                    _ => "Wallpaper: [Construction]",
+                };
                 let mut btn_wall = Button::new(content_x, content_y + line_spacing * 4, 240, 28, wall_text);
-                if !use_grad { btn_wall.bg_color = 0x00_44_44_44; }
+                if mode != 0 { btn_wall.bg_color = 0x00_44_44_44; }
                 btn_wall.draw(fb, 0, 0, Some(dirty_rect));
+            }
+            Tab::Network => {
+                font::draw_string(fb, content_x, content_y, "Network Connectivity", 0x00_FF_FF_FF, Some(dirty_rect));
+                
+                let conn_type = crate::kernel::net::CONNECTION_TYPE.load(Ordering::Relaxed);
+                let status_str = match conn_type {
+                    1 => "Ethernet (Connected)",
+                    2 => "Wi-Fi (Connected)",
+                    _ => "Disconnected",
+                };
+                
+                font::draw_string(fb, content_x, content_y + line_spacing, &format!("Status: {}", status_str), 0x00_CCCCCC, Some(dirty_rect));
+                
+                if conn_type != 0 {
+                    let strength = crate::kernel::net::NETWORK_SIGNAL_STRENGTH.load(Ordering::Relaxed);
+                    font::draw_string(fb, content_x, content_y + line_spacing * 2, &format!("Signal: {}%", strength), 0x00_CCCCCC, Some(dirty_rect));
+                    
+                    let mac = crate::kernel::net::MAC_ADDRESS.lock();
+                    let mac_str = format!("MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", 
+                        mac.0[0], mac.0[1], mac.0[2], mac.0[3], mac.0[4], mac.0[5]);
+                    font::draw_string(fb, content_x, content_y + line_spacing * 3, &mac_str, 0x00_CCCCCC, Some(dirty_rect));
+                    
+                    font::draw_string(fb, content_x, content_y + line_spacing * 4, "IP Address: 192.168.1.42 (Static)", 0x00_AAAAAA, Some(dirty_rect));
+
+                    // Network Stats
+                    let rx = crate::kernel::net::RX_PACKETS.load(Ordering::Relaxed);
+                    let tx = crate::kernel::net::TX_PACKETS.load(Ordering::Relaxed);
+                    font::draw_string(fb, content_x, content_y + line_spacing * 6, &format!("Packets Received: {}", rx), 0x00_99FF99, Some(dirty_rect));
+                    font::draw_string(fb, content_x, content_y + line_spacing * 7, &format!("Packets Sent: {}", tx), 0x00_FF9999, Some(dirty_rect));
+                }
+                
+                let btn_y = if conn_type != 0 { line_spacing * 9 } else { line_spacing * 6 };
+                let mut btn_refresh = Button::new(content_x, content_y + btn_y, 180, 25, "Rescan Hardware");
+                btn_refresh.draw(fb, 0, 0, Some(dirty_rect));
             }
         }
     }
@@ -448,8 +520,8 @@ impl App for Settings {
                             } else if btn_1024_rect.contains(rel_x, rel_y) {
                                 crate::serial_println!("[Display] Resolution Change: 1024x768 requested (actual)");
                             } else if btn_wall_rect.contains(rel_x, rel_y) {
-                                let next = !SHOW_WALLPAPER_GRADIENT.load(Ordering::Relaxed);
-                                SHOW_WALLPAPER_GRADIENT.store(next, Ordering::Relaxed);
+                                let next = (WALLPAPER_MODE.load(Ordering::Relaxed) + 1) % 3;
+                                WALLPAPER_MODE.store(next, Ordering::Relaxed);
                                 FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
                                 self.dirty.set(true);
                             }
@@ -463,8 +535,16 @@ impl App for Settings {
                                 self.dirty.set(true);
                             }
                         }
+                        Tab::Network => {
+                            let conn_type = crate::kernel::net::CONNECTION_TYPE.load(Ordering::Relaxed);
+                            let btn_y = if conn_type != 0 { line_spacing * 9 } else { line_spacing * 6 };
+                            let btn_refresh_rect = Rect { x: 0, y: btn_y, width: 180, height: 25 };
+                            if btn_refresh_rect.contains(rel_x, rel_y) {
+                                crate::kernel::pci::rescan_bus();
+                            }
+                        }
                         Tab::Theme => {
-                            let presets_y = (font_height as isize + 9) + 90;
+                            let presets_y = (font_height as isize + 9) + 160;
                             let btn_w = 80;
                             let btn_h = font_height + 9;
                             let btn_neb = Rect { x: 0, y: presets_y + (font_height as isize + 10), width: btn_w, height: btn_h };
@@ -544,26 +624,44 @@ impl App for Settings {
                     if self.current_tab == Tab::Theme {
                     let slider_x_rel = 30;
                     let slider_w = 180;
+                    let r_start_y = font_height as isize + 9;
 
-                    let r_rect = Rect { x: slider_x_rel, y: (font_height as isize + 9) - 5, width: slider_w, height: 12 };
-                    let g_rect = Rect { x: slider_x_rel, y: (font_height as isize + 9) + 20 - 5, width: slider_w, height: 12 };
-                    let b_rect = Rect { x: slider_x_rel, y: (font_height as isize + 9) + 40 - 5, width: slider_w, height: 12 };
+                    let r_rect = Rect { x: slider_x_rel, y: r_start_y - 5, width: slider_w, height: 12 };
+                    let g_rect = Rect { x: slider_x_rel, y: r_start_y + 20 - 5, width: slider_w, height: 12 };
+                    let b_rect = Rect { x: slider_x_rel, y: r_start_y + 40 - 5, width: slider_w, height: 12 };
 
-                    let current_color = DESKTOP_GRADIENT_START.load(Ordering::Relaxed);
-                    let mut r = (current_color >> 16) & 0xFF;
-                    let mut g = (current_color >> 8) & 0xFF;
-                    let mut b = current_color & 0xFF;
+                    let current_start = DESKTOP_GRADIENT_START.load(Ordering::Relaxed);
+                    let mut rs = (current_start >> 16) & 0xFF;
+                    let mut gs = (current_start >> 8) & 0xFF;
+                    let mut bs = current_start & 0xFF;
                     let mut changed = false;
 
-                    if r_rect.contains(rel_x, rel_y) { r = (((rel_x - slider_x_rel) * 255) / slider_w as isize) as u32; changed = true; }
-                    else if g_rect.contains(rel_x, rel_y) { g = (((rel_x - slider_x_rel) * 255) / slider_w as isize) as u32; changed = true; }
-                    else if b_rect.contains(rel_x, rel_y) { b = (((rel_x - slider_x_rel) * 255) / slider_w as isize) as u32; changed = true; }
+                    if r_rect.contains(rel_x, rel_y) { rs = (((rel_x - slider_x_rel) * 255) / slider_w as isize) as u32; changed = true; }
+                    else if g_rect.contains(rel_x, rel_y) { gs = (((rel_x - slider_x_rel) * 255) / slider_w as isize) as u32; changed = true; }
+                    else if b_rect.contains(rel_x, rel_y) { bs = (((rel_x - slider_x_rel) * 255) / slider_w as isize) as u32; changed = true; }
 
                     if changed {
-                        let new_start = (r << 16) | (g << 8) | b;
-                        let new_end = (r.saturating_add(0x30).min(255) << 16) | (g.saturating_add(0x30).min(255) << 8) | (b.saturating_add(0x40).min(255));
-                        DESKTOP_GRADIENT_START.store(new_start, Ordering::Relaxed);
-                        DESKTOP_GRADIENT_END.store(new_end, Ordering::Relaxed);
+                        DESKTOP_GRADIENT_START.store((rs << 16) | (gs << 8) | bs, Ordering::Relaxed);
+                        FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
+                    }
+
+                    let mut changed_end = false;
+                    let r_end_y = r_start_y + 85;
+                    let re_rect = Rect { x: slider_x_rel, y: r_end_y - 5, width: slider_w, height: 12 };
+                    let ge_rect = Rect { x: slider_x_rel, y: r_end_y + 20 - 5, width: slider_w, height: 12 };
+                    let be_rect = Rect { x: slider_x_rel, y: r_end_y + 40 - 5, width: slider_w, height: 12 };
+
+                    let current_end = DESKTOP_GRADIENT_END.load(Ordering::Relaxed);
+                    let mut re = (current_end >> 16) & 0xFF;
+                    let mut ge = (current_end >> 8) & 0xFF;
+                    let mut be = current_end & 0xFF;
+
+                    if re_rect.contains(rel_x, rel_y) { re = (((rel_x - slider_x_rel) * 255) / slider_w as isize) as u32; changed_end = true; }
+                    else if ge_rect.contains(rel_x, rel_y) { ge = (((rel_x - slider_x_rel) * 255) / slider_w as isize) as u32; changed_end = true; }
+                    else if be_rect.contains(rel_x, rel_y) { be = (((rel_x - slider_x_rel) * 255) / slider_w as isize) as u32; changed_end = true; }
+
+                    if changed_end {
+                        DESKTOP_GRADIENT_END.store((re << 16) | (ge << 8) | be, Ordering::Relaxed);
                         FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
                     }
                     } else if self.current_tab == Tab::Accessibility {
