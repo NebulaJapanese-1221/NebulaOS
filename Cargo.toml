@@ -1,12 +1,14 @@
 [package]
 name = "nebula_os"
 version = "0.0.3-dev3"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 spin = "0.9.8"
 linked_list_allocator = "0.10.5"
-smoltcp = { version = "0.13.0", default-features = false, features = ["medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp", "alloc"] }
+smoltcp = { version = "0.13.0", default-features = false, features = ["medium-ethernet", "proto-ipv4", "proto-ipv6", "socket-tcp", "socket-udp", "socket-dhcpv4", "socket-dns", "alloc"] }
+rustls = { version = "0.23", default-features = false, features = ["tls12"] }
+rustls-pki-types = { version = "1.0", default-features = false, features = ["alloc"] }
 # Settings for bare-metal profile
 [profile.dev]
 panic = "abort"

@@ -1,8 +1,8 @@
 # Changelog
 
-All notable changes to NebulaOS will be documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+All notable changes to NebulaOS will be documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The date format is year, month, day.
 
-## [0.0.3] - In Progress
+## [0.0.3] - 2026-06-01
 ### Added
 - Added basic audio support via AC97
 - Added a C-Major startup chime played upon hardware discovery.

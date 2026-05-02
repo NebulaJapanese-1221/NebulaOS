@@ -60,12 +60,14 @@ unsafe fn pci_config_read_u32(bus: u8, device: u8, func: u8, offset: u8) -> u32 
         | ((offset as u32) & 0xFC)
         | 0x80000000;
 
-    // outl equivalent
-    core::arch::asm!("out dx, eax", in("dx") PCI_CONFIG_ADDRESS, in("eax") address, options(nomem, nostack, preserves_flags));
-    
     let data: u32;
-    // inl equivalent
-    core::arch::asm!("in eax, dx", out("eax") data, in("dx") PCI_CONFIG_DATA, options(nomem, nostack, preserves_flags));
+    unsafe {
+        // outl equivalent
+        core::arch::asm!("out dx, eax", in("dx") PCI_CONFIG_ADDRESS, in("eax") address, options(nomem, nostack, preserves_flags));
+        
+        // inl equivalent
+        core::arch::asm!("in eax, dx", out("eax") data, in("dx") PCI_CONFIG_DATA, options(nomem, nostack, preserves_flags));
+    }
     data
 }
 

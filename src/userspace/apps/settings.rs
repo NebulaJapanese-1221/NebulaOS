@@ -85,7 +85,7 @@ impl Settings {
             let query = self.search_query.to_lowercase();
             let mut indices = self.filtered_indices.borrow_mut();
             indices.clear();
-            for (i, (_, ref label)) in tabs.iter().enumerate() {
+            for (i, (_, label)) in tabs.iter().enumerate() {
                 if query.is_empty() || label.to_lowercase().contains(&query) {
                     indices.push(i);
                 }
@@ -129,7 +129,7 @@ impl Settings {
         let all_tabs = self.tab_cache.borrow();
         let indices = self.filtered_indices.borrow();
         for (i, &idx) in indices.iter().enumerate() {
-            let (tab, ref label) = &all_tabs[idx];
+            let (tab, label) = &all_tabs[idx];
 
             let item_y = list_start_y + (i as isize * item_height);
             let item_rect = Rect { x: win.x, y: item_y, width: SIDEBAR_WIDTH, height: item_height as usize };
@@ -413,7 +413,7 @@ impl Settings {
                 }
                 
                 let btn_y = if conn_type != 0 { line_spacing * 9 } else { line_spacing * 6 };
-                let mut btn_refresh = Button::new(content_x, content_y + btn_y, 180, 25, "Rescan Hardware");
+                let btn_refresh = Button::new(content_x, content_y + btn_y, 180, 25, "Rescan Hardware");
                 btn_refresh.draw(fb, 0, 0, Some(dirty_rect));
             }
         }

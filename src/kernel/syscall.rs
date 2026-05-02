@@ -9,7 +9,7 @@ use core::arch::asm;
 /// Arguments correspond to registers:
 /// eax: Syscall Number
 /// ebx, ecx, edx: Arguments 1, 2, 3
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn syscall_dispatcher(
     eax: usize,
     ebx: usize,

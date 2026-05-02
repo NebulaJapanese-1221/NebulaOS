@@ -108,7 +108,7 @@ impl Framebuffer {
 
     /// Sets a single pixel in the off-screen draw buffer.
     pub fn set_pixel(&mut self, x: usize, y: usize, color: u32) {
-        if let (Some(ref info), Some(ref mut buffer)) = (&self.info, &mut self.draw_buffer) {
+        if let (Some(info), Some(buffer)) = (&self.info, &mut self.draw_buffer) {
             if let Some((cx, cy, cw, ch)) = self.clip_rect {
                 if x < cx || x >= cx + cw || y < cy || y >= cy + ch {
                     return;
@@ -183,12 +183,12 @@ impl Framebuffer {
         // If this is the start of a fade sequence, cache the current draw_buffer into scratch.
         // This allows us to always fade from the original "source of truth".
         if step == max {
-            if let (Some(ref draw), Some(ref mut scratch)) = (&self.draw_buffer, &mut self.scratch_buffer) {
+            if let (Some(draw), Some(scratch)) = (&self.draw_buffer, &mut self.scratch_buffer) {
                 scratch.copy_from_slice(draw);
             }
         }
 
-        if let (Some(ref scratch), Some(ref mut draw)) = (&self.scratch_buffer, &mut self.draw_buffer) {
+        if let (Some(scratch), Some(draw)) = (&self.scratch_buffer, &mut self.draw_buffer) {
             // Use fixed-point math to avoid division in the hot loop
             let scale = (step << 8) / max; 
             for i in 0..scratch.len() {
@@ -223,7 +223,7 @@ impl Framebuffer {
 
         if RENDER_TASK_ACTIVE.load(Ordering::Relaxed) {
             // Deferred: Copy from draw_buffer to ready_buffer
-            if let (Some(ref info), Some(ref draw), Some(ref mut ready)) = (&self.info, &self.draw_buffer, &mut self.ready_buffer) {
+            if let (Some(info), Some(draw), Some(ready)) = (&self.info, &self.draw_buffer, &mut self.ready_buffer) {
                 for i in 0..safe_height {
                     let cy = y + i;
                     let offset = cy * info.width + x;

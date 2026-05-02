@@ -97,7 +97,7 @@ pub fn get_task_count() -> usize {
 
 /// Called by the assembly timer handler. 
 /// Updates the scheduler and returns the ESP of the next task.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn schedule(current_esp: usize) -> usize {
     // 1. Handle Timer Logic
     rtc::handle_timer_tick();
@@ -209,6 +209,6 @@ core::arch::global_asm!(
     "iretd"             // Return from interrupt (pops CS, EIP, EFLAGS, [ESP, SS])
 );
 
-extern "C" {
+unsafe extern "C" { // Added unsafe to extern block
     pub fn timer_handler();
 }

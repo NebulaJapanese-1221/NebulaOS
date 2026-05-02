@@ -15,12 +15,46 @@ pub struct DateTime {
     pub year: u16,
 }
 
+impl DateTime {
+    /// Converts the current DateTime to seconds since the Unix epoch (January 1st, 1970).
+    pub fn to_unix_timestamp(&self) -> u64 {
+        let y = self.year as u64;
+        let m = self.month as u64;
+        
+        let mut total_days = 0;
+        // Calculate days for full years since 1970
+        for year in 1970..y {
+            total_days += if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) { 366 } else { 365 };
+        }
+
+        // Calculate days for full months in the current year
+        let month_days = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        for i in 1..m as usize {
+            total_days += month_days[i] as u64;
+        }
+
+        // Add leap day if we are past February in a leap year
+        if m > 2 && (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) {
+            total_days += 1;
+        }
+
+        total_days += self.day as u64 - 1;
+
+        (total_days * 86400) + (self.hour as u64 * 3600) + (self.minute as u64 * 60) + (self.second as u64)
+    }
+}
+
 // Global storage for the current time and update flag
 pub static CURRENT_DATETIME: Mutex<DateTime> = Mutex::new(DateTime {
     second: 0, minute: 0, hour: 0, day: 0, month: 0, year: 0
 });
 pub static TIME_NEEDS_UPDATE: AtomicBool = AtomicBool::new(false);
 pub static TICK_COUNT: Mutex<u32> = Mutex::new(0);
+
+/// Public helper to get the current system time as a Unix timestamp.
+pub fn get_unix_timestamp() -> u64 {
+    CURRENT_DATETIME.lock().to_unix_timestamp()
+}
 
 fn read_register(reg: u8) -> u8 {
     unsafe {

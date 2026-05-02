@@ -3,7 +3,7 @@
 use crate::drivers::framebuffer::{self, FRAMEBUFFER};
 use crate::drivers::rtc::{self, CURRENT_DATETIME, TIME_NEEDS_UPDATE};
 use alloc::vec::Vec;
-use alloc::string::ToString;
+use alloc::string::{String, ToString};
 use alloc::{format, vec};
 use crate::userspace::apps::{app::{App, AppEvent}, calculator::Calculator, editor::TextEditor, paint::Paint, settings::Settings, terminal::Terminal, task_manager::TaskManager, nebula_browser::NebulaBrowser, file_manager::FileManager};
 use spin::Mutex;
@@ -15,6 +15,7 @@ pub mod button;
 use self::button::Button;
 pub mod cursor;
 pub mod icons;
+pub mod progress_bar;
 
 use crate::userspace::localisation::{self, Localisation};
 
@@ -184,7 +185,7 @@ pub struct Window {
     pub y: isize,
     pub width: usize,
     pub height: usize,
-    pub title: &'static str,
+    pub title: alloc::string::String,
     pub color: u32,
     pub content: WindowContent,
     pub minimized: bool,
@@ -213,7 +214,7 @@ impl Clone for Window {
             id: self.id,
             x: self.x, y: self.y,
             width: self.width, height: self.height,
-            title: self.title,
+            title: self.title.clone(),
             color: self.color,
             content: WindowContent::MetadataOnly, // Shallow clone by default for performance
             minimized: self.minimized, maximized: self.maximized,
@@ -227,6 +228,7 @@ pub static DESKTOP_GRADIENT_START: AtomicU32 = AtomicU32::new(0x00_0F_11_1A); //
 pub static DESKTOP_GRADIENT_END: AtomicU32 = AtomicU32::new(0x00_24_3B_55);   // Nebula Blue
 pub static FULL_REDRAW_REQUESTED: AtomicBool = AtomicBool::new(false);
 pub static WALLPAPER_MODE: AtomicU32 = AtomicU32::new(0); // 0: Gradient, 1: Solid, 2: Construction
+pub static GRADIENT_STYLE: AtomicU32 = AtomicU32::new(0); // 0: Vertical, 1: Horizontal, 2: Radial
 pub static HIGH_CONTRAST: AtomicBool = AtomicBool::new(false);
 pub static LARGE_TEXT: AtomicBool = AtomicBool::new(false);
 pub static MOUSE_SENSITIVITY: AtomicU32 = AtomicU32::new(10); // 1.0x scale
@@ -328,7 +330,7 @@ impl WindowManager {
         }
     }
 
-    pub fn spawn_error_popup(&mut self, title: &'static str, message: &str, level: ErrorLevel) {
+    pub fn spawn_error_popup(&mut self, title: String, message: &str, level: ErrorLevel) {
         let (win_color, icon_color) = match level {
             ErrorLevel::Info => (0x00_1E_1E_1E, 0x00_00_78_D4),
             ErrorLevel::Warning => (0x00_2D_2D_00, 0x00_FF_D7_00),
@@ -341,7 +343,7 @@ impl WindowManager {
         let x = 220; let y = 150 + (self.windows.len() as isize * 25);
 
         self.add_window(Window {
-            id: 0, x, y, width, height, title, color: win_color,
+            id: 0, x, y, width, height, title: title.into(), color: win_color,
             content: WindowContent::App(Box::new(content)),
             minimized: false, maximized: false, is_system: true, restore_rect: None,
         });
@@ -550,12 +552,25 @@ impl WindowManager {
         // Notify non-minimized windows of system ticks
         for i in 0..self.windows.len() {
             if !self.windows[i].minimized {
+                let mut title_changed = false;
                 // Snapshot window info (metadata) to pass to the event handler safely
                 let win_info = self.windows[i].clone();
                 if let WindowContent::App(app) = &mut self.windows[i].content {
+                    // Sync dynamic titles from App to Window metadata
+                    if let Some(new_title) = app.get_title() {
+                        if self.windows[i].title != new_title {
+                            self.windows[i].title = new_title;
+                            title_changed = true;
+                        }
+                    }
+
                     if let Some(dirty_rect) = app.handle_event(&AppEvent::Tick { tick_count: current_tick }, &win_info) {
                         self.mark_dirty(dirty_rect);
                     }
+                }
+                if title_changed {
+                    let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
+                    self.mark_dirty(Rect { x: self.windows[i].x, y: self.windows[i].y, width: self.windows[i].width, height: font_height + 10 });
                 }
             }
         }
@@ -886,7 +901,7 @@ impl WindowManager {
                     let title_height = font_height + 6;
                     
                     if self.input.mouse_y >= win.y && self.input.mouse_y < win.y + title_height as isize {
-                        if self.input.mouse_x >= win.x + win.width as isize - 70 {
+                if self.input.mouse_x >= win.x + win.width as isize - 70 {
                             new_style = CursorStyle::Hand;
                         }
                     }
@@ -921,7 +936,7 @@ impl WindowManager {
                             let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
                             let title_height = font_height + 6;
                             if self.input.mouse_y >= win.y + title_height as isize {
-                                if win.title == l.app_terminal() || win.title == l.app_text_editor() {
+                if win.title == l.app_terminal() || win.title == l.app_text_editor() {
                                     new_style = CursorStyle::IBeam;
                                 } else if win.title == l.app_paint() {
                                     let toolbar_height = 40;
@@ -1088,7 +1103,7 @@ impl WindowManager {
                             self.add_window(Window {
                                 id: 0, x: 250, y: 150, width: 300, height: 420,
                                 color: 0x00_40_20_40,
-                                title: settings_title,
+                                title: settings_title.to_string(),
                                 content: WindowContent::App(Box::new(Settings::new())),
                                 minimized: false, maximized: false, is_system: false, restore_rect: None,
                             });
@@ -1227,7 +1242,7 @@ impl WindowManager {
                             self.add_window(Window {
                                 id: 0, x: 80, y: 80, width: 600, height: 400,
                                 color: 0x00_2D_2D_30,
-                                title: "NebulaBrowser",
+                            title: String::from("NebulaBrowser"),
                                 content: WindowContent::App(Box::new(NebulaBrowser::new())),
                                 minimized: false, maximized: false, is_system: false, restore_rect: None,
                             });
@@ -1236,7 +1251,7 @@ impl WindowManager {
                     self.add_window(Window {
                         id: 0, x: 150, y: 150, width: 300, height: 400,
                         color: 0x00_00_40_40,
-                        title: "Task Manager",
+                        title: String::from("Task Manager"),
                         content: WindowContent::App(Box::new(TaskManager::new())),
                         minimized: false, maximized: false, is_system: false, restore_rect: None,
                     });
@@ -1245,7 +1260,7 @@ impl WindowManager {
                             self.add_window(Window {
                                 id: 0, x: 120, y: 120, width: 450, height: 350,
                                 color: 0x00_25_25_26,
-                                title: "File Manager",
+                                title: String::from("File Manager"),
                                 content: WindowContent::App(Box::new(FileManager::new())),
                                 minimized: false, maximized: false, is_system: false, restore_rect: None,
                             });
@@ -1254,7 +1269,7 @@ impl WindowManager {
                     self.add_window(Window {
                         id: 0, x: 100, y: 100, width: 480, height: 320,
                         color: 0x00_1E_1E_1E,
-                        title: locale.app_terminal(),
+                        title: locale.app_terminal().into(),
                         content: WindowContent::App(Box::new(Terminal::new())),
                         minimized: false, maximized: false, is_system: false, restore_rect: None,
                     });
@@ -1263,7 +1278,7 @@ impl WindowManager {
                     self.add_window(Window {
                         id: 0, x: 50, y: 350, width: 200, height: 220,
                         color: 0x00_20_20_20,
-                        title: locale.app_calculator(),
+                        title: locale.app_calculator().into(),
                         content: WindowContent::App(Box::new(Calculator::new())),
                         minimized: false, maximized: false, is_system: false, restore_rect: None,
                     });
@@ -1272,7 +1287,7 @@ impl WindowManager {
                     self.add_window(Window {
                         id: 0, x: 180, y: 100, width: 400, height: 300,
                         color: 0x00_20_20_20,
-                        title: locale.app_paint(),
+                        title: locale.app_paint().into(),
                         content: WindowContent::App(Box::new(Paint::new())),
                         minimized: false, maximized: false, is_system: false, restore_rect: None,
                     });
@@ -1281,7 +1296,7 @@ impl WindowManager {
                     self.add_window(Window {
                         id: 0, x: 150, y: 150, width: 400, height: 300,
                         color: 0x00_1E_1E_1E,
-                        title: locale.app_text_editor(),
+                        title: locale.app_text_editor().into(),
                         content: WindowContent::App(Box::new(TextEditor::new())),
                         minimized: false, maximized: false, is_system: false, restore_rect: None,
                     });
@@ -1748,7 +1763,7 @@ impl WindowManager {
         draw_icon(fb, icon, x + 2, y + 2, 0x00_FFFFFF, clip);
     }
 
-    fn draw_window(&self, fb: &mut framebuffer::Framebuffer, win: &Window, mouse_x: isize, mouse_y: isize, clip: Rect) {
+    fn draw_window(&self, fb: &mut framebuffer::Framebuffer, win: &Window, _mouse_x: isize, _mouse_y: isize, clip: Rect) {
         let is_active = self.z_order.last() == Some(&win.id);
         let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
         
@@ -1775,7 +1790,7 @@ impl WindowManager {
         if let Some(title_clip) = clip.intersection(&title_rect) {
             // Vertically center text in title bar
             let text_y = win.y + (title_height as isize - font_height as isize) / 2;
-            font::draw_string(fb, win.x + 6, text_y, win.title, title_text_color, Some(title_clip));
+            font::draw_string(fb, win.x + 6, text_y, win.title.as_str(), title_text_color, Some(title_clip));
         }
 
         // Window control buttons
@@ -1837,7 +1852,7 @@ impl WindowManager {
                 let title = if font::string_width(win.title) > button_width - 8 {
                     "Window..." // Static fallback for extreme speed
                 } else {
-                    win.title
+                    win.title.as_str()
                 };
 
                 let bg = if win.minimized { 0x00_30_30_30 } else { 0x00_50_50_50 };

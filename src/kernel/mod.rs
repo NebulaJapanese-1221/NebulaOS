@@ -21,6 +21,7 @@ pub mod audio;
 pub mod pci;
 pub mod usb;
 pub mod net;
+pub mod nebula_js;
 
 pub const VERSION: &str = "0.0.3";
 
@@ -31,16 +32,19 @@ pub static IS_SAFE_MODE: AtomicBool = AtomicBool::new(false);
 /// Executes a buffer of native machine code. 
 /// This is the entry point for JIT-compiled architecture-independent logic.
 pub unsafe fn execute_jit_code(code: &[u8]) {
-    // Ensure the memory is marked as executable in the page tables
-    paging::make_executable(code.as_ptr() as usize, code.len());
+    unsafe {
+        // Ensure the memory is marked as executable in the page tables
+        paging::make_executable(code.as_ptr() as usize, code.len());
 
-    let code_ptr = code.as_ptr() as *const ();
-    let func: extern "C" fn() = core::mem::transmute(code_ptr);
-    func();
+        let code_ptr = code.as_ptr() as *const ();
+        // Explicit unsafe blocks for operations inside the unsafe fn
+        let func: extern "C" fn() = core::mem::transmute(code_ptr);
+        func();
+    }
 }
 
 // Entry point called by boot assembly
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     // It's crucial to disable interrupts before initializing the allocator
     unsafe { asm!("cli", options(nomem, nostack)); }

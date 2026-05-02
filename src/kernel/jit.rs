@@ -625,7 +625,9 @@ impl JitFunction {
     /// Executes the compiled native code.
     pub unsafe fn run(&self) {
         if !self.native_code.is_empty() {
-            crate::kernel::execute_jit_code(self.native_code.as_slice());
+            unsafe {
+                crate::kernel::execute_jit_code(self.native_code.as_slice());
+            }
         }
     }
 }

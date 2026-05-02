@@ -38,10 +38,12 @@ impl<'a> fmt::Write for PanicWriter<'a> {
 /// This function is unsafe because it reads from arbitrary memory locations by following the base pointer.
 pub unsafe fn print_stack_trace() {
     let mut rbp: usize;
-    #[cfg(target_arch = "x86")]
-    asm!("mov {}, ebp", out(reg) rbp, options(nomem, nostack));
-    #[cfg(target_arch = "x86_64")]
-    asm!("mov {}, rbp", out(reg) rbp, options(nomem, nostack));
+    unsafe {
+        #[cfg(target_arch = "x86")]
+        asm!("mov {}, ebp", out(reg) rbp, options(nomem, nostack));
+        #[cfg(target_arch = "x86_64")]
+        asm!("mov {}, rbp", out(reg) rbp, options(nomem, nostack));
+    }
 
     crate::serial_println!("\nStack Trace (current RBP: 0x{:08x}):", rbp);
 
@@ -65,11 +67,11 @@ pub unsafe fn print_stack_trace() {
         }
 
         // The return address is stored on the stack just above the saved RBP.
-        let return_address = core::ptr::read_unaligned((rbp as *const usize).add(1));
+        let return_address = unsafe { core::ptr::read_unaligned((rbp as *const usize).add(1)) };
         crate::serial_println!("  Frame {:02}: Return to 0x{:08x}", i, return_address);
 
         // The next RBP is the value pointed to by the current RBP.
-        let next_rbp = core::ptr::read_unaligned(rbp as *const usize);
+        let next_rbp = unsafe { core::ptr::read_unaligned(rbp as *const usize) };
         
         // Basic sanity check: Stack usually grows down, so previous frame RBP should be > current RBP
         if next_rbp <= rbp && next_rbp != 0 {
@@ -85,10 +87,12 @@ pub unsafe fn print_stack_trace() {
 /// This function is unsafe because it reads from arbitrary memory locations by following the base pointer.
 pub unsafe fn print_stack_trace_to<W: fmt::Write>(writer: &mut W) {
     let mut rbp: usize;
-    #[cfg(target_arch = "x86")]
-    asm!("mov {}, ebp", out(reg) rbp, options(nomem, nostack));
-    #[cfg(target_arch = "x86_64")]
-    asm!("mov {}, rbp", out(reg) rbp, options(nomem, nostack));
+    unsafe {
+        #[cfg(target_arch = "x86")]
+        asm!("mov {}, ebp", out(reg) rbp, options(nomem, nostack));
+        #[cfg(target_arch = "x86_64")]
+        asm!("mov {}, rbp", out(reg) rbp, options(nomem, nostack));
+    }
 
     let _ = writeln!(writer, "\nStack Trace (RBP: {:#x}):", rbp);
     let mut i = 0;
@@ -98,10 +102,10 @@ pub unsafe fn print_stack_trace_to<W: fmt::Write>(writer: &mut W) {
             break;
         }
 
-        let return_address = core::ptr::read_unaligned((rbp as *const usize).add(1));
+        let return_address = unsafe { core::ptr::read_unaligned((rbp as *const usize).add(1)) };
         let _ = writeln!(writer, "  Frame {:02}: Return to {:#x}", i, return_address);
         
-        let next_rbp = core::ptr::read_unaligned(rbp as *const usize);
+        let next_rbp = unsafe { core::ptr::read_unaligned(rbp as *const usize) };
         if next_rbp <= rbp && next_rbp != 0 {
              let _ = writeln!(writer, "  <Stack End or Corruption>");
              break;
@@ -261,17 +265,17 @@ pub extern "x86-interrupt" fn security_exception_handler(frame: &mut InterruptSt
     show_exception_screen("SECURITY EXCEPTION", frame, Some(error_code));
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 #[unsafe(naked)]
 pub extern "C" fn double_fault_task_handler() -> ! {
-    naked_asm!(
+    unsafe { naked_asm!(
         // The error code is already on the stack, so we can just call the handler.
         "call double_fault_panic"
-    );
+    ); }
 }
 
 // This function is safe to call as it's on a new stack.
-#[no_mangle]
+#[unsafe(no_mangle)]
 extern "C" fn double_fault_panic(error_code: u32) -> ! {
     // Retrieve the state of the task that caused the double fault from the main TSS.
     // When the Task Gate triggers, the CPU saves the old state into the TSS pointed to

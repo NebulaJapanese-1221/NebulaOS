@@ -1,11 +1,14 @@
 //! Placeholder Networking Module for NebulaOS.
 
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium};
 use smoltcp::time::Instant;
-use smoltcp::iface::{Config, Interface, SocketSet, SocketHandle};
+use smoltcp::iface::{Config, Interface, SocketSet};
 use smoltcp::socket::{dhcpv4, tcp, dns};
-use smoltcp::wire::{EthernetAddress, IpCidr, IpAddress, Ipv4Address};
+use smoltcp::socket::Socket; // Import the Socket enum
+use smoltcp::wire::{EthernetAddress, IpCidr};
+use rustls::RootCertStore;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -37,6 +40,39 @@ pub struct EthernetHeader {
     pub dest: MacAddress,
     pub src: MacAddress,
     pub ethertype: u16,
+}
+
+/// I/O Shims to bridge memory slices with no_std environments.
+pub mod io {
+    pub struct SliceReader<'a> {
+        pub data: &'a [u8],
+        pub pos: usize,
+    }
+
+    impl<'a> SliceReader<'a> {
+        pub fn read(&mut self, buf: &mut [u8]) -> Result<usize, ()> {
+            let amt = core::cmp::min(buf.len(), self.data.len() - self.pos);
+            if amt == 0 { return Ok(0); }
+            buf[..amt].copy_from_slice(&self.data[self.pos..self.pos + amt]);
+            self.pos += amt;
+            Ok(amt)
+        }
+    }
+
+    pub struct SliceWriter<'a> {
+        pub data: &'a mut [u8],
+        pub pos: usize,
+    }
+
+    impl<'a> SliceWriter<'a> {
+        pub fn write(&mut self, buf: &[u8]) -> Result<usize, ()> {
+            let amt = core::cmp::min(buf.len(), self.data.len() - self.pos);
+            if amt == 0 { return Ok(0); }
+            self.data[self.pos..self.pos + amt].copy_from_slice(&buf[..amt]);
+            self.pos += amt;
+            Ok(amt)
+        }
+    }
 }
 
 /// Glue structure to interface RTL8139 hardware with smoltcp.
@@ -108,7 +144,7 @@ pub struct Rtl8139RxToken {
 }
 impl smoltcp::phy::RxToken for Rtl8139RxToken {
     fn consume<R, F>(self, f: F) -> R where F: FnOnce(&[u8]) -> R {
-        f(&self.data)
+        f(&self.data[..])
     }
 }
 
@@ -132,18 +168,29 @@ impl smoltcp::phy::TxToken for Rtl8139TxToken {
     }
 }
 
-// Storage for the actual socket objects. These need to be 'static.
-// We'll use a fixed-size array of Options to allow for dynamic initialization.
-const MAX_SOCKETS: usize = 4; 
-static mut SOCKET_STORAGE: [Option<Box<dyn smoltcp::socket::Socket + 'static>>; MAX_SOCKETS] = [None, None, None, None];
-
-pub static DNS_HANDLE: spin::Mutex<Option<SocketHandle>> = spin::Mutex::new(None);
-pub static HTTP_HANDLE: spin::Mutex<Option<SocketHandle>> = spin::Mutex::new(None);
+pub static DNS_HANDLE: spin::Mutex<Option<smoltcp::iface::SocketHandle>> = spin::Mutex::new(None);
+pub static HTTP_HANDLE: spin::Mutex<Option<smoltcp::iface::SocketHandle>> = spin::Mutex::new(None);
 
 // The SocketSet itself, which will hold references to the sockets in SOCKET_STORAGE.
 // This also needs to be wrapped in a Mutex and Option because it's initialized later.
 pub static SOCKET_SET: spin::Mutex<Option<SocketSet<'static>>> = spin::Mutex::new(None);
 pub static INTERFACE: spin::Mutex<Option<Interface>> = spin::Mutex::new(None);
+pub static ROOT_CERT_STORE: spin::Mutex<Option<RootCertStore>> = spin::Mutex::new(None);
+
+/// Initializes the Root Certificate store with trusted Certificate Authorities.
+pub fn init_ca_store() {
+    let store = RootCertStore::empty();
+    
+    // Example: Embedding a well-known Root CA (like ISRG Root X1 for Let's Encrypt)
+    // In a full implementation, you would bundle common Root CAs in DER format.
+    // let root_ca_der = include_bytes!("../certs/isrgrootx1.der");
+    // if let Ok(cert) = rustls_pki_types::CertificateDer::try_from(root_ca_der.as_slice()) {
+    //     store.add(cert).ok();
+    // }
+
+    *ROOT_CERT_STORE.lock() = Some(store);
+    crate::serial_println!("[NET] Root CA store initialized.");
+}
 
 pub fn init() {
     let mac = MAC_ADDRESS.lock();
@@ -153,28 +200,25 @@ pub fn init() {
     let config = Config::new(eth_addr.into());
     
     // --- Initialize Sockets and SocketSet ---
-    let mut sockets_refs: Vec<&'static mut dyn smoltcp::socket::Socket> = Vec::new();
+    let mut socket_set = SocketSet::new(Vec::new());
 
     // DHCP Socket
-    unsafe {
-        SOCKET_STORAGE[0] = Some(Box::new(dhcpv4::Socket::new()));
-        if let Some(ref mut s) = SOCKET_STORAGE[0] {
-            sockets_refs.push(s.as_mut());
-        }
-    }
+    // DHCP socket needs to be added to SOCKET_STORAGE and then to the SocketSet
+    let dhcp_socket = Socket::Dhcpv4(dhcpv4::Socket::new());
+    let _dhcp_handle = socket_set.add(dhcp_socket);
+    // Store the handle if needed, but for DHCP we often just iterate
+    // through sockets to find it.
 
-    // Create the SocketSet
-    let mut socket_set = SocketSet::new(sockets_refs);
 
     // Initialize DNS Socket
-    let dns_socket = dns::Socket::new(&[], alloc::vec![]);
+    let dns_socket = Socket::Dns(dns::Socket::new(&[], Vec::new()));
     let dns_handle = socket_set.add(dns_socket);
     *DNS_HANDLE.lock() = Some(dns_handle);
 
     // Initialize TCP Socket (for HTTP)
-    let tcp_rx_buffer = tcp::SocketBuffer::new(alloc::vec![0; 4096]);
-    let tcp_tx_buffer = tcp::SocketBuffer::new(alloc::vec![0; 4096]);
-    let tcp_socket = tcp::Socket::new(tcp_rx_buffer, tcp_tx_buffer);
+    let tcp_rx_buffer = tcp::SocketBuffer::new(Vec::new());
+    let tcp_tx_buffer = tcp::SocketBuffer::new(Vec::new());
+    let tcp_socket = Socket::Tcp(tcp::Socket::new(tcp_rx_buffer, tcp_tx_buffer));
     let tcp_handle = socket_set.add(tcp_socket);
     *HTTP_HANDLE.lock() = Some(tcp_handle);
 
@@ -183,6 +227,8 @@ pub fn init() {
     let mut iface = Interface::new(config, &mut device, Instant::from_millis(0));    
 
     *INTERFACE.lock() = Some(iface);
+    init_ca_store();
+
     crate::serial_println!("[NET] Networking module initialized.");
 }
 
@@ -190,7 +236,7 @@ pub fn poll(timestamp: Instant) {
     let mut interface_guard = INTERFACE.lock();
     let mut socket_set_guard = SOCKET_SET.lock();
     
-    if let (Some(ref mut interface), Some(ref mut sockets)) = (&mut *interface_guard, &mut *socket_set_guard) {
+    if let (Some(interface), Some(sockets)) = (&mut *interface_guard, &mut *socket_set_guard) {
         let mut device = Rtl8139Device; // Create a new instance for each poll
         
         // Poll the interface
@@ -199,36 +245,30 @@ pub fn poll(timestamp: Instant) {
         // Poll the DHCP socket
         // Iterate through sockets to find the DHCP one
         for (_handle, socket) in sockets.iter_mut() {
-            if let Some(dhcp_socket) = socket.as_dhcpv4() {
-                match dhcp_socket.poll(interface, &mut device, timestamp) {
-                    Ok(event) => {
+            if let Socket::Dhcpv4(dhcp_socket) = socket {
+                match dhcp_socket.poll() {
+                    Some(event) => {
                         match event {
                             dhcpv4::Event::Configured(config) => {
                                 crate::serial_println!("[NET] DHCP Configured: {:?}", config);
                                 interface.update_ip_addrs(|addrs| {
                                     addrs.clear();
-                                    addrs.push(config.address).unwrap();
+                                    addrs.push(smoltcp::wire::IpCidr::Ipv4(config.address)).unwrap();
                                 });
                                 if let Some(gateway) = config.router {
-                                    interface.update_routes(|routes| {
-                                        routes.add_default_ipv4_route(gateway).unwrap();
-                                    });
+                                    interface.routes_mut().add_default_ipv4_route(gateway).unwrap();
                                 }
                                 set_connection(ConnectionType::Ethernet, 100); // Assuming Ethernet for now
                             }
                             dhcpv4::Event::Deconfigured => {
                                 crate::serial_println!("[NET] DHCP Deconfigured.");
                                 interface.update_ip_addrs(|addrs| addrs.clear());
-                                interface.update_routes(|routes| routes.clear());
+                                interface.routes_mut().remove_default_ipv4_route();
                                 set_connection(ConnectionType::None, 0);
                             }
                         }
                     }
-                    Err(_e) => {
-                        // DHCP errors are common during initial negotiation,
-                        // so we might not want to spam the serial.
-                        // crate::serial_println!("[NET] DHCP Error: {:?}", _e);
-                    }
+                    None => {}
                 }
             }
         }

@@ -222,12 +222,14 @@ fn find_aml_object_bytecode(dsdt_data: &[u8], object_name: &[u8; 4]) -> Option<u
 
 
 unsafe fn get_s5_val(dsdt_ptr: *const SdtHeader) -> Option<u8> {
-    let dsdt_len = core::ptr::addr_of!((*dsdt_ptr).length).read_unaligned() as usize;
+    let dsdt_len = unsafe { core::ptr::addr_of!((*dsdt_ptr).length).read_unaligned() as usize };
     if dsdt_len < size_of::<SdtHeader>() {
         return None;
     }
-    let data_ptr = (dsdt_ptr as *const u8).add(size_of::<SdtHeader>());
-    let data = slice::from_raw_parts(data_ptr, dsdt_len - size_of::<SdtHeader>());
+    let (data_ptr, data) = unsafe {
+        let ptr = (dsdt_ptr as *const u8).add(size_of::<SdtHeader>());
+        (ptr, slice::from_raw_parts(ptr, dsdt_len - size_of::<SdtHeader>()))
+    };
 
     if let Some(s5_offset) = find_aml_object_bytecode(data, b"_S5_") {
         if data[s5_offset as usize + 4] == AML_BYTE_PREFIX { // Check for ByteConst
@@ -239,12 +241,12 @@ unsafe fn get_s5_val(dsdt_ptr: *const SdtHeader) -> Option<u8> {
 
 unsafe fn parse_madt(madt_ptr: *const SdtHeader) {
     // MADT Structure: Header (44 bytes) + Interrupt Controller Structures
-    let len = core::ptr::addr_of!((*madt_ptr).length).read_unaligned() as usize;
+    let len = unsafe { core::ptr::addr_of!((*madt_ptr).length).read_unaligned() as usize };
     if len < 44 { return; }
     
     // Skip the standard header (36 bytes) + Local APIC Address (4) + Flags (4) = 44 bytes
-    let mut current_ptr = (madt_ptr as *const u8).add(44);
-    let end_ptr = (madt_ptr as *const u8).add(len);
+    let mut current_ptr = unsafe { (madt_ptr as *const u8).add(44) };
+    let end_ptr = unsafe { (madt_ptr as *const u8).add(len) };
 
     let mut cores = 0;
 
@@ -254,7 +256,7 @@ unsafe fn parse_madt(madt_ptr: *const SdtHeader) {
 
         if entry_type == 0 { // Processor Local APIC
             // Offset 4 is the Flags field (u32). Bit 0 is 'Processor Enabled'.
-            let flags = (current_ptr.add(4) as *const u32).read_unaligned();
+            let flags = unsafe { (current_ptr.add(4) as *const u32).read_unaligned() };
             if (flags & 1) == 1 {
                 cores += 1;
             }

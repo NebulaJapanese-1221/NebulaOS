@@ -138,31 +138,33 @@ pub fn enable_interrupts() {
 
 // --- 8259 PIC Remapping ---
 
-unsafe fn init_pics() {
+unsafe fn init_pics() { // This function is already unsafe, but the extern calls within it need unsafe blocks
     // Save masks
-    let _m1 = io::inb(0x21);
-    let _m2 = io::inb(0xA1);
+    unsafe {
+        let _m1 = io::inb(0x21);
+        let _m2 = io::inb(0xA1);
 
-    // Start initialization sequence
-    io::outb(0x20, 0x11); io::wait();
-    io::outb(0xA0, 0x11); io::wait();
+        // Start initialization sequence
+        io::outb(0x20, 0x11); io::wait();
+        io::outb(0xA0, 0x11); io::wait();
 
-    // Define offsets (32 for Master, 40 for Slave)
-    io::outb(0x21, 0x20); io::wait();
-    io::outb(0xA1, 0x28); io::wait();
+        // Define offsets (32 for Master, 40 for Slave)
+        io::outb(0x21, 0x20); io::wait();
+        io::outb(0xA1, 0x28); io::wait();
 
-    // Tell Master about Slave at IRQ2
-    io::outb(0x21, 0x04); io::wait();
-    // Tell Slave its cascade identity
-    io::outb(0xA1, 0x02); io::wait();
+        // Tell Master about Slave at IRQ2
+        io::outb(0x21, 0x04); io::wait();
+        // Tell Slave its cascade identity
+        io::outb(0xA1, 0x02); io::wait();
 
-    // 8086 mode
-    io::outb(0x21, 0x01); io::wait();
-    io::outb(0xA1, 0x01); io::wait();
+        // 8086 mode
+        io::outb(0x21, 0x01); io::wait();
+        io::outb(0xA1, 0x01); io::wait();
 
-    // Restore masks (or set to 0 to enable all)
-    // Mask all interrupts except for the keyboard (IRQ 1) and the mouse (IRQ 12).
-    // The cascade from master to slave (IRQ 2) must also be unmasked.
-    io::outb(0x21, 0b11111000); // Master: Unmask IRQ0 (timer), IRQ1 (keyboard), and IRQ2 (cascade)
-    io::outb(0xA1, 0b11101111); // Slave: Unmask IRQ12 (mouse)
+        // Restore masks (or set to 0 to enable all)
+        // Mask all interrupts except for the keyboard (IRQ 1) and the mouse (IRQ 12).
+        // The cascade from master to slave (IRQ 2) must also be unmasked.
+        io::outb(0x21, 0b11111000); // Master: Unmask IRQ0 (timer), IRQ1 (keyboard), and IRQ2 (cascade)
+        io::outb(0xA1, 0b11101111); // Slave: Unmask IRQ12 (mouse)
+    }
 }

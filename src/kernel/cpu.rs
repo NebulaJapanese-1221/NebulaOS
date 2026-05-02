@@ -79,6 +79,30 @@ pub fn read_tsc() -> u64 {
     ((high as u64) << 32) | (low as u64)
 }
 
+/// Generates a high-entropy 64-bit random number using the hardware RDRAND instruction.
+/// This will loop until the hardware signals a successful generation via the Carry Flag.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+pub fn rdrand() -> u64 {
+    let mut val: u64;
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        asm!(
+            "2:",
+            "rdrand {0}",
+            "jnc 2b",
+            out(reg) val,
+        );
+    }
+    #[cfg(target_arch = "x86")]
+    unsafe {
+        let (mut low, mut high): (u32, u32);
+        asm!("2: rdrand {0}; jnc 2b", out(reg) low);
+        asm!("2: rdrand {0}; jnc 2b", out(reg) high);
+        val = ((high as u64) << 32) | (low as u64);
+    }
+    val
+}
+
 /// Returns how many milliseconds a single PIT tick represents.
 /// (1ms at 1000Hz, 10ms at 100Hz)
 pub fn get_tick_increment() -> usize {

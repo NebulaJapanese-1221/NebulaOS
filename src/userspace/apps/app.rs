@@ -16,6 +16,9 @@ pub trait App: Send {
     fn draw(&self, fb: &mut framebuffer::Framebuffer, win: &Window, dirty_rect: Rect);
     fn handle_event(&mut self, event: &AppEvent, win: &Window) -> Option<Rect>;
     fn box_clone(&self) -> Box<dyn App>;
+
+    /// Returns the current dynamic title of the application, if any.
+    fn get_title(&self) -> Option<alloc::string::String> { None }
 }
 
 impl Clone for Box<dyn App> {

@@ -46,31 +46,31 @@ impl pci::PciDriver for EthernetDriver {
             RTL8139_IO.store(port, Ordering::SeqCst);
             unsafe {
                 // Realtek RTL8139 Wake-up
-                crate::kernel::io::outb(port + REG_CONFIG1, 0x00);
+                crate::kernel::io::outb(port + REG_CONFIG1 as u16, 0x00); // Cast REG_CONFIG1 to u16
                 
                 // Soft Reset
-                crate::kernel::io::outb(port + REG_CMD, 0x10);
-                while (crate::kernel::io::inb(port + REG_CMD) & 0x10) != 0 {}
+                crate::kernel::io::outb(port + REG_CMD as u16, 0x10); // Cast REG_CMD to u16
+                while (crate::kernel::io::inb(port + REG_CMD as u16) & 0x10) != 0 {} // Cast REG_CMD to u16
 
                 // Read MAC address
                 let mut mac = [0u8; 6];
                 for i in 0..6 {
-                    mac[i] = crate::kernel::io::inb(port + REG_MAC + i as u8);
+                    mac[i] = crate::kernel::io::inb(port + REG_MAC as u16 + i as u16); // Cast REG_MAC and i to u16
                 }
                 *net::MAC_ADDRESS.lock() = net::MacAddress(mac);
 
                 // Setup Receive Buffer (8KB + 16 bytes + 1.5KB for wrapping safety)
                 let mut rx_buf = Vec::with_capacity(8192 + 16 + 1500);
                 rx_buf.resize(8192 + 16 + 1500, 0);
-                crate::kernel::io::outl(port + REG_RBSTART, rx_buf.as_ptr() as u32);
+                crate::kernel::io::outl(port + REG_RBSTART as u16, rx_buf.as_ptr() as u32); // Cast REG_RBSTART to u16
 
                 // Configure Receive: Accept Broadcast, Multicast, Physical Match, and wrap bit
                 // 0x0F: AB + AM + APM + AAP
                 // 0x80: Wrap bit (1 = wrap)
-                crate::kernel::io::outl(port + REG_RCR, 0x0F | 0x80);
+                crate::kernel::io::outl(port + REG_RCR as u16, 0x0F | 0x80); // Cast REG_RCR to u16
 
                 // Enable Transmitter and Receiver
-                crate::kernel::io::outb(port + REG_CMD, 0x0C);
+                crate::kernel::io::outb(port + REG_CMD as u16, 0x0C); // Cast REG_CMD to u16
                 *RX_BUFFER.lock() = Some(rx_buf);
             }
             crate::serial_println!("[ETHERNET] RTL8139 Ready. Hardware initialized.");
