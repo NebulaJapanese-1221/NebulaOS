@@ -2,7 +2,6 @@
 //! This module handles the translation of architecture-independent bytecode into native machine code.
 
 use alloc::vec::Vec;
-use core::fmt;
 
 /// Represents a virtual register in the JIT environment.
 /// These are mapped to physical registers during the native compilation phase.
@@ -24,6 +23,8 @@ pub enum Instruction {
     Add(VReg, VReg, VReg),
     /// Sub two registers: VReg(Dst) = VReg(Src1) - VReg(Src2)
     Sub(VReg, VReg, VReg),
+    /// Divide two registers: VReg(Dst) = VReg(Src1) / VReg(Src2) (unsigned)
+    Div(VReg, VReg, VReg),
     /// Multiply two registers: VReg(Dst) = VReg(Src1) * VReg(Src2)
     Mul(VReg, VReg, VReg),
     /// Bitwise AND: VReg(Dst) = VReg(Src1) & VReg(Src2)
@@ -80,6 +81,7 @@ impl JitFunction {
                 Instruction::LoadImm(_, _) => 10,
                 Instruction::Load(_, _) | Instruction::Store(_, _) => 3,
                 Instruction::Mov(dst, src) => if dst.0 == src.0 { 0 } else { 3 },
+                Instruction::Div(_, _, _) => 12, // Max size: MOV RAX, src1 (3) + XOR RDX, RDX (3) + DIV src2 (3) + MOV dst, RAX (3)
                 Instruction::Add(dst, src1, _) | Instruction::Sub(dst, src1, _) | 
                 Instruction::And(dst, src1, _) | Instruction::Or(dst, src1, _) | 
                 Instruction::Xor(dst, src1, _) => {
@@ -104,7 +106,25 @@ impl JitFunction {
             return match instr {
                 Instruction::Ret => 1,
                 Instruction::LoadImm(_, _) => 5,
-                _ => 2,
+                Instruction::Load(_, _) | Instruction::Store(_, _) => 2,
+                Instruction::Mov(dst, src) => if dst.0 == src.0 { 0 } else { 2 },
+                Instruction::Add(dst, src1, _) | Instruction::Sub(dst, src1, _) | 
+                Instruction::And(dst, src1, _) | Instruction::Or(dst, src1, _) | 
+                Instruction::Xor(dst, src1, _) => {
+                    let base = 2;
+                    if dst.0 != src1.0 { base + 2 } else { base }
+                }
+                Instruction::Mul(dst, src1, _) => {
+                    let base = 3;
+                    if dst.0 != src1.0 { base + 2 } else { base }
+                }
+                Instruction::Cmp(_, _) => 2,
+                Instruction::Jmp(_) => 5,
+                Instruction::JmpEq(_) | Instruction::JmpNe(_) | Instruction::JmpLt(_) |
+                Instruction::JmpGt(_) | Instruction::JmpGe(_) | Instruction::JmpLe(_) => 6,
+                Instruction::SysCall(_) => 7,
+                Instruction::Div(_, _, _) => 8, // Max size for x86: MOV EAX, src1 (2) + XOR EDX, EDX (2) + DIV src2 (2) + MOV dst, EAX (2)
+                Instruction::Shl(_, _, _) | Instruction::Shr(_, _, _) => 4, // MOV src, dst (2) + SHL/SHR (2)
             };
         }
         0
@@ -154,7 +174,7 @@ impl JitFunction {
                     #[cfg(target_arch = "x86")]
                     {
                         // MOV reg, imm32
-                        let p_reg = self.get_phys_reg(reg);
+                        let p_reg = self.get_phys_reg(*reg);
                         // Opcode 0xB8 + reg_index
                         self.native_code.push(0xB8 + p_reg);
                         let bytes = (*val as u32).to_le_bytes();
@@ -163,7 +183,7 @@ impl JitFunction {
                     #[cfg(target_arch = "x86_64")]
                     {
                         // MOVABS rax, imm64 (Standard 64-bit load)
-                        let p_reg = self.get_phys_reg(reg);
+                        let p_reg = self.get_phys_reg(*reg);
                         // REX.W + 0xB8 + reg_index
                         self.native_code.push(0x48);
                         self.native_code.push(0xB8 + p_reg);
@@ -287,6 +307,46 @@ impl JitFunction {
                         self.native_code.push(0xC0 | ((p_src2 & 7) << 3) | (p_dst & 7));
                     }
                 }
+                Instruction::Div(dst, src1, src2) => {
+                    #[cfg(target_arch = "x86_64")]
+                    {
+                        let p_dst = self.get_phys_reg(*dst);
+                        let p_src1 = self.get_phys_reg(*src1);
+                        let p_src2 = self.get_phys_reg(*src2);
+
+                        // 1. Move src1 (dividend) to RAX (physical register 0)
+                        // MOV RAX, p_src1
+                        if p_src1 != 0 { // If src1 is not already RAX
+                            let mut rex = 0x48; // REX.W
+                            if p_src1 > 7 { rex |= 0x04; } // REX.R bit (for src)
+                            self.native_code.push(rex);
+                            self.native_code.push(0x89); // MOV r/m64, r64
+                            self.native_code.push(0xC0 | ((p_src1 & 7) << 3) | (0 & 7)); // ModR/M: Mod=11 (reg), Reg=p_src1, R/M=RAX
+                        }
+
+                        // 2. Zero RDX (physical register 2) for unsigned 128-bit dividend RDX:RAX
+                        // XOR RDX, RDX (3 bytes: 0x48 0x31 0xD2)
+                        self.native_code.extend_from_slice(&[0x48, 0x31, 0xD2]);
+
+                        // 3. Perform DIV src2_phys_reg
+                        // DIV r/m64 -> REX.W + 0xF7 /6 + ModR/M
+                        let mut rex = 0x48; // REX.W
+                        if p_src2 > 7 { rex |= 0x01; } // REX.B bit (for r/m operand)
+                        self.native_code.push(rex);
+                        self.native_code.push(0xF7);
+                        self.native_code.push(0xF0 | (p_src2 & 7)); // ModR/M: Mod=11 (reg), Reg=6 (DIV), R/M=p_src2
+
+                        // 4. Move result (quotient from RAX) to dst
+                        // MOV p_dst, RAX
+                        if p_dst != 0 { // If dst is not already RAX
+                            let mut rex = 0x48; // REX.W
+                            if p_dst > 7 { rex |= 0x01; } // REX.B bit (for dst)
+                            self.native_code.push(rex);
+                            self.native_code.push(0x89); // MOV r/m64, r64
+                            self.native_code.push(0xC0 | ((0 & 7) << 3) | (p_dst & 7)); // ModR/M: Mod=11 (reg), Reg=RAX, R/M=p_dst
+                        }
+                    }
+                }
                 Instruction::And(dst, src1, src2) => {
                     #[cfg(target_arch = "x86_64")]
                     {
@@ -340,6 +400,41 @@ impl JitFunction {
 
                         if p_dst != p_src { self.native_code.extend_from_slice(&[0x48, 0x89, 0xC0 | ((p_src & 7) << 3) | (p_dst & 7)]); }
                         self.native_code.extend_from_slice(&[0x48, 0xD3, 0xE8 | (p_dst & 7)]); // SHR R/M64, CL
+                    }
+                }
+                Instruction::Div(dst, src1, src2) => {
+                    #[cfg(target_arch = "x86")]
+                    {
+                        let p_dst = self.get_phys_reg(*dst);
+                        let p_src1 = self.get_phys_reg(*src1);
+                        let p_src2 = self.get_phys_reg(*src2);
+
+                        // 1. Move src1 (dividend) to EAX (physical register 0)
+                        // MOV EAX, p_src1
+                        if p_src1 != 0 { // If src1 is not already EAX
+                            self.native_code.push(0x8B); // MOV r32, r/m32
+                            self.native_code.push(0xC0 | ((p_src1 & 7) << 3) | (0 & 7)); // ModR/M: Mod=11 (reg), Reg=p_src1, R/M=EAX
+                        }
+
+                        // 2. Zero EDX (physical register 2) for unsigned 64-bit dividend EDX:EAX
+                        // XOR EDX, EDX (2 bytes: 0x31 0xD2)
+                        self.native_code.extend_from_slice(&[0x31, 0xD2]);
+
+                        // 3. Perform DIV src2_phys_reg
+                        // DIV r/m32 -> 0xF7 /6 + ModR/M
+                        self.native_code.push(0xF7);
+                        self.native_code.push(0xF0 | (p_src2 & 7)); // ModR/M: Mod=11 (reg), Reg=6 (DIV), R/M=p_src2
+
+                        // 4. Move result (quotient from EAX) to dst
+                        // MOV p_dst, EAX
+                        if p_dst != 0 { // If dst is not already EAX
+                            self.native_code.push(0x89); // MOV r/m32, r32
+                            self.native_code.push(0xC0 | ((0 & 7) << 3) | (p_dst & 7)); // ModR/M: Mod=11 (reg), Reg=EAX, R/M=p_dst
+                        }
+                    }
+                    #[cfg(target_arch = "x86_64")]
+                    {
+                        // x86_64 implementation already provided
                     }
                 }
                 Instruction::Cmp(v1, v2) => {

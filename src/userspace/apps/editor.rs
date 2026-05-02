@@ -133,23 +133,23 @@ impl App for TextEditor {
         gui::draw_rect(fb, win.x, win.y + title_height as isize, win.width, toolbar_height, 0x00_25_25_26, Some(dirty_rect));
         
         // Clear Button
-        let mut btn_clear = Button::new(win.x + 5, win.y + title_height as isize + 5, 50, 24, "Clear");
+        let btn_clear = Button::new(win.x + 5, win.y + title_height as isize + 5, 50, 24, "Clear");
         btn_clear.draw(fb, 0, 0, Some(dirty_rect));
 
         // Save Button (Mockup)
-        let mut btn_save = Button::new(win.x + 60, win.y + title_height as isize + 5, 50, 24, "Save");
+        let btn_save = Button::new(win.x + 60, win.y + title_height as isize + 5, 50, 24, "Save");
         btn_save.draw(fb, 0, 0, Some(dirty_rect));
 
         // Undo Button
-        let mut btn_undo = Button::new(win.x + 115, win.y + title_height as isize + 5, 50, 24, "Undo");
+        let btn_undo = Button::new(win.x + 115, win.y + title_height as isize + 5, 50, 24, "Undo");
         btn_undo.draw(fb, 0, 0, Some(dirty_rect));
 
         // Redo Button
-        let mut btn_redo = Button::new(win.x + 170, win.y + title_height as isize + 5, 50, 24, "Redo");
+        let btn_redo = Button::new(win.x + 170, win.y + title_height as isize + 5, 50, 24, "Redo");
         btn_redo.draw(fb, 0, 0, Some(dirty_rect));
 
         // Format Button
-        let mut btn_format = Button::new(win.x + 225, win.y + title_height as isize + 5, 60, 24, "Format");
+        let btn_format = Button::new(win.x + 225, win.y + title_height as isize + 5, 60, 24, "Format");
         btn_format.draw(fb, 0, 0, Some(dirty_rect));
 
         // Editor Statistics

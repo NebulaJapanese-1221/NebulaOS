@@ -95,9 +95,6 @@ pub fn add_boot_status(status: &str, target_progress: usize) {
 }
 
 fn draw_progress_bar_internal(fb: &mut crate::drivers::framebuffer::Framebuffer, progress: usize, width: usize, height: usize) {
-    let info = if let Some(i) = fb.info.as_ref() { i } else { return };
-    let buffer = if let Some(b) = fb.draw_buffer.as_mut() { b } else { return };
-
     let bar_width = 300;
     let bar_height = 4;
     let x = (width / 2).saturating_sub(bar_width / 2);
@@ -105,6 +102,9 @@ fn draw_progress_bar_internal(fb: &mut crate::drivers::framebuffer::Framebuffer,
     
     // Draw subtle container border
     crate::userspace::gui::draw_rect(fb, x as isize - 2, y as isize - 2, bar_width + 4, bar_height + 4, 0x00_1A1A2A, None);
+
+    let info = if let Some(i) = fb.info.as_ref() { i } else { return };
+    let buffer = if let Some(b) = fb.draw_buffer.as_mut() { b } else { return };
 
     // Draw background track
     for py in y..(y + bar_height) {

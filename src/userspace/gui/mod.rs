@@ -171,7 +171,6 @@ pub enum WindowContent {
     MetadataOnly, // Used for snapshots to avoid expensive app state cloning
 }
 
-#[derive(Clone)]
 pub struct Window {
     pub id: usize,
     pub x: isize,
@@ -183,6 +182,7 @@ pub struct Window {
     pub content: WindowContent,
     pub minimized: bool,
     pub maximized: bool,
+    pub is_system: bool,
     pub restore_rect: Option<Rect>,
 }
 
@@ -210,6 +210,7 @@ impl Clone for Window {
             color: self.color,
             content: WindowContent::MetadataOnly, // Shallow clone by default for performance
             minimized: self.minimized, maximized: self.maximized,
+            is_system: self.is_system,
             restore_rect: self.restore_rect,
         }
     }
@@ -328,7 +329,7 @@ impl WindowManager {
         self.add_window(Window {
             id: 0, x, y, width, height, title, color: win_color,
             content: WindowContent::App(Box::new(content)),
-            minimized: false, maximized: false, restore_rect: None,
+            minimized: false, maximized: false, is_system: true, restore_rect: None,
         });
     }
 
@@ -784,7 +785,8 @@ impl WindowManager {
 
         // 2. Check Window buttons and resize borders
         let locale_lock = localisation::CURRENT_LOCALE.lock();
-        if let (Some(&top_win_id), Some(locale)) = (self.z_order.last(), locale_lock.as_ref()) {
+        let locale = locale_lock.as_ref();
+        if let (Some(&top_win_id), Some(l)) = (self.z_order.last(), locale) {
             if let Some(win) = self.windows.iter().find(|w| w.id == top_win_id) {
                 if !win.minimized {
                     let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
@@ -803,7 +805,7 @@ impl WindowManager {
 
         // Check top-most window first for hover effect, but only if not currently resizing
         if self.resize_win_id.is_none() {
-            if let Some(&top_win_id) = self.z_order.last() {
+            if let (Some(&top_win_id), Some(l)) = (self.z_order.last(), locale) {
                 if let Some(win) = self.windows.iter().find(|w| w.id == top_win_id) {
                     if !win.minimized && !win.maximized {
                         let in_x_body = self.input.mouse_x >= win.x && self.input.mouse_x < win.x + win.width as isize;
@@ -826,9 +828,9 @@ impl WindowManager {
                             let font_height = if LARGE_TEXT.load(Ordering::Relaxed) { 32 } else { 16 };
                             let title_height = font_height + 6;
                             if self.input.mouse_y >= win.y + title_height as isize {
-                                if win.title == locale.app_terminal() || win.title == locale.app_text_editor() {
+                                if win.title == l.app_terminal() || win.title == l.app_text_editor() {
                                     new_style = CursorStyle::IBeam;
-                                } else if win.title == locale.app_paint() {
+                                } else if win.title == l.app_paint() {
                                     let toolbar_height = 40;
                                     if self.input.mouse_y >= win.y + title_height as isize + toolbar_height {
                                         new_style = CursorStyle::Crosshair;
@@ -922,7 +924,7 @@ impl WindowManager {
                             color: 0x00_1E_1E_1E,
                             title: locale.ctx_properties(),
                             content: WindowContent::App(Box::new(term)),
-                            minimized: false, maximized: false, restore_rect: None,
+                            minimized: false, maximized: false, is_system: false, restore_rect: None,
                         });
                     }
                     self.context_menu_open = false;
@@ -944,6 +946,7 @@ impl WindowManager {
 
                 // First, find which window was clicked without holding a mutable borrow
                 for win in &self.windows {
+                    if win.is_system || matches!(win.content, WindowContent::MetadataOnly) { continue; }
                     let button = Button::new(x_offset, taskbar_y + 2, button_width, taskbar_height - 4, "");
                     if button.contains(self.input.mouse_x, self.input.mouse_y) {
                         clicked_win_id = Some(win.id);
@@ -1011,7 +1014,7 @@ impl WindowManager {
                             color: 0x00_40_20_40, // Dark Purple
                             title: locale.app_settings(),
                             content: WindowContent::App(Box::new(Settings::new())),
-                            minimized: false, maximized: false, restore_rect: None,
+                            minimized: false, maximized: false, is_system: false, restore_rect: None,
                         });
                     }
                         }
@@ -1021,7 +1024,7 @@ impl WindowManager {
                                 color: 0x00_2D_2D_30,
                                 title: "NebulaBrowser",
                                 content: WindowContent::App(Box::new(NebulaBrowser::new())),
-                                minimized: false, maximized: false, restore_rect: None,
+                                minimized: false, maximized: false, is_system: false, restore_rect: None,
                             });
                         }
                         MenuAction::TaskManager => {
@@ -1030,7 +1033,7 @@ impl WindowManager {
                         color: 0x00_00_40_40,
                         title: "Task Manager",
                         content: WindowContent::App(Box::new(TaskManager::new())),
-                        minimized: false, maximized: false, restore_rect: None,
+                        minimized: false, maximized: false, is_system: false, restore_rect: None,
                     });
                         }
                         MenuAction::Terminal => {
@@ -1039,7 +1042,7 @@ impl WindowManager {
                         color: 0x00_1E_1E_1E,
                         title: locale.app_terminal(),
                         content: WindowContent::App(Box::new(Terminal::new())),
-                        minimized: false, maximized: false, restore_rect: None,
+                        minimized: false, maximized: false, is_system: false, restore_rect: None,
                     });
                         }
                         MenuAction::Calculator => {
@@ -1048,7 +1051,7 @@ impl WindowManager {
                         color: 0x00_20_20_20,
                         title: locale.app_calculator(),
                         content: WindowContent::App(Box::new(Calculator::new())),
-                        minimized: false, maximized: false, restore_rect: None,
+                        minimized: false, maximized: false, is_system: false, restore_rect: None,
                     });
                         }
                         MenuAction::Paint => {
@@ -1057,7 +1060,7 @@ impl WindowManager {
                         color: 0x00_20_20_20,
                         title: locale.app_paint(),
                         content: WindowContent::App(Box::new(Paint::new())),
-                        minimized: false, maximized: false, restore_rect: None,
+                        minimized: false, maximized: false, is_system: false, restore_rect: None,
                     });
                         }
                         MenuAction::TextEditor => {
@@ -1066,7 +1069,7 @@ impl WindowManager {
                         color: 0x00_1E_1E_1E,
                         title: locale.app_text_editor(),
                         content: WindowContent::App(Box::new(TextEditor::new())),
-                        minimized: false, maximized: false, restore_rect: None,
+                        minimized: false, maximized: false, is_system: false, restore_rect: None,
                     });
                         }
                         MenuAction::Reboot => { crate::kernel::power::reboot(); }
@@ -1082,7 +1085,7 @@ impl WindowManager {
 
                 for &win_id in self.z_order.iter().rev() {
                     if let Some(win) = self.windows.iter().find(|w| w.id == win_id) {
-                        if win.minimized { continue; } // Skip minimized windows
+                        if win.minimized || matches!(win.content, WindowContent::MetadataOnly) { continue; } // Skip minimized and ghost windows
 
                         let in_x_body = self.input.mouse_x >= win.x && self.input.mouse_x < win.x + win.width as isize;
                         let in_y_body = self.input.mouse_y >= win.y && self.input.mouse_y < win.y + win.height as isize;
@@ -1362,16 +1365,56 @@ impl WindowManager {
 
         for dirty_rect in &final_rects {
             // 1. Desktop Wallpaper and Decorative Elements
-            self.draw_wallpaper(&mut local_fb, *dirty_rect, screen_width, screen_height);
-
-            // 2. Draw Windows
+            let mut wallpaper_covered = false;
+            
+            // Z-Order Optimization for Wallpaper: Check if any window completely covers this dirty rect.
             for &win_id in &self.z_order {
                 if let Some(win) = self.windows.iter().find(|w| w.id == win_id) {
-                    if win.minimized { continue; }
+                    if !win.minimized {
+                        let wr = win.rect();
+                        if wr.x <= dirty_rect.x && wr.y <= dirty_rect.y &&
+                           wr.x + wr.width as isize >= dirty_rect.x + dirty_rect.width as isize &&
+                           wr.y + wr.height as isize >= dirty_rect.y + dirty_rect.height as isize {
+                            wallpaper_covered = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if !wallpaper_covered {
+                self.draw_wallpaper(&mut local_fb, *dirty_rect, screen_width, screen_height);
+            }
+
+            // 2. Draw Windows
+            for (idx, &win_id) in self.z_order.iter().enumerate() {
+                if let Some(win) = self.windows.iter().find(|w| w.id == win_id) {
+                    if win.minimized || matches!(win.content, WindowContent::MetadataOnly) { continue; }
                     let win_rect = win.rect();
 
                     if dirty_rect.intersects(&win_rect) {
-                        self.draw_window(&mut local_fb, win, self.input.mouse_x, self.input.mouse_y, *dirty_rect);
+                        // Z-Order Optimization: Calculate the actual region of this window that needs drawing.
+                        let overlap = dirty_rect.intersection(&win_rect).unwrap();
+                        let mut is_covered = false;
+
+                        // Check if any window ABOVE this one in the Z-order completely covers the overlapping region.
+                        for &above_id in &self.z_order[idx + 1..] {
+                            if let Some(above_win) = self.windows.iter().find(|w| w.id == above_id) {
+                                if !above_win.minimized {
+                                    let ar = above_win.rect();
+                                    if ar.x <= overlap.x && ar.y <= overlap.y &&
+                                       ar.x + ar.width as isize >= overlap.x + overlap.width as isize &&
+                                       ar.y + ar.height as isize >= overlap.y + overlap.height as isize {
+                                        is_covered = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        if !is_covered {
+                            self.draw_window(&mut local_fb, win, self.input.mouse_x, self.input.mouse_y, *dirty_rect);
+                        }
                     }
                 }
             }
@@ -1556,6 +1599,7 @@ impl WindowManager {
             let mut x_offset = 10;
             let button_width = 100;
             for win in &self.windows {
+                if win.is_system || matches!(win.content, WindowContent::MetadataOnly) { continue; }
                 if x_offset + button_width as isize > width as isize - 10 { break; } // Prevent off-screen spill
                 
                 // Truncate title to fit
@@ -1716,16 +1760,20 @@ impl WindowManager {
             let padding = 10;
 
             // We iterate z_order backwards (Top to Bottom) to show most recent first
-            for (i, &win_id) in self.z_order.iter().rev().enumerate() {
-                if i >= 6 { break; } // Limit to 6 items for now
-                let win = self.windows.iter().find(|w| w.id == win_id).unwrap();
+            let mut displayed_count = 0;
+            for &win_id in self.z_order.iter().rev() {
+                let win = if let Some(w) = self.windows.iter().find(|w| w.id == win_id) { w } else { continue };
+                if win.is_system || matches!(win.content, WindowContent::MetadataOnly) { continue; }
+
+                if displayed_count >= 6 { break; } // Limit to 6 items
                 
-                let item_x = start_x + (i as isize * (icon_size + padding));
-                let color = if i == self.task_switcher_index { 0x00_50_50_90 } else { 0x00_40_40_40 };
+                let item_x = start_x + (displayed_count as isize * (icon_size + padding));
+                let color = if displayed_count == self.task_switcher_index { 0x00_50_50_90 } else { 0x00_40_40_40 };
                 
                 draw_rect(fb, item_x, start_y, icon_size as usize, icon_size as usize, color, Some(clip));
                 // Draw simple char as icon representation
                 font::draw_char(fb, item_x + 12, start_y + 12, win.title.chars().next().unwrap_or('?'), 0x00_FFFFFF, Some(clip));
+                displayed_count += 1;
             }
         }
     }

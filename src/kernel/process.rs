@@ -4,6 +4,32 @@ use crate::kernel::io;
 use crate::drivers::rtc;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+/// Represents the CPU state saved on the stack during a context switch.
+/// The layout must match the assembly entry/exit code exactly.
+#[cfg(target_arch = "x86")]
+#[repr(C, packed)]
+struct StackFrame {
+    // Pushed by pusha
+    edi: u32,
+    esi: u32,
+    ebp: u32,
+    unused_esp: u32,
+    ebx: u32,
+    edx: u32,
+    ecx: u32,
+    eax: u32,
+    // Pushed manually in timer_handler
+    gs: u32,
+    fs: u32,
+    es: u32,
+    ds: u32,
+    error_code: u32,
+    // Pushed by hardware on interrupt
+    eip: u32,
+    cs: u32,
+    eflags: u32,
+}
+
 pub struct Task {
     pub id: usize,
     pub kernel_stack: Vec<u8>,
@@ -40,40 +66,25 @@ impl Scheduler {
         
         // Calculate the top of the stack (high address)
         let stack_top = stack.as_ptr() as usize + stack_size;
-        let mut sp = stack_top;
 
+        #[cfg(target_arch = "x86")]
         unsafe {
-            // Helper to push a value onto the stack
-            let mut push = |val: usize| {
-                sp -= 4;
-                *(sp as *mut usize) = val;
-            };
+            // Position the struct at the top of the stack
+            let frame_ptr = (stack_top - core::mem::size_of::<StackFrame>()) as *mut StackFrame;
+            let frame = &mut *frame_ptr;
 
-            // Setup stack frame to match `timer_handler` expectations (iret context)
-            // 1. IRET Frame
-            push(0x202);      // EFLAGS (Interrupts Enabled)
-            push(0x08);       // CS (Kernel Code Segment)
-            push(entry_point);// EIP
-
-            // 2. Error Code / Dummy
-            push(0);
-
-            // 3. Segment Registers
-            push(0x10); // GS
-            push(0x10); // FS
-            push(0x10); // ES
-            push(0x10); // DS
-
-            // 4. General Purpose Registers (pusha)
-            // EDI, ESI, EBP, ESP, EBX, EDX, ECX, EAX
-            for _ in 0..8 { push(0); }
+            frame.eflags = 0x202; // Interrupts enabled
+            frame.cs = crate::kernel::gdt::KERNEL_CODE_SELECTOR as u32;
+            frame.eip = entry_point as u32;
+            frame.ds = crate::kernel::gdt::KERNEL_DATA_SELECTOR as u32;
+            frame.es = frame.ds; frame.fs = frame.ds; frame.gs = frame.ds;
+            
+            self.tasks.push(Task {
+                id,
+                kernel_stack: stack,
+                kernel_esp: frame_ptr as usize,
+            });
         }
-
-        self.tasks.push(Task {
-            id,
-            kernel_stack: stack,
-            kernel_esp: sp,
-        });
     }
 }
 
@@ -157,6 +168,7 @@ pub extern "C" fn schedule(current_esp: usize) -> usize {
 
 // Naked assembly handler for the Timer Interrupt (IRQ 0)
 // We use this instead of x86-interrupt ABI to manually control the stack switching.
+#[cfg(target_arch = "x86")]
 core::arch::global_asm!(
     ".global timer_handler",
     "timer_handler:",

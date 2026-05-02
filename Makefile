@@ -25,7 +25,10 @@ iso: build
 run: iso
 	qemu-system-i386 -cdrom nebula_os.iso -m 1024 -cpu max -accel kvm -accel tcg -serial stdio
 
+run-x64: iso
+	qemu-system-x86_64 -cdrom nebula_os.iso -m 1024 -cpu max -accel kvm -accel tcg -serial stdio
+
 clean:
 	cargo clean
 	rm -f nebula_os.iso
-.PHONY: all build iso run clean
+.PHONY: all build iso run run-x64 clean

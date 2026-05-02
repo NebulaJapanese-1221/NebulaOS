@@ -43,6 +43,7 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
 
     // Initialize Serial Port
     crate::drivers::serial::SERIAL1.lock().init(); 
+    crate::serial_println!("NebulaOS is starting up...");
 
     // Parse Multiboot command line for "safemode"
     unsafe {
@@ -86,7 +87,7 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
             let (width, height) = (fb_info.1, fb_info.2);
             let mut fb = FRAMEBUFFER.lock();
             fb.clear(0x00_050515); // Full clear only once on entry
-            boot::draw_boot_screen_content(&mut fb, "Starting NebulaOS...", 0);
+            boot::draw_boot_screen_content(&mut fb, "NebulaOS is starting up...", 0);
             
             // Immediately present the boot screen content without the slow fade-in animation
             fb.present_rect(width / 2 - 210, (height / 2).saturating_sub(15), 420, 150);
@@ -145,7 +146,7 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     cpu::init();
     boot::add_boot_status("System Discovery Complete", 95);
 
-    boot::add_boot_status("Launching Desktop Environment...", 100);
+    boot::add_boot_status("Starting Desktop Environment...", 100);
 
     // Fade out boot screen
     {
@@ -156,7 +157,7 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
         };
         // Skip the fade-out and present the final boot state before launching the GUI
         boot::BOOT_ANIM_RUNNING.store(false, Ordering::Relaxed); // Freeze the spinner
-        boot::draw_boot_screen_content(&mut fb, "Launching Desktop Environment...", 100);
+        boot::draw_boot_screen_content(&mut fb, "Starting Desktop Environment...", 100);
         fb.present_rect(width / 2 - 210, (height / 2).saturating_sub(15), 420, 150);
     }
     

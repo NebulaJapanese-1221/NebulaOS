@@ -29,12 +29,44 @@ impl GdtEntry {
     }
 }
 
+/// A 16-byte system descriptor used in x86_64 for TSS and LDT.
+/// This occupies two slots in the GDT.
+#[repr(C, packed)]
+pub struct GdtSystemEntry {
+    pub low: GdtEntry,
+    pub base_upper32: u32,
+    pub reserved: u32,
+}
+
+impl GdtSystemEntry {
+    pub const fn new(base: u64, limit: u32, access: u8, granularity: u8) -> Self {
+        Self {
+            low: GdtEntry::new(base as u32, limit, access, granularity),
+            base_upper32: (base >> 32) as u32,
+            reserved: 0,
+        }
+    }
+}
+
 #[repr(C, packed)]
 pub struct GdtPtr {
     pub limit: u16,
-    pub base: u32,
+    pub base: usize, // Scales to 32-bit or 64-bit automatically
 }
 
+#[cfg(target_arch = "x86_64")]
+#[repr(C, packed)]
+pub struct TaskStateSegment {
+    pub reserved0: u32,
+    pub rsp: [u64; 3],
+    pub reserved1: u64,
+    pub ist: [u64; 7],
+    pub reserved2: u64,
+    pub reserved3: u16,
+    pub iomap_base: u16,
+}
+
+#[cfg(target_arch = "x86")]
 #[repr(C, packed)]
 pub struct TaskStateSegment {
     pub prev_tss: u32,
@@ -66,6 +98,18 @@ pub struct TaskStateSegment {
     pub iomap_base: u16,
 }
 
+#[cfg(target_arch = "x86_64")]
+impl TaskStateSegment {
+    pub const fn new() -> Self {
+        Self {
+            reserved0: 0, rsp: [0; 3], reserved1: 0,
+            ist: [0; 7], reserved2: 0, reserved3: 0,
+            iomap_base: size_of::<TaskStateSegment>() as u16,
+        }
+    }
+}
+
+#[cfg(target_arch = "x86")]
 impl TaskStateSegment {
     pub const fn new() -> Self {
         Self {
@@ -137,7 +181,7 @@ pub fn init() {
 
         let gdt_ptr = GdtPtr {
             limit: (size_of::<[GdtEntry; 7]>() - 1) as u16,
-            base: core::ptr::addr_of!(GDT) as u32,
+            base: core::ptr::addr_of!(GDT) as usize,
         };
 
         asm!("lgdt [{}]", in(reg) &gdt_ptr, options(readonly, nostack, preserves_flags));

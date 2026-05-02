@@ -44,6 +44,27 @@ impl VirtualAddressSpace {
     }
 }
 
+/// Marks a range of memory as executable by clearing the NX bit (bit 63).
+pub unsafe fn make_executable(addr: usize, size: usize) {
+    // PAE in this kernel currently uses 2MB pages. 
+    // We align to 2MB boundaries to find the corresponding PDEs.
+    let start_page = addr & !((2 * 1024 * 1024) - 1);
+    let end_page = (addr + size + (2 * 1024 * 1024) - 1) & !((2 * 1024 * 1024) - 1);
+
+    for page in (start_page..end_page).step_by(2 * 1024 * 1024) {
+        if let Some(pte) = get_pte_mut(page) {
+            *pte &= !(1 << 63);
+            asm!("invlpg [{}]", in(reg) page, options(nostack, preserves_flags));
+        }
+    }
+}
+
+fn get_pte_mut(virt_addr: usize) -> Option<&'static mut u64> {
+    let pdpt_idx = (virt_addr >> 30) & 0x3;
+    let pd_idx = (virt_addr >> 21) & 0x1FF;
+    unsafe { Some(&mut PAGE_DIRECTORY[pdpt_idx].0[pd_idx]) }
+}
+
 /// Initializes PAE paging and sets up the kernel identity map.
 pub fn init(fb_info: Option<(usize, usize, usize, usize, u8)>) {
     let kernel_vas = VirtualAddressSpace::kernel();
