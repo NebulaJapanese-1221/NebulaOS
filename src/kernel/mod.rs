@@ -17,6 +17,8 @@ pub mod elf;
 pub mod boot;
 pub mod panic;
 pub mod jit;
+pub mod audio;
+pub mod pci;
 
 pub const VERSION: &str = "0.0.3";
 
@@ -141,6 +143,10 @@ pub extern "C" fn kernel_main(multiboot_info_ptr: usize) -> ! {
     } else {
         boot::add_boot_status("ACPI Bypassed", 80);
     }
+
+    // Discover and initialize hardware drivers via PCI
+    pci::init_drivers();
+    boot::add_boot_status("PCI Hardware Initialized", 85);
 
     // Initialize CPU Info detection (CPUID)
     cpu::init();

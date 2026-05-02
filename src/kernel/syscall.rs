@@ -49,6 +49,11 @@ pub extern "C" fn syscall_dispatcher(
                 0 // Fail
             }
         }
+        3 => {
+            // Syscall 3: Beep (ebx = frequency in Hz)
+            crate::kernel::audio::play_tone(ebx as u32);
+            0
+        }
         _ => {
             crate::serial_println!("Unknown Syscall: {}", eax);
             usize::MAX

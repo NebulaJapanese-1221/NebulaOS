@@ -267,6 +267,7 @@ pub struct WindowManager {
     drag_offset_y: isize,
     click_target_id: Option<usize>,
     start_menu_open: bool,
+    system_menu_open: bool,
     dirty_rects: Vec<Rect>,
     context_menu_open: bool,
     context_menu_x: isize,
@@ -296,6 +297,7 @@ impl WindowManager {
             drag_offset_y: 0,
             click_target_id: None,
             start_menu_open: false,
+            system_menu_open: false,
             dirty_rects: Vec::new(),
             context_menu_open: false,
             context_menu_x: 0,
@@ -591,6 +593,23 @@ impl WindowManager {
                     win.y = self.input.mouse_y - self.drag_offset_y;
                 }
             }
+            // Handle System Menu Slider Dragging
+            else if self.system_menu_open && self.input.lbutton {
+                let menu_width = 180;
+                let menu_x = screen_width - menu_width as isize - 10;
+                let menu_y = TOP_BAR_HEIGHT as isize;
+                let slider_y = menu_y + 125;
+                let menu_rect = Rect { x: menu_x, y: menu_y, width: menu_width, height: 145 };
+
+                // If mouse is within the slider area while button is held
+                if self.input.mouse_y >= slider_y - 5 && self.input.mouse_y <= slider_y + 20 &&
+                   self.input.mouse_x >= menu_x + 10 && self.input.mouse_x <= menu_x + 170 {
+                    
+                    let new_level = ((self.input.mouse_x - (menu_x + 10)).clamp(0, 160) * 100 / 160) as u8;
+                    crate::drivers::brightness::set_master_brightness(new_level);
+                    self.mark_dirty(menu_rect);
+                }
+            }
                 }
                 InputEvent::Scroll { delta } => {
                 if let Some(target_id) = self.click_target_id {
@@ -777,9 +796,10 @@ impl WindowManager {
         // 1. Check for interactive UI elements (Hand Cursor)
         let is_over_top_bar = self.input.mouse_y < TOP_BAR_HEIGHT as isize;
         let is_over_start_menu = self.start_menu_open && self.input.mouse_x < 210 && self.input.mouse_y >= TOP_BAR_HEIGHT as isize;
+        let is_over_system_menu = self.system_menu_open && self.input.mouse_x >= (screen_width - 190) && self.input.mouse_y >= TOP_BAR_HEIGHT as isize;
         let is_over_taskbar = self.input.mouse_y >= screen_height - 40;
 
-        if is_over_top_bar || is_over_start_menu || is_over_taskbar {
+        if is_over_top_bar || is_over_start_menu || is_over_system_menu || is_over_taskbar {
             new_style = CursorStyle::Hand;
         }
 
@@ -898,11 +918,59 @@ impl WindowManager {
                     return;
                 }
 
+                // System Menu Click (Top Right)
+                let menu_btn_x = screen_width - 10 - 26;
+                if self.input.mouse_x >= menu_btn_x && self.input.mouse_x < (menu_btn_x + 26) {
+                    self.system_menu_open = !self.system_menu_open;
+                    self.start_menu_open = false;
+                    self.mark_dirty(Rect { x: screen_width - 210, y: 0, width: 210, height: 160 });
+                    return;
+                }
+
                 // Clock Click: Refresh Desktop
                 let clock_x = width as isize - 160;
                 if self.input.mouse_x >= clock_x {
                     FULL_REDRAW_REQUESTED.store(true, Ordering::Relaxed);
                     return;
+                }
+            }
+
+            if self.system_menu_open {
+                let menu_width = 180;
+                let menu_x = screen_width - menu_width as isize - 10;
+                let menu_y = TOP_BAR_HEIGHT as isize;
+                let menu_rect = Rect { x: menu_x, y: menu_y, width: menu_width, height: 145 };
+                
+                if menu_rect.contains(self.input.mouse_x, self.input.mouse_y) {
+                    let btn_m = Button::new(menu_x + 65, menu_y + 38, 16, 16, "-");
+                    let btn_p = Button::new(menu_x + 130, menu_y + 38, 16, 16, "+");
+                    let btn_mute = Button::new(menu_x + 10, menu_y + 65, 160, 25, "");
+                    
+                    if btn_m.contains(self.input.mouse_x, self.input.mouse_y) {
+                        let cur = crate::kernel::audio::MASTER_VOLUME.load(Ordering::Relaxed);
+                        crate::kernel::audio::set_master_volume(cur.saturating_sub(5));
+                        self.mark_dirty(menu_rect);
+                    } else if btn_p.contains(self.input.mouse_x, self.input.mouse_y) {
+                        let cur = crate::kernel::audio::MASTER_VOLUME.load(Ordering::Relaxed);
+                        crate::kernel::audio::set_master_volume(cur.saturating_add(5));
+                        self.mark_dirty(menu_rect);
+                    } else if btn_mute.contains(self.input.mouse_x, self.input.mouse_y) {
+                        crate::kernel::audio::toggle_mute();
+                        self.mark_dirty(menu_rect);
+                    } else {
+                        // Check Brightness Slider Click
+                        let slider_y = menu_y + 125;
+                        if self.input.mouse_y >= slider_y && self.input.mouse_y <= slider_y + 14 && self.input.mouse_x >= menu_x + 10 && self.input.mouse_x <= menu_x + 170 {
+                            let new_level = ((self.input.mouse_x - (menu_x + 10)) * 100 / 160) as u8;
+                            crate::drivers::brightness::set_master_brightness(new_level);
+                            self.mark_dirty(menu_rect);
+                        }
+                    }
+                    return;
+                } else {
+                    self.system_menu_open = false;
+                    self.mark_dirty(menu_rect);
+                    // Fall through to check if user clicked the toggle button again
                 }
             }
 
@@ -1434,6 +1502,10 @@ impl WindowManager {
                 self.draw_start_menu_optimized(&mut local_fb, self.input.mouse_x, self.input.mouse_y, *dirty_rect, locale);
             }
 
+            if self.system_menu_open {
+                self.draw_system_menu_optimized(&mut local_fb, self.input.mouse_x, self.input.mouse_y, *dirty_rect);
+            }
+
             if self.context_menu_open {
                 self.draw_context_menu_optimized(&mut local_fb, self.input.mouse_x, self.input.mouse_y, *dirty_rect, locale);
             }
@@ -1644,6 +1716,14 @@ impl WindowManager {
         
         let mut cursor_x = width as isize - 10;
 
+        // System Menu Button (Top Right)
+        let menu_btn_w = 26;
+        cursor_x -= menu_btn_w;
+        let mut menu_btn = Button::new(cursor_x, 3, menu_btn_w as usize, TOP_BAR_HEIGHT - 6, "v");
+        if !high_contrast { menu_btn.bg_color = 0x00_44_44_44; }
+        menu_btn.draw(fb, self.input.mouse_x, self.input.mouse_y, Some(clip));
+        cursor_x -= 10;
+
         if battery_info.health > 0 {
             cursor_x -= 75; // Battery indicator width
             draw_battery_indicator(fb, cursor_x, 7, clip);
@@ -1800,6 +1880,59 @@ impl WindowManager {
             let bar_color = 0x00_FF_CC_00; // Orange/Yellow for brightness
             draw_rect(fb, x + 10, y + 35, 180 * brightness_level as usize / 100, 15, bar_color, Some(clip));
         }
+    }
+
+    fn draw_system_menu_optimized(&self, fb: &mut framebuffer::Framebuffer, mouse_x: isize, mouse_y: isize, mut clip: Rect) {
+        let width = if let Some(ref info) = fb.info { info.width } else { return };
+        let menu_width = 180;
+        let menu_height = 145;
+        let menu_x = width as isize - menu_width as isize - 10;
+        let menu_y = TOP_BAR_HEIGHT as isize;
+
+        let visible_area = Rect { x: menu_x, y: menu_y, width: menu_width, height: menu_height };
+        if let Some(c) = clip.intersection(&visible_area) {
+            clip = c;
+        } else { return; }
+
+        let high_contrast = HIGH_CONTRAST.load(Ordering::Relaxed);
+        let bg_color = if high_contrast { 0x00_00_00_00 } else { 0x00_1E_1E_1E };
+
+        draw_rect(fb, menu_x, menu_y, menu_width, menu_height, bg_color, Some(clip));
+        draw_rect(fb, menu_x, menu_y, menu_width, 1, 0x00_44_44_44, Some(clip)); // Top border
+
+        font::draw_string(fb, menu_x + 10, menu_y + 10, "System Settings", 0x00_AAAAAA, Some(clip));
+
+        // Volume Control UI
+        let vol = crate::kernel::audio::MASTER_VOLUME.load(Ordering::Relaxed);
+        let muted = crate::kernel::audio::IS_MUTED.load(Ordering::Relaxed);
+        font::draw_string(fb, menu_x + 10, menu_y + 40, if muted { "Muted:" } else { "Volume:" }, 0x00_FFFFFF, Some(clip));
+        
+        let vol_text = format!("{}%", vol);
+        font::draw_string(fb, menu_x + 85, menu_y + 40, &vol_text, 0x00_FFFFFF, Some(clip));
+
+        let btn_m = Button::new(menu_x + 65, menu_y + 38, 16, 16, "-");
+        let btn_p = Button::new(menu_x + 130, menu_y + 38, 16, 16, "+");
+        
+        btn_m.draw(fb, mouse_x, mouse_y, Some(clip));
+        btn_p.draw(fb, mouse_x, mouse_y, Some(clip));
+
+        let mut btn_mute = Button::new(menu_x + 10, menu_y + 65, 160, 25, if muted { "Unmute" } else { "Mute" });
+        if muted { btn_mute.bg_color = 0x00_60_20_20; } // Subtle red hue for muted state
+        btn_mute.draw(fb, mouse_x, mouse_y, Some(clip));
+
+        // Brightness Slider UI
+        let bright = crate::drivers::brightness::BRIGHTNESS_LEVEL.load(Ordering::Relaxed);
+        font::draw_string(fb, menu_x + 10, menu_y + 100, "Brightness:", 0x00_FFFFFF, Some(clip));
+        let bright_text = format!("{}%", bright);
+        font::draw_string(fb, menu_x + 120, menu_y + 100, &bright_text, 0x00_FFFFFF, Some(clip));
+
+        let slider_y = menu_y + 125;
+        let slider_w = 160;
+        // Track
+        draw_rect(fb, menu_x + 10, slider_y + 6, slider_w, 2, 0x00_44_44_44, Some(clip));
+        // Handle
+        let handle_x = menu_x + 10 + (bright as isize * slider_w as isize / 100);
+        draw_rect(fb, handle_x - 4, slider_y, 8, 14, 0x00_FF_CC_00, Some(clip));
     }
 }
 
