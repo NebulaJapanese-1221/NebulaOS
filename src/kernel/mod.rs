@@ -18,7 +18,7 @@ pub mod boot;
 pub mod panic;
 pub mod jit;
 
-pub const VERSION: &str = "0.0.3-dev3";
+pub const VERSION: &str = "0.0.3";
 
 pub static TOTAL_MEMORY: AtomicUsize = AtomicUsize::new(0);
 pub static CPU_CORES: AtomicUsize = AtomicUsize::new(1);
