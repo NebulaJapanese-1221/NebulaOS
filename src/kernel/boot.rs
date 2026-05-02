@@ -3,7 +3,6 @@ use crate::userspace::fonts::font;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use super::cpu;
 
-pub static BOOT_ANIM_FRAME: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_ANIM_RUNNING: AtomicBool = AtomicBool::new(true);
 pub static BOOT_PROGRESS_DISPLAY: AtomicUsize = AtomicUsize::new(0);
 
@@ -21,13 +20,13 @@ const SPINNER_COLORS: [u32; 12] = [
 ];
 
 pub(crate) fn draw_spinner(fb: &mut crate::drivers::framebuffer::Framebuffer, cx: isize, cy: isize) {
-    let frame = if BOOT_ANIM_RUNNING.load(Ordering::Relaxed) {
-        BOOT_ANIM_FRAME.fetch_add(1, Ordering::Relaxed)
+    let head = if BOOT_ANIM_RUNNING.load(Ordering::Relaxed) {
+        // Tie animation to system ticks (1 tick = 1ms).
+        // Divide by 60 to advance the spoke every 60ms (~1.4 rotations per second).
+        (crate::kernel::process::TICKS.load(Ordering::Relaxed) / 60) % 12
     } else {
-        BOOT_ANIM_FRAME.load(Ordering::Relaxed)
-    };
-
-    let head = (frame % 12) as usize;
+        0 // Freeze at frame 0 when animation is stopped
+    } as usize;
 
     for i in 0..12 {
         let color = SPINNER_COLORS[(i + 12 - head) % 12];
