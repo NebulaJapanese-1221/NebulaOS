@@ -200,10 +200,10 @@ impl App for TextEditor {
             let menu_y = win.y + title_height as isize + toolbar_height as isize;
             gui::draw_rect(fb, menu_x, menu_y, 85, 52, 0x00_1A_1A_1C, Some(dirty_rect));
             
-            let mut btn_indent = Button::new(menu_x + 5, menu_y + 5, 75, 20, "Indent");
+            let btn_indent = Button::new(menu_x + 5, menu_y + 5, 75, 20, "Indent");
             btn_indent.draw(fb, 0, 0, Some(dirty_rect));
             
-            let mut btn_wrap = Button::new(menu_x + 5, menu_y + 28, 75, 20, "Wrap");
+            let btn_wrap = Button::new(menu_x + 5, menu_y + 28, 75, 20, "Wrap");
             btn_wrap.draw(fb, 0, 0, Some(dirty_rect));
         }
     }

@@ -19,6 +19,7 @@ pub mod panic;
 pub mod jit;
 pub mod audio;
 pub mod pci;
+pub mod usb;
 
 pub const VERSION: &str = "0.0.3";
 

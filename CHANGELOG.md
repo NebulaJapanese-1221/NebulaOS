@@ -7,6 +7,7 @@ All notable changes to NebulaOS will be documented in this file. The format is b
 - Added basic audio support via AC97
 - Added PCI support
 - Added various UI improvements
+- Added USB support
 
 ## [0.0.3-dev3] - 2026-05-01
 ### Changed

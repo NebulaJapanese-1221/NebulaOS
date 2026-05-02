@@ -127,6 +127,7 @@ impl JitFunction {
                 Instruction::Shl(_, _, _) | Instruction::Shr(_, _, _) => 4, // MOV src, dst (2) + SHL/SHR (2)
             };
         }
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
         0
     }
 
@@ -191,12 +192,12 @@ impl JitFunction {
                         self.native_code.extend_from_slice(&bytes);
                     }
                 }
-                Instruction::Load(dst, addr) => {
+                Instruction::Load(_dst, _addr) => {
                     #[cfg(target_arch = "x86_64")]
                     {
                         // MOV r64, [r64] -> REX.W + 0x8B + ModR/M
-                        let p_dst = self.get_phys_reg(*dst);
-                        let p_addr = self.get_phys_reg(*addr);
+                        let p_dst = self.get_phys_reg(*_dst);
+                        let p_addr = self.get_phys_reg(*_addr);
                         let mut rex = 0x48;
                         if p_dst > 7 { rex |= 0x04; } // REX.R (dst)
                         if p_addr > 7 { rex |= 0x01; } // REX.B (base addr)
@@ -205,12 +206,12 @@ impl JitFunction {
                         self.native_code.push(((p_dst & 7) << 3) | (p_addr & 7));
                     }
                 }
-                Instruction::Store(addr, src) => {
+                Instruction::Store(_addr, _src) => {
                     #[cfg(target_arch = "x86_64")]
                     {
                         // MOV [r64], r64 -> REX.W + 0x89 + ModR/M
-                        let p_src = self.get_phys_reg(*src);
-                        let p_addr = self.get_phys_reg(*addr);
+                        let p_src = self.get_phys_reg(*_src);
+                        let p_addr = self.get_phys_reg(*_addr);
                         let mut rex = 0x48;
                         if p_src > 7 { rex |= 0x04; } 
                         if p_addr > 7 { rex |= 0x01; } // REX.B (base addr)
@@ -219,11 +220,11 @@ impl JitFunction {
                         self.native_code.push(((p_src & 7) << 3) | (p_addr & 7));
                     }
                 }
-                Instruction::Mov(dst, src) => {
+                Instruction::Mov(_dst, _src) => {
                     #[cfg(target_arch = "x86_64")]
                     {
-                        let p_dst = self.get_phys_reg(*dst);
-                        let p_src = self.get_phys_reg(*src);
+                        let p_dst = self.get_phys_reg(*_dst);
+                        let p_src = self.get_phys_reg(*_src);
                         if p_dst != p_src {
                             // MOV r/m64, r64 -> REX.W + 0x89 + ModR/M
                             let mut rex = 0x48; // REX.W
@@ -235,12 +236,12 @@ impl JitFunction {
                         }
                     }
                 }
-                Instruction::Add(dst, src1, src2) => {
+                Instruction::Add(_dst, _src1, _src2) => {
                     #[cfg(target_arch = "x86_64")]
                     {
-                        let p_dst = self.get_phys_reg(*dst);
-                        let p_src1 = self.get_phys_reg(*src1);
-                        let p_src2 = self.get_phys_reg(*src2);
+                        let p_dst = self.get_phys_reg(*_dst);
+                        let p_src1 = self.get_phys_reg(*_src1);
+                        let p_src2 = self.get_phys_reg(*_src2);
 
                         // 1. Ensure dst contains src1: MOV dst, src1
                         if p_dst != p_src1 {
@@ -260,12 +261,12 @@ impl JitFunction {
                         self.native_code.push(0xC0 | ((p_src2 & 7) << 3) | (p_dst & 7));
                     }
                 }
-                Instruction::Sub(dst, src1, src2) => {
+                Instruction::Sub(_dst, _src1, _src2) => {
                     #[cfg(target_arch = "x86_64")]
                     {
-                        let p_dst = self.get_phys_reg(*dst);
-                        let p_src1 = self.get_phys_reg(*src1);
-                        let p_src2 = self.get_phys_reg(*src2);
+                        let p_dst = self.get_phys_reg(*_dst);
+                        let p_src1 = self.get_phys_reg(*_src1);
+                        let p_src2 = self.get_phys_reg(*_src2);
 
                         // 1. Ensure dst contains src1: MOV dst, src1
                         if p_dst != p_src1 {
@@ -285,12 +286,12 @@ impl JitFunction {
                         self.native_code.push(0xC0 | ((p_src2 & 7) << 3) | (p_dst & 7));
                     }
                 }
-                Instruction::Mul(dst, src1, src2) => {
+                Instruction::Mul(_dst, _src1, _src2) => {
                     #[cfg(target_arch = "x86_64")]
                     {
-                        let p_dst = self.get_phys_reg(*dst);
-                        let p_src1 = self.get_phys_reg(*src1);
-                        let p_src2 = self.get_phys_reg(*src2);
+                        let p_dst = self.get_phys_reg(*_dst);
+                        let p_src1 = self.get_phys_reg(*_src1);
+                        let p_src2 = self.get_phys_reg(*_src2);
 
                         if p_dst != p_src1 {
                             let mut rex = 0x48;
@@ -307,12 +308,12 @@ impl JitFunction {
                         self.native_code.push(0xC0 | ((p_src2 & 7) << 3) | (p_dst & 7));
                     }
                 }
-                Instruction::Div(dst, src1, src2) => {
+                Instruction::Div(_dst, _src1, _src2) => {
                     #[cfg(target_arch = "x86_64")]
                     {
-                        let p_dst = self.get_phys_reg(*dst);
-                        let p_src1 = self.get_phys_reg(*src1);
-                        let p_src2 = self.get_phys_reg(*src2);
+                        let p_dst = self.get_phys_reg(*_dst);
+                        let p_src1 = self.get_phys_reg(*_src1);
+                        let p_src2 = self.get_phys_reg(*_src2);
 
                         // 1. Move src1 (dividend) to RAX (physical register 0)
                         // MOV RAX, p_src1
@@ -346,95 +347,82 @@ impl JitFunction {
                             self.native_code.push(0xC0 | ((0 & 7) << 3) | (p_dst & 7)); // ModR/M: Mod=11 (reg), Reg=RAX, R/M=p_dst
                         }
                     }
+                    #[cfg(target_arch = "x86")]
+                    {
+                        let p_dst = self.get_phys_reg(*_dst);
+                        let p_src1 = self.get_phys_reg(*_src1);
+                        let p_src2 = self.get_phys_reg(*_src2);
+
+                        // 1. Move src1 (dividend) to EAX (physical register 0)
+                        if p_src1 != 0 {
+                            self.native_code.push(0x8B); 
+                            self.native_code.push(0xC0 | ((p_src1 & 7) << 3) | 0);
+                        }
+                        // 2. Zero EDX
+                        self.native_code.extend_from_slice(&[0x31, 0xD2]);
+                        // 3. Perform DIV
+                        self.native_code.push(0xF7);
+                        self.native_code.push(0xF0 | (p_src2 & 7));
+                        // 4. Move result to dst
+                        if p_dst != 0 {
+                            self.native_code.push(0x89);
+                            self.native_code.push(0xC0 | (0 << 3) | (p_dst & 7));
+                        }
+                    }
                 }
-                Instruction::And(dst, src1, src2) => {
+                Instruction::And(_dst, _src1, _src2) => {
                     #[cfg(target_arch = "x86_64")]
                     {
-                        let p_dst = self.get_phys_reg(*dst);
-                        let p_src1 = self.get_phys_reg(*src1);
-                        let p_src2 = self.get_phys_reg(*src2);
+                        let p_dst = self.get_phys_reg(*_dst);
+                        let p_src1 = self.get_phys_reg(*_src1);
+                        let p_src2 = self.get_phys_reg(*_src2);
 
                         if p_dst != p_src1 { self.native_code.extend_from_slice(&[0x48, 0x89, 0xC0 | ((p_src1 & 7) << 3) | (p_dst & 7)]); }
                         self.native_code.extend_from_slice(&[0x48, 0x21, 0xC0 | ((p_src2 & 7) << 3) | (p_dst & 7)]);
                     }
                 }
-                Instruction::Or(dst, src1, src2) => {
+                Instruction::Or(_dst, _src1, _src2) => {
                     #[cfg(target_arch = "x86_64")]
                     {
-                        let p_dst = self.get_phys_reg(*dst);
-                        let p_src1 = self.get_phys_reg(*src1);
-                        let p_src2 = self.get_phys_reg(*src2);
+                        let p_dst = self.get_phys_reg(*_dst);
+                        let p_src1 = self.get_phys_reg(*_src1);
+                        let p_src2 = self.get_phys_reg(*_src2);
 
                         if p_dst != p_src1 { self.native_code.extend_from_slice(&[0x48, 0x89, 0xC0 | ((p_src1 & 7) << 3) | (p_dst & 7)]); }
                         self.native_code.extend_from_slice(&[0x48, 0x09, 0xC0 | ((p_src2 & 7) << 3) | (p_dst & 7)]);
                     }
                 }
-                Instruction::Xor(dst, src1, src2) => {
+                Instruction::Xor(_dst, _src1, _src2) => {
                     #[cfg(target_arch = "x86_64")]
                     {
-                        let p_dst = self.get_phys_reg(*dst);
-                        let p_src1 = self.get_phys_reg(*src1);
-                        let p_src2 = self.get_phys_reg(*src2);
+                        let p_dst = self.get_phys_reg(*_dst);
+                        let p_src1 = self.get_phys_reg(*_src1);
+                        let p_src2 = self.get_phys_reg(*_src2);
 
                         if p_dst != p_src1 { self.native_code.extend_from_slice(&[0x48, 0x89, 0xC0 | ((p_src1 & 7) << 3) | (p_dst & 7)]); }
                         self.native_code.extend_from_slice(&[0x48, 0x31, 0xC0 | ((p_src2 & 7) << 3) | (p_dst & 7)]);
                     }
                 }
-                Instruction::Shl(dst, src, count) => {
+                Instruction::Shl(_dst, _src, _count) => {
                     #[cfg(target_arch = "x86_64")]
                     {
-                        let p_dst = self.get_phys_reg(*dst);
-                        let p_src = self.get_phys_reg(*src);
-                        let p_count = self.get_phys_reg(*count); // Expecting this to be CL (RCX & 7 == 1)
+                        let p_dst = self.get_phys_reg(*_dst);
+                        let p_src = self.get_phys_reg(*_src);
+                        let _p_count = self.get_phys_reg(*_count); 
 
                         if p_dst != p_src { self.native_code.extend_from_slice(&[0x48, 0x89, 0xC0 | ((p_src & 7) << 3) | (p_dst & 7)]); }
                         self.native_code.extend_from_slice(&[0x48, 0xD3, 0xE0 | (p_dst & 7)]); // SHL R/M64, CL
                     }
                 }
-                Instruction::Shr(dst, src, count) => {
+                Instruction::Shr(_dst, _src, _count) => {
                     #[cfg(target_arch = "x86_64")]
                     {
-                        let p_dst = self.get_phys_reg(*dst);
-                        let p_src = self.get_phys_reg(*src);
-                        let p_count = self.get_phys_reg(*count); // Expecting this to be CL (RCX & 7 == 1)
+                        let p_dst = self.get_phys_reg(*_dst);
+                        let p_src = self.get_phys_reg(*_src);
+                        let _p_count = self.get_phys_reg(*_count);
 
                         if p_dst != p_src { self.native_code.extend_from_slice(&[0x48, 0x89, 0xC0 | ((p_src & 7) << 3) | (p_dst & 7)]); }
                         self.native_code.extend_from_slice(&[0x48, 0xD3, 0xE8 | (p_dst & 7)]); // SHR R/M64, CL
-                    }
-                }
-                Instruction::Div(dst, src1, src2) => {
-                    #[cfg(target_arch = "x86")]
-                    {
-                        let p_dst = self.get_phys_reg(*dst);
-                        let p_src1 = self.get_phys_reg(*src1);
-                        let p_src2 = self.get_phys_reg(*src2);
-
-                        // 1. Move src1 (dividend) to EAX (physical register 0)
-                        // MOV EAX, p_src1
-                        if p_src1 != 0 { // If src1 is not already EAX
-                            self.native_code.push(0x8B); // MOV r32, r/m32
-                            self.native_code.push(0xC0 | ((p_src1 & 7) << 3) | (0 & 7)); // ModR/M: Mod=11 (reg), Reg=p_src1, R/M=EAX
-                        }
-
-                        // 2. Zero EDX (physical register 2) for unsigned 64-bit dividend EDX:EAX
-                        // XOR EDX, EDX (2 bytes: 0x31 0xD2)
-                        self.native_code.extend_from_slice(&[0x31, 0xD2]);
-
-                        // 3. Perform DIV src2_phys_reg
-                        // DIV r/m32 -> 0xF7 /6 + ModR/M
-                        self.native_code.push(0xF7);
-                        self.native_code.push(0xF0 | (p_src2 & 7)); // ModR/M: Mod=11 (reg), Reg=6 (DIV), R/M=p_src2
-
-                        // 4. Move result (quotient from EAX) to dst
-                        // MOV p_dst, EAX
-                        if p_dst != 0 { // If dst is not already EAX
-                            self.native_code.push(0x89); // MOV r/m32, r32
-                            self.native_code.push(0xC0 | ((0 & 7) << 3) | (p_dst & 7)); // ModR/M: Mod=11 (reg), Reg=EAX, R/M=p_dst
-                        }
-                    }
-                    #[cfg(target_arch = "x86_64")]
-                    {
-                        // x86_64 implementation already provided
                     }
                 }
                 Instruction::Cmp(v1, v2) => {

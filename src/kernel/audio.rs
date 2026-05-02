@@ -2,7 +2,6 @@
 
 use crate::kernel::{io, pci};
 use core::sync::atomic::{AtomicU16, AtomicBool, Ordering};
-use alloc::vec::Vec;
 
 /// Standard I/O ports for AC97 in QEMU/Bochs (usually assigned via PCI BARs)
 static NAM_BASE: AtomicU16 = AtomicU16::new(0x2000);  // Native Audio Mixer
@@ -171,7 +170,6 @@ pub fn stop_tone() {
 
 /// Helper to output a long to I/O port
 mod io_ext {
-    use super::io;
     pub unsafe fn outl(port: u16, val: u32) {
         core::arch::asm!("out dx, eax", in("dx") port, in("eax") val);
     }
@@ -181,5 +179,3 @@ mod io_ext {
         val
     }
 }
-
-use io_ext::*;

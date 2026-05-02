@@ -5,7 +5,7 @@ use crate::drivers::rtc::{self, CURRENT_DATETIME, TIME_NEEDS_UPDATE};
 use alloc::vec::Vec;
 use alloc::string::ToString;
 use alloc::{format, vec};
-use crate::userspace::apps::{app::{App, AppEvent}, calculator::Calculator, editor::TextEditor, paint::Paint, settings::Settings, terminal::Terminal, task_manager::TaskManager, nebula_browser::NebulaBrowser};
+use crate::userspace::apps::{app::{App, AppEvent}, calculator::Calculator, editor::TextEditor, paint::Paint, settings::Settings, terminal::Terminal, task_manager::TaskManager, nebula_browser::NebulaBrowser, file_manager::FileManager};
 use spin::Mutex;
 use alloc::boxed::Box;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -233,6 +233,7 @@ enum MenuAction {
     Terminal,
     TaskManager,
     Browser,
+    FileManager,
     Reboot,
     Shutdown,
 }
@@ -374,6 +375,7 @@ impl WindowManager {
             MenuEntry { label: l.app_terminal().into(), y: 175, color: 0x00_C0_C0_C0, action: MenuAction::Terminal },
             MenuEntry { label: alloc::string::String::from("Task Manager"), y: 215, color: 0x00_C0_C0_C0, action: MenuAction::TaskManager },
             MenuEntry { label: alloc::string::String::from("NebulaBrowser"), y: 255, color: 0x00_C0_C0_C0, action: MenuAction::Browser },
+            MenuEntry { label: alloc::string::String::from("File Manager"), y: 295, color: 0x00_C0_C0_C0, action: MenuAction::FileManager },
             MenuEntry { label: l.btn_reboot().into(), y: menu_height - 85, color: 0x00_FF_A0_40, action: MenuAction::Reboot },
             MenuEntry { label: l.btn_shutdown().into(), y: menu_height - 45, color: 0x00_FF_60_60, action: MenuAction::Shutdown },
         ]
@@ -790,7 +792,7 @@ impl WindowManager {
         }
     }
 
-    fn update_cursor_style(&mut self, _screen_width: isize, screen_height: isize) {
+    fn update_cursor_style(&mut self, screen_width: isize, screen_height: isize) {
         let mut new_style = CursorStyle::Arrow;
 
         // 1. Check for interactive UI elements (Hand Cursor)
@@ -1103,6 +1105,15 @@ impl WindowManager {
                         content: WindowContent::App(Box::new(TaskManager::new())),
                         minimized: false, maximized: false, is_system: false, restore_rect: None,
                     });
+                        }
+                        MenuAction::FileManager => {
+                            self.add_window(Window {
+                                id: 0, x: 120, y: 120, width: 450, height: 350,
+                                color: 0x00_25_25_26,
+                                title: "File Manager",
+                                content: WindowContent::App(Box::new(FileManager::new())),
+                                minimized: false, maximized: false, is_system: false, restore_rect: None,
+                            });
                         }
                         MenuAction::Terminal => {
                     self.add_window(Window {

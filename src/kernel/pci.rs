@@ -1,6 +1,5 @@
 //! PCI Bus Scanning and Configuration for NebulaOS.
 
-use crate::kernel::io;
 use alloc::vec::Vec;
 use spin::Mutex;
 
@@ -14,6 +13,8 @@ pub struct PciDevice {
     pub function: u8,
     pub vendor_id: u16,
     pub device_id: u16,
+    pub class: u8,
+    pub subclass: u8,
 }
 
 impl PciDevice {
@@ -31,11 +32,13 @@ impl PciDevice {
 }
 
 /// Interface for all PCI hardware drivers.
-pub trait PciDriver {
+pub trait PciDriver: Send + Sync {
     /// The human-readable name of the driver.
     fn name(&self) -> &'static str;
     /// List of (Vendor ID, Device ID) pairs this driver supports.
     fn device_ids(&self) -> &[(u16, u16)];
+    /// Optional list of (Class, Subclass) pairs this driver supports.
+    fn class_codes(&self) -> &[(u8, u8)] { &[] }
     /// Initialization logic called when a matching device is found.
     fn initialize(&self, device: &PciDevice);
     /// Cleanup logic called when a device is removed from the bus.
@@ -76,6 +79,7 @@ pub fn rescan_bus() {
     // Central registry of all compiled-in PCI drivers.
     let drivers: &[&dyn PciDriver] = &[
         &crate::kernel::audio::AC97_DRIVER,
+        &crate::kernel::usb::USB_DRIVER,
     ];
 
     let mut attached = ATTACHED_DEVICES.lock();
@@ -90,13 +94,20 @@ pub fn rescan_bus() {
             if vendor == 0xFFFF { continue; }
 
             for func in 0..8 {
-                let val = unsafe { pci_config_read_u32(bus as u8, dev as u8, func as u8, 0) };
-                let v = (val & 0xFFFF) as u16;
-                let d = (val >> 16) as u16;
+                let id_reg = unsafe { pci_config_read_u32(bus as u8, dev as u8, func as u8, 0) };
+                let v = (id_reg & 0xFFFF) as u16;
+                let d = (id_reg >> 16) as u16;
 
                 if v == 0xFFFF { continue; }
 
-                let pci_dev = PciDevice { bus: bus as u8, device: dev as u8, function: func as u8, vendor_id: v, device_id: d };
+                let class_reg = unsafe { pci_config_read_u32(bus as u8, dev as u8, func as u8, 0x08) };
+                let class = (class_reg >> 24) as u8;
+                let subclass = (class_reg >> 16) as u8;
+
+                let pci_dev = PciDevice { 
+                    bus: bus as u8, device: dev as u8, function: func as u8, 
+                    vendor_id: v, device_id: d, class, subclass 
+                };
                 found_this_scan.push((bus as u8, dev as u8, func as u8));
 
                 // Only initialize if not already tracked
@@ -106,6 +117,15 @@ pub fn rescan_bus() {
                         for (drv_v, drv_d) in driver.device_ids() {
                             if *drv_v == v && *drv_d == d {
                                 crate::serial_println!("[PCI] Discovery: Attaching {} to {}:{}:{}", driver.name(), bus, dev, func);
+                                driver.initialize(&pci_dev);
+                                attached.push(AttachedDevice { device: pci_dev, driver: *driver });
+                            }
+                        }
+
+                        // Match by Class/Subclass (Generic Drivers)
+                        for (c, s) in driver.class_codes() {
+                            if *c == class && *s == subclass {
+                                crate::serial_println!("[PCI] Discovery: Attaching {} (Generic) to {}:{}:{}", driver.name(), bus, dev, func);
                                 driver.initialize(&pci_dev);
                                 attached.push(AttachedDevice { device: pci_dev, driver: *driver });
                             }
@@ -150,12 +170,15 @@ pub fn find_device(vendor_id: u16, device_id: u16) -> Option<PciDevice> {
                 let d = (val >> 16) as u16;
 
                 if v == vendor_id && d == device_id {
+                    let class_reg = unsafe { pci_config_read_u32(bus as u8, dev as u8, func as u8, 0x08) };
                     return Some(PciDevice {
                         bus: bus as u8,
                         device: dev as u8,
                         function: func as u8,
                         vendor_id: v,
                         device_id: d,
+                        class: (class_reg >> 24) as u8,
+                        subclass: (class_reg >> 16) as u8,
                     });
                 }
                 
