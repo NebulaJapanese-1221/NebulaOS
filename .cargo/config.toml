@@ -1,0 +1,8 @@
+[build]
+# Default to our custom x86 target
+target = "i686-nebula.json"
+
+[unstable]
+# Automatically build core and alloc for the target, avoiding host std conflicts
+build-std = ["core", "alloc"]
+build-std-features = ["compiler-builtins-mem"]

@@ -1,0 +1,23 @@
+[package]
+name = "nebula_os"
+version = "0.0.1-dev"
+edition = "2021"
+
+[[bin]]
+name = "bootloader"
+path = "src/boot/main.rs"
+test = false
+
+[[bin]]
+name = "kernel"
+path = "src/kernel/main.rs"
+test = false
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
+[dependencies]
+# Basic core library is used automatically in no_std
