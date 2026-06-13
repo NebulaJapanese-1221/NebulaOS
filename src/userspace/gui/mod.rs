@@ -39,6 +39,38 @@ fn draw_digit(fb: &mut Framebuffer, x: usize, y: usize, digit_idx: usize, color:
     }
 }
 
+pub fn draw_large_digit(fb: &mut Framebuffer, x: usize, y: usize, digit_idx: usize, color: u32, scale: usize) {
+    if digit_idx >= font::FONT_BASIC.len() { return; }
+    let glyph = font::FONT_BASIC[digit_idx];
+    // Mark the whole digit area as dirty once to avoid excessive merging math in draw_rect
+    fb.mark_dirty(x as u32, y as u32, (8 * scale) as u32, (8 * scale) as u32);
+    for row in 0..8 {
+        for col in 0..8 {
+            if (glyph[row] & (0x80 >> col)) != 0 {
+                for dy in 0..scale {
+                    for dx in 0..scale {
+                        fb.draw_pixel(x + (col * scale) + dx, y + (row * scale) + dy, color);
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub fn draw_large_string(fb: &mut Framebuffer, x: usize, y: usize, s: &str, color: u32, scale: usize) {
+    for (i, c) in s.chars().enumerate() {
+        let idx = match c {
+            '0'..='9' => (c as usize) - ('0' as usize),
+            ':' => 10,
+            'A'..='Z' => (c as usize) - ('A' as usize) + 11,
+            'a'..='z' => (c as usize) - ('a' as usize) + 37,
+            '.' => 63,
+            _ => 65, // Default to space
+        };
+        draw_large_digit(fb, x + (i * 8 * scale), y, idx, color, scale);
+    }
+}
+
 pub fn draw_string(fb: &mut Framebuffer, x: usize, y: usize, s: &str, color: u32) {
     for (i, c) in s.chars().enumerate() {
         let idx = match c {
@@ -101,6 +133,6 @@ pub fn render_ui(fb: &mut Framebuffer, start_menu_open: bool, h: u8, m: u8, s: u
 
     // 5. Draw Start Menu
     if start_menu_open {
-        start_menu::draw(fb);
+        start_menu::draw(fb, ty);
     }
 }

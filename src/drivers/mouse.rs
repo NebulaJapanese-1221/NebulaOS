@@ -21,7 +21,8 @@ static mut MOUSE_BYTE: [u8; 3] = [0; 3];
 pub fn handle_mouse_interrupt() {
     unsafe {
         let status = inb(0x64);
-        if status & 0x01 != 0 {
+        // Bit 0: Output buffer full. Bit 5: Data is from the mouse (Auxiliary device)
+        if (status & 0x01 != 0) && (status & 0x20 != 0) {
             let data = inb(0x60);
             match MOUSE_CYCLE {
                 0 => {
@@ -49,8 +50,17 @@ pub fn handle_mouse_interrupt() {
                 _ => MOUSE_CYCLE = 0,
             }
         }
-        outb(0xA0, 0x20); // End of Interrupt to Slave PIC
-        outb(0x20, 0x20); // End of Interrupt to Master PIC
+    }
+}
+
+pub unsafe fn mouse_wait(command: u8) {
+    let mut timeout = 100000;
+    if command == 0 {
+        // Wait for data to be ready to read
+        while (inb(0x64) & 0x01 == 0) && timeout > 0 { timeout -= 1; }
+    } else {
+        // Wait for controller to be ready to receive command
+        while (inb(0x64) & 0x02 != 0) && timeout > 0 { timeout -= 1; }
     }
 }
 
@@ -66,10 +76,13 @@ pub unsafe fn inb(port: u16) -> u8 {
 
 pub fn init_mouse() {
     unsafe {
-        // Enable the auxiliary mouse device
+        mouse_wait(1);
         outb(0x64, 0xA8);
-        // Tell the mouse to start sending packets
+        mouse_wait(1);
         outb(0x64, 0xD4);
+        mouse_wait(1);
         outb(0x60, 0xF4);
+        mouse_wait(0);
+        let _ack = inb(0x60); // Consume ACK (0xFA)
     }
 }

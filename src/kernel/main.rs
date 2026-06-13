@@ -167,16 +167,19 @@ pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
                 fb.present();
             }
             // Delay reduced and moved outside the lock to prevent the appearance of a freeze
-            for _ in 0..5000000 { core::hint::spin_loop(); } 
+            for _ in 0..500000 { core::hint::spin_loop(); } 
         };
 
         serial_println!("Initializing Framebuffer...");
         {
             let mut fb = FRAMEBUFFER.lock();
-            // Use the text as the primary logo, centered on screen
-            let x = (fb.width / 2) - 32;
-            let y = (fb.height / 2) - 8;
-            gui::draw_string(&mut fb, x, y, "NebulaOS", 0xFFFFFF);
+            // Use the text as the primary logo, centered on screen, scaled and purple
+            let scale = 8;
+            let string_width = 8 * 8 * scale; // 8 characters * 8 pixels * scale
+            let string_height = 8 * scale;
+            let x = (fb.width / 2) - (string_width / 2);
+            let y = (fb.height / 2) - (string_height / 2);
+            gui::draw_large_string(&mut fb, x, y, "NebulaOS", 0x00800080, scale);
         }
 
         update_progress(10);
@@ -189,6 +192,21 @@ pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
             serial_println!("Initializing Heap...");
             ALLOCATOR.init(0x1000000, 0x1000000);
             update_progress(50);
+
+            // Initialize hardware that requires interrupts to be OFF
+            mouse::init_mouse();
+
+            let (width, height) = {
+                let fb = FRAMEBUFFER.lock();
+                (fb.width, fb.height)
+            };
+
+            // Initialize mouse position to screen center BEFORE interrupts start
+            {
+                let mut m = mouse::MOUSE_STATE.lock();
+                m.x = (width / 2) as i32;
+                m.y = (height / 2) as i32;
+            }
 
             serial_println!("Initializing PIT...");
             pit::init(100);
@@ -211,9 +229,6 @@ pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
         }
     }
 
-    syscalls::test_syscall();
-    mouse::init_mouse();
-
     let (width, height) = {
         let fb = FRAMEBUFFER.lock();
         (fb.width, fb.height)
@@ -226,6 +241,8 @@ pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
         fb.backbuffer = backbuffer.as_mut_ptr();
     }
     
+    syscalls::test_syscall();
+
     let mut start_menu_open = false;
     let mut wm = gui::WindowManager::new();
     // All windows closed on boot; Nebula Explorer removed.
@@ -240,7 +257,10 @@ pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
 
         // 3. Handle Input & Cursor
         let (mx, my, ml, mr) = {
-            let m = mouse::MOUSE_STATE.lock();
+            let mut m = mouse::MOUSE_STATE.lock();
+            // Clamp logical coordinates to screen dimensions to prevent "drifting" off-screen
+            m.x = m.x.clamp(0, width as i32);
+            m.y = m.y.clamp(0, height as i32);
             (m.x, m.y, m.left_button, m.right_button)
         };
 
@@ -252,7 +272,7 @@ pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
         // Handle mouse input through the WindowManager
         if wm.handle_mouse(mx, my, ml, mr) {
             // Dispatch to start menu logic
-            gui::start_menu::handle_click(mx, my, &mut wm, &mut start_menu_open);
+            gui::start_menu::handle_click(mx, my, height as i32, &mut wm, &mut start_menu_open);
         }
 
         // 1. Render UI Components (Desktop + Taskbar)

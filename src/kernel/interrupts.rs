@@ -59,10 +59,10 @@ extern "C" {
 #[no_mangle]
 pub extern "C" fn mouse_handler_rust() {
     super::mouse::handle_mouse_interrupt();
-    // Send End of Interrupt (EOI) to both Slave and Master PIC for IRQ 12
     unsafe {
-        super::mouse::outb(0xA0, 0x20); // Slave PIC
-        super::mouse::outb(0x20, 0x20); // Master PIC
+        // Global EOI for IRQ 12
+        super::mouse::outb(0xA0, 0x20);
+        super::mouse::outb(0x20, 0x20);
     }
 }
 
