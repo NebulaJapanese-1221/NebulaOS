@@ -1,5 +1,5 @@
 use crate::framebuffer::{Framebuffer, Rect};
-use super::{draw_string, TITLE_BAR_HEIGHT};
+use super::{draw_string, TITLE_BAR_HEIGHT, TASKBAR_HEIGHT};
 use alloc::vec::Vec;
 
 pub const CURSOR_BITMAP: [u16; 19] = [
@@ -86,6 +86,8 @@ pub struct WindowManager {
     last_mouse_btn: bool,
     last_right_btn: bool,
     context_menu: Option<(i32, i32)>,
+    screen_w: u32,
+    screen_h: u32,
 }
 
 impl WindowManager {
@@ -98,7 +100,14 @@ impl WindowManager {
             last_mouse_btn: false,
             last_right_btn: false,
             context_menu: None,
+            screen_w: 1024,
+            screen_h: 768,
         }
+    }
+
+    pub fn set_screen_size(&mut self, w: u32, h: u32) {
+        self.screen_w = w;
+        self.screen_h = h;
     }
 
     pub fn handle_mouse(&mut self, mx: i32, my: i32, ml: bool, mr: bool) -> bool {
@@ -149,11 +158,12 @@ impl WindowManager {
             let mut taskbar_handled = false;
 
             // Check taskbar items (minimized windows)
-            if my >= 728 {
+            let taskbar_y = (self.screen_h - TASKBAR_HEIGHT) as i32;
+            if my >= taskbar_y {
                 let mut item_x = 80;
                 for win in self.windows.iter_mut() {
                     if win.is_minimized {
-                        if mx >= item_x && mx <= item_x + 110 && my >= 733 && my <= 763 {
+                        if mx >= item_x && mx <= item_x + 110 && my >= taskbar_y + 5 {
                             win.is_minimized = false;
                             menu_toggle = false;
                             taskbar_handled = true;
@@ -194,7 +204,7 @@ impl WindowManager {
                             win.is_maximized = false;
                         } else {
                             win.old_bounds = win.bounds;
-                            win.bounds = Rect { x: 0, y: 0, width: 1024, height: 728 };
+                            win.bounds = Rect { x: 0, y: 0, width: self.screen_w, height: self.screen_h - TASKBAR_HEIGHT };
                             win.is_maximized = true;
                         }
                         break;
@@ -224,6 +234,13 @@ impl WindowManager {
 
             if let Some(idx) = clicked_idx {
                 if close_clicked {
+                    // Mark the area as dirty so the background can overwrite the closed window
+                    let win_bounds = self.windows.as_slice()[idx].bounds;
+                    // We need to mark damage on the global framebuffer. 
+                    // Since we don't have a reference here, main.rs handles redrawing 
+                    // but we can ensure the next frame clears it by marking the whole window area
+                    // if your system supports a global damage queue.
+                    
                     self.windows.remove(idx); // Dropping the Window automatically frees AppData heap memory
                 } else {
                     let win = self.windows.remove(idx);

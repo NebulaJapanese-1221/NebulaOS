@@ -65,9 +65,7 @@ impl Framebuffer {
     }
 
     pub fn draw_rect(&mut self, x: usize, y: usize, width: usize, height: usize, color: u32) {
-        if color != 0x00003366 { // Optimization: don't track full-screen wallpaper damage
-            self.mark_dirty(x as u32, y as u32, width as u32, height as u32);
-        }
+        self.mark_dirty(x as u32, y as u32, width as u32, height as u32);
         for i in 0..height {
             for j in 0..width {
                 self.draw_pixel(x + j, y + i, color);

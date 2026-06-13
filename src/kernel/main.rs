@@ -94,6 +94,10 @@ struct MultibootInfo {
 #[global_allocator]
 static ALLOCATOR: LinkedHeap = LinkedHeap::empty();
 
+const TASKBAR_HEIGHT: u32 = 40;
+static mut LAST_MOUSE_X: i32 = 0;
+static mut LAST_MOUSE_Y: i32 = 0;
+
 core::arch::global_asm!(
     ".global _start",
     "_start:",
@@ -169,10 +173,9 @@ pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
         serial_println!("Initializing Framebuffer...");
         {
             let mut fb = FRAMEBUFFER.lock();
-            gui::draw_boot_screen(&mut fb);
+            // Use the text as the primary logo, centered on screen
             let x = (fb.width / 2) - 32;
-            let y = fb.height / 2;
-            // Center the "NebulaOS" text above the progress bar
+            let y = (fb.height / 2) - 8;
             gui::draw_string(&mut fb, x, y, "NebulaOS", 0xFFFFFF);
         }
 
@@ -227,6 +230,12 @@ pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
     let mut wm = gui::WindowManager::new();
     // All windows closed on boot; Nebula Explorer removed.
     loop {
+        let (width, height) = {
+            let fb = FRAMEBUFFER.lock();
+            (fb.width, fb.height)
+        };
+        wm.set_screen_size(width as u32, height as u32);
+
         let mut fb = FRAMEBUFFER.lock();
 
         // 3. Handle Input & Cursor
@@ -234,6 +243,11 @@ pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
             let m = mouse::MOUSE_STATE.lock();
             (m.x, m.y, m.left_button, m.right_button)
         };
+
+        // Mark the OLD cursor position as dirty so it gets erased from the LFB
+        unsafe {
+            fb.mark_dirty(LAST_MOUSE_X as u32, LAST_MOUSE_Y as u32, CURSOR_WIDTH as u32, CURSOR_HEIGHT as u32);
+        }
 
         // Handle mouse input through the WindowManager
         if wm.handle_mouse(mx, my, ml, mr) {
@@ -253,12 +267,25 @@ pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
         }
 
         // Clamp coordinates to prevent wrap-around when casting to usize
-        let cursor_x = mx.clamp(0, 1024 - CURSOR_WIDTH as i32) as usize;
-        let cursor_y = my.clamp(0, 768 - CURSOR_HEIGHT as i32) as usize;
+        let cursor_x = mx.clamp(0, width as i32 - CURSOR_WIDTH as i32) as usize;
+        let cursor_y = my.clamp(0, height as i32 - CURSOR_HEIGHT as i32) as usize;
 
+        // Draw a shadow/outline first to remove the "extra background" bloom effect
+        fb.draw_bitmap(cursor_x + 1, cursor_y + 1, CURSOR_WIDTH, CURSOR_HEIGHT, &CURSOR_BITMAP, 0x00000000);
+        
+        // Draw the main cursor
         fb.draw_bitmap(cursor_x, cursor_y, CURSOR_WIDTH, CURSOR_HEIGHT, &CURSOR_BITMAP, 0x00FFFFFF);
+        
+        unsafe {
+            LAST_MOUSE_X = cursor_x as i32;
+            LAST_MOUSE_Y = cursor_y as i32;
+        }
         
         // 4. Swap buffers
         fb.present();
+
+        // 5. Halt the CPU until the next interrupt (PIT, Mouse, or Keyboard)
+        // This prevents the OS from laggy 'infinite' re-renders and saves CPU.
+        unsafe { asm!("hlt"); }
     }
 }
