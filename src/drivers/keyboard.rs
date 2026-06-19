@@ -1,4 +1,4 @@
-use crate::mouse::inb;
+use crate::ps2::{inb, outb};
 use crate::sync::Spinlock;
 
 const BUFFER_SIZE: usize = 128;
@@ -66,6 +66,6 @@ pub fn handle_keyboard_interrupt() {
         }
 
         // Send End of Interrupt to Master PIC
-        crate::mouse::outb(0x20, 0x20);
+        outb(0x20, 0x20);
     }
 }

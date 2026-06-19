@@ -1,4 +1,4 @@
-use crate::mouse::{outb, inb};
+use crate::ps2::{outb, inb};
 use crate::sync::Spinlock;
 use core::fmt;
 

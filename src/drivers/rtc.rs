@@ -1,4 +1,4 @@
-use crate::mouse::{inb, outb};
+use crate::ps2::{inb, outb};
 
 pub struct Time {
     pub second: u8,

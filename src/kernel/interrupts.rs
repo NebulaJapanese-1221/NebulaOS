@@ -61,8 +61,8 @@ pub extern "C" fn mouse_handler_rust() {
     super::mouse::handle_mouse_interrupt();
     unsafe {
         // Global EOI for IRQ 12
-        super::mouse::outb(0xA0, 0x20);
-        super::mouse::outb(0x20, 0x20);
+        super::ps2::outb(0xA0, 0x20);
+        super::ps2::outb(0x20, 0x20);
     }
 }
 
@@ -71,7 +71,7 @@ pub extern "C" fn keyboard_handler_rust() {
     super::keyboard::handle_keyboard_interrupt();
     // Send EOI to Master PIC for IRQ 1
     unsafe {
-        super::mouse::outb(0x20, 0x20);
+        super::ps2::outb(0x20, 0x20);
     }
 }
 
@@ -84,7 +84,7 @@ pub extern "C" fn syscall_handler_rust(regs: *mut super::syscalls::SyscallRegist
 pub extern "C" fn timer_handler_rust(regs: *mut super::syscalls::SyscallRegisters) -> u32 {
     // Send EOI to Master PIC for IRQ 0
     unsafe {
-        super::mouse::outb(0x20, 0x20);
+        super::ps2::outb(0x20, 0x20);
     }
     super::scheduler::timer_tick();
     super::scheduler::schedule(regs as u32)

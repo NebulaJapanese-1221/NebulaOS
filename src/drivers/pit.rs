@@ -1,4 +1,4 @@
-use crate::mouse::outb;
+use crate::ps2::outb;
 
 /// Initialize the PIT to a specific frequency (Hz)
 pub fn init(hz: u32) {

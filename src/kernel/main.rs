@@ -36,6 +36,9 @@ use allocator::LinkedHeap;
 #[path = "../drivers/vga.rs"]
 mod vga;
 
+#[path = "../drivers/ps2.rs"]
+mod ps2;
+
 #[path = "../drivers/mouse.rs"]
 mod mouse;
 

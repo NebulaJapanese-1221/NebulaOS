@@ -50,26 +50,17 @@ pub unsafe fn load_idt() {
 
 pub unsafe fn init_pic() {
     // Remap PIC: IRQs 0-15 to Interrupts 32-47
-    super::mouse::outb(0x20, 0x11); // Initialize Master
-    super::mouse::outb(0xA0, 0x11); // Initialize Slave
-    super::mouse::outb(0x21, 0x20); // Master offset (32)
-    super::mouse::outb(0xA1, 0x28); // Slave offset (40)
-    super::mouse::outb(0x21, 0x04); // Slave at IRQ2
-    super::mouse::outb(0xA1, 0x02); // Cascade identity
-    super::mouse::outb(0x21, 0x01); // 8086 mode
-    super::mouse::outb(0xA1, 0x01);
-
-    // Enable PS/2 Mouse in the Controller (8042)
-    super::mouse::outb(0x64, 0xA8); // Command: Enable 2nd PS/2 port (Mouse)
-    
-    // Enable Mouse Interrupts in the 8042 Command Byte
-    super::mouse::outb(0x64, 0x20); // Command: Read Command Byte
-    let status = (super::mouse::inb(0x60) | 0x02) & !0x20; // Bit 1 = Mouse IRQ, Bit 5 = Mouse Clock Enable
-    super::mouse::outb(0x64, 0x60); // Command: Write Command Byte
-    super::mouse::outb(0x60, status);
+    super::ps2::outb(0x20, 0x11); // Initialize Master
+    super::ps2::outb(0xA0, 0x11); // Initialize Slave
+    super::ps2::outb(0x21, 0x20); // Master offset (32)
+    super::ps2::outb(0xA1, 0x28); // Slave offset (40)
+    super::ps2::outb(0x21, 0x04); // Slave at IRQ2
+    super::ps2::outb(0xA1, 0x02); // Cascade identity
+    super::ps2::outb(0x21, 0x01); // 8086 mode
+    super::ps2::outb(0xA1, 0x01);
 
     // Unmask Timer (IRQ0), Keyboard (IRQ1), Cascade (IRQ2), and Mouse (IRQ12)
     // IRQ0 is bit 0, IRQ1 is bit 1, IRQ12 is bit 4 of slave PIC.
-    super::mouse::outb(0x21, 0xF8); // Master PIC: Unmask IRQ0, IRQ1, IRQ2
-    super::mouse::outb(0xA1, 0xEF);
+    super::ps2::outb(0x21, 0xF8); // Master PIC: Unmask IRQ0, IRQ1, IRQ2
+    super::ps2::outb(0xA1, 0xEF);
 }

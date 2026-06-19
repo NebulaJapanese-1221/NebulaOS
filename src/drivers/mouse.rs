@@ -1,5 +1,5 @@
-use core::arch::asm;
 use crate::sync::Spinlock;
+use crate::ps2::{inb, outb, read_config, write_config, write_mouse, flush_buffers, PS2_STATUS_PORT, PS2_DATA_PORT, PS2_COMMAND_PORT};
 
 pub struct MouseState {
     pub x: i32,
@@ -20,10 +20,10 @@ static mut MOUSE_BYTE: [u8; 3] = [0; 3];
 
 pub fn handle_mouse_interrupt() {
     unsafe {
-        let status = inb(0x64);
+        let status = inb(PS2_STATUS_PORT);
         // Bit 0: Output buffer full. Bit 5: Data is from the mouse (Auxiliary device)
         if (status & 0x01 != 0) && (status & 0x20 != 0) {
-            let data = inb(0x60);
+            let data = inb(PS2_DATA_PORT);
             match MOUSE_CYCLE {
                 0 => {
                     MOUSE_BYTE[0] = data;
@@ -53,36 +53,28 @@ pub fn handle_mouse_interrupt() {
     }
 }
 
-pub unsafe fn mouse_wait(command: u8) {
-    let mut timeout = 100000;
-    if command == 0 {
-        // Wait for data to be ready to read
-        while (inb(0x64) & 0x01 == 0) && timeout > 0 { timeout -= 1; }
-    } else {
-        // Wait for controller to be ready to receive command
-        while (inb(0x64) & 0x02 != 0) && timeout > 0 { timeout -= 1; }
-    }
-}
-
-pub unsafe fn outb(port: u16, val: u8) {
-    asm!("out dx, al", in("edx") port, in("al") val, options(nomem, nostack, preserves_flags));
-}
-
-pub unsafe fn inb(port: u16) -> u8 {
-    let res: u8;
-    asm!("in al, dx", out("al") res, in("edx") port, options(nomem, nostack, preserves_flags));
-    res
-}
-
 pub fn init_mouse() {
     unsafe {
-        mouse_wait(1);
-        outb(0x64, 0xA8);
-        mouse_wait(1);
-        outb(0x64, 0xD4);
-        mouse_wait(1);
-        outb(0x60, 0xF4);
-        mouse_wait(0);
-        let _ack = inb(0x60); // Consume ACK (0xFA)
+        // 1. Flush any leftover data in the PS/2 controller buffers
+        flush_buffers();
+
+        // 2. Enable the auxiliary device (mouse port)
+        crate::ps2::wait_write();
+        outb(PS2_COMMAND_PORT, 0xA8);
+
+        // 3. Read, modify, and write Controller Configuration Byte
+        let mut status = read_config();
+        status |= 0x02;     // Enable mouse interrupt
+        status &= !0x20;    // Enable mouse clock (clear disable bit)
+        write_config(status);
+
+        // 4. Set defaults on mouse
+        let _ = write_mouse(0xF6); // Set defaults
+
+        // 5. Enable packet streaming
+        let _ = write_mouse(0xF4); // Enable data reporting
+
+        // 6. Final flush of any leftover bytes
+        flush_buffers();
     }
 }
