@@ -31,6 +31,7 @@ mod scheduler;
 mod syscalls;
 mod panic;
 mod exceptions;
+mod memory;
 use allocator::LinkedHeap;
 
 #[path = "../drivers/vga.rs"]
