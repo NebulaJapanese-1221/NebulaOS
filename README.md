@@ -9,6 +9,7 @@ This project is licensed under the GNU General Public License (GPL) v3.0.
 ## Apps
 - **Calculator**
 - **Text Editor**
+- **Terminal**
 
 ## Prerequisites
 - Rust Nightly toolchain
