@@ -60,7 +60,8 @@ pub unsafe fn init_pic() {
     super::ps2::outb(0xA1, 0x01);
 
     // Unmask Timer (IRQ0), Keyboard (IRQ1), Cascade (IRQ2), and Mouse (IRQ12)
-    // IRQ0 is bit 0, IRQ1 is bit 1, IRQ12 is bit 4 of slave PIC.
-    super::ps2::outb(0x21, 0xF8); // Master PIC: Unmask IRQ0, IRQ1, IRQ2
+    // Master: 0xFB = 11111011 (IRQ0, 1, 2 unmasked)
+    // Slave:  0xEF = 11101111 (IRQ12 unmasked)
+    super::ps2::outb(0x21, 0xFB); 
     super::ps2::outb(0xA1, 0xEF);
 }

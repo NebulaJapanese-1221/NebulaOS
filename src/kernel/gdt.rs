@@ -51,31 +51,31 @@ pub fn init() {
         // 1. Null Descriptor
         GDT[0] = GdtEntry { limit_low: 0, base_low: 0, base_middle: 0, access: 0, granularity: 0, base_high: 0 };
 
-        // 2. Kernel Code Segment (0x08): Base 0, Limit 0xFFFFF, Access 0x9A (P=1, DPL=0, S=1, Type=Code), Granularity 0xCF (G=1, DB=1, Limit_High=0xF)
+        // 2. Kernel Code Segment (0x08): Base 0, Limit 0xFFFFF, Access 0x9A, Granularity 0xCF
         GDT[1] = GdtEntry { 
             limit_low: 0xFFFF, base_low: 0, base_middle: 0, 
             access: 0x9A, granularity: 0xCF, base_high: 0 
         };
 
-        // 3. Kernel Data Segment (0x10): Base 0, Limit 0xFFFFF, Access 0x92 (P=1, DPL=0, S=1, Type=Data), Granularity 0xCF
+        // 3. Kernel Data Segment (0x10): Base 0, Limit 0xFFFFF, Access 0x92, Granularity 0xCF
         GDT[2] = GdtEntry { 
             limit_low: 0xFFFF, base_low: 0, base_middle: 0, 
             access: 0x92, granularity: 0xCF, base_high: 0 
         };
 
-        // 4. User Code Segment (Index 3, Selector 0x1B): Base 0, Limit 0xFFFFF, Access 0xFA (P=1, DPL=3, S=1, Type=Code), Granularity 0xCF
+        // 4. User Code Segment (Index 3, Selector 0x1B): Access 0xFA, Granularity 0xCF
         GDT[3] = GdtEntry { 
             limit_low: 0xFFFF, base_low: 0, base_middle: 0, 
             access: 0xFA, granularity: 0xCF, base_high: 0 
         };
 
-        // 5. User Data Segment (Index 4, Selector 0x23): Base 0, Limit 0xFFFFF, Access 0xF2 (P=1, DPL=3, S=1, Type=Data), Granularity 0xCF
+        // 5. User Data Segment (Index 4, Selector 0x23): Access 0xF2, Granularity 0xCF
         GDT[4] = GdtEntry { 
             limit_low: 0xFFFF, base_low: 0, base_middle: 0, 
             access: 0xF2, granularity: 0xCF, base_high: 0 
         };
 
-        // 6. TSS Descriptor (Index 5, Selector 0x28): Access 0x89 (P=1, DPL=0, Type=32-bit TSS available)
+        // 6. TSS Descriptor (Index 5, Selector 0x28): Access 0x89
         let tss_base = &raw const TSS as u32;
         let tss_limit = (core::mem::size_of::<Tss>() - 1) as u32;
         GDT[5] = GdtEntry {
@@ -90,32 +90,28 @@ pub fn init() {
         GDT_PTR.limit = (core::mem::size_of::<[GdtEntry; 6]>() - 1) as u16;
         GDT_PTR.base = &raw const GDT as u32;
 
-        // Initialize initial kernel stack for interrupts
         let stack_ptr: u32;
         asm!("mov {}, esp", out(reg) stack_ptr);
         TSS.esp0 = stack_ptr;
 
-        // Load the GDT
         asm!("lgdt [{}]", in(reg) &raw const GDT_PTR);
 
-        // Reload segment registers. We use a far return (retf) to update CS.
         asm!(
-            "push 0x08",        // Push the new code segment selector
-            "lea eax, [2f]",    // Get address of the next label
-            "push eax",         // Push target instruction pointer
-            "retf",             // Far return: pops IP then CS
-            "2:",               // Target label
-            "mov ax, 0x10",     // Update data segment registers
+            "push 0x08",
+            "lea eax, [2f]",
+            "push eax",
+            "retf",
+            "2:",
+            "mov ax, 0x10",
             "mov ds, ax",
             "mov es, ax",
             "mov fs, ax",
             "mov gs, ax",
             "mov ss, ax",
-            out("eax") _,       // Clobber eax
+            out("eax") _,
             options(nostack)
         );
 
-        // Load the Task Register (Selector 0x28)
         asm!("ltr ax", in("ax") 0x28u16);
     }
 }
