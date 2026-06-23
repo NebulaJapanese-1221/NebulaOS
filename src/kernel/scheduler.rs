@@ -1,7 +1,8 @@
 use crate::process::{Process, ProcessState};
-use crate::sync::Spinlock; // Assuming Spinlock is in crate::sync
+use crate::sync::Spinlock;
 use alloc::vec::Vec;
 use alloc::boxed::Box;
+use core::arch::asm;
 
 pub struct Scheduler {
     pub processes: Vec<Box<Process>>,
@@ -18,14 +19,35 @@ impl Scheduler {
         }
     }
 
+    // Renamed add_process to be more specific to kernel tasks
     #[allow(dead_code)]
-    pub fn add_process(&mut self, entry_point: u32) {
+    pub fn add_kernel_task(&mut self, entry_point: u32) {
         let id = self.processes.len();
-        self.processes.push(Process::new(id, entry_point));
+        self.processes.push(Process::new_kernel_task(id, entry_point));
+    }
+
+    // New method to spawn a user process
+    #[allow(dead_code)]
+    pub fn spawn_user_process(
+        &mut self,
+        entry_point: u32,
+        user_stack_size: usize,
+        kernel_stack_size: usize,
+    ) -> usize {
+        let id = self.processes.len();
+        let process = Process::new_user_process(
+            id,
+            entry_point,
+            user_stack_size,
+            kernel_stack_size,
+        );
+        self.processes.push(process);
+        id // Return the new process ID
     }
 
     pub fn spawn(&mut self, entry_point: u32) {
-        self.add_process(entry_point);
+        // For backward compatibility, assume kernel task if only entry point is given
+        self.add_kernel_task(entry_point);
     }
 }
 
@@ -36,11 +58,20 @@ pub fn exit_current_process(regs_ptr: u32) -> u32 {
     let mut sched = SCHEDULER.lock();
     if let Some(pid) = sched.current_pid.take() {
         if pid < sched.processes.len() {
+            // Remove process from the list
             sched.processes.remove(pid);
+            // Adjust current_pid if necessary (e.g., if it was the last process)
+            if pid == sched.processes.len() {
+                 sched.current_pid = Some(0); // Wrap around or handle empty list
+            } else if !sched.processes.is_empty() {
+                 sched.current_pid = Some(pid); // New process at this index
+            } else {
+                 sched.current_pid = None; // No processes left
+            }
         }
     }
-    drop(sched);
-    schedule(regs_ptr)
+    drop(sched); // Release lock before potentially long schedule operation
+    schedule(regs_ptr) // Schedule the next process
 }
 
 /// Increments system ticks. Called by the timer interrupt.
@@ -51,44 +82,69 @@ pub fn timer_tick() {
 #[no_mangle]
 pub extern "C" fn schedule(regs_ptr: u32) -> u32 {
     let mut sched = SCHEDULER.lock();
-    if sched.processes.is_empty() { return regs_ptr; }
 
-    // Save current state: only revert to Ready if the process was actually Running
-    // (prevents overwriting Sleeping state if schedule was called by a sleep syscall)
-    if let Some(pid) = sched.current_pid {
-        let proc = &mut sched.processes.as_mut_slice()[pid];
-        proc.kernel_stack_ptr = regs_ptr;
-        if let ProcessState::Running = proc.state {
-            proc.state = ProcessState::Ready;
+    // Save current process state if there was one running
+    if let Some(pid) = sched.current_pid.take() {
+        if pid < sched.processes.len() {
+            let proc = &mut sched.processes.as_mut_slice()[pid];
+            // Store the current state of the registers as the process's context
+            proc.kernel_stack_ptr = regs_ptr;
+            // Only revert to Ready if it was explicitly Running.
+            // Sleeping processes should not be reset to Ready here.
+            if proc.state == ProcessState::Running {
+                proc.state = ProcessState::Ready;
+            }
         }
     }
 
-    // Round Robin
-    let start_pid = sched.current_pid.map_or(0, |p| (p + 1) % (sched.processes.len().max(1)));
-    let mut next_pid = start_pid;
+    // If no processes, return current registers (should ideally halt or panic)
+    if sched.processes.is_empty() {
+        // This should not happen in a running system.
+        // Perhaps halt the CPU or trigger a kernel panic.
+        return regs_ptr;
+    }
+
+    // Find the next process to run (Round Robin)
+    let start_idx = sched.current_pid.map_or(0, |pid| (pid + 1) % sched.processes.len());
+    let mut next_pid = start_idx;
     let current_ticks = sched.ticks;
 
     loop {
         let proc = &mut sched.processes.as_mut_slice()[next_pid];
         match proc.state {
-            ProcessState::Ready => break,
+            ProcessState::Ready => break, // Found a ready process
             ProcessState::Sleeping(wake_tick) if current_ticks >= wake_tick => {
-                proc.state = ProcessState::Ready;
+                proc.state = ProcessState::Ready; // Wake up
                 break;
             }
-            _ => {
+            _ => { // Continue to next process
                 next_pid = (next_pid + 1) % sched.processes.len();
-                if next_pid == start_pid { return regs_ptr; } // No task to run
+                if next_pid == start_idx {
+                    // Went through all processes and found no one ready.
+                    // This could happen if all are sleeping or dead.
+                    // Return current registers, effectively idling.
+                    return regs_ptr;
+                }
             }
         }
     }
 
+    // Set the new current process and update its state to Running
     sched.current_pid = Some(next_pid);
     let next_proc = &mut sched.processes.as_mut_slice()[next_pid];
     next_proc.state = ProcessState::Running;
 
-    // Important: Update the TSS so the next interrupt lands on the NEW process stack
-    crate::gdt::set_kernel_stack(next_proc.stack.as_ptr() as u32 + 4096);
+    // --- CRITICAL for Paging ---
+    // Load the page directory of the new process into CR3.
+    unsafe {
+        asm!("mov cr3, {}", in(reg) next_proc.page_directory_phys_addr);
+    }
 
+    // Update the TSS with the kernel stack for the NEW process.
+    // This ensures that if an interrupt or syscall occurs while in user mode,
+    // the CPU switches to the correct kernel stack for this process.
+    crate::gdt::set_kernel_stack(next_proc.kernel_stack_ptr);
+
+    // Return the context (kernel stack pointer) of the process to be restored.
     next_proc.kernel_stack_ptr
 }
