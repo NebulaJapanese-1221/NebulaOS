@@ -36,30 +36,40 @@ pub unsafe fn wait_write() -> bool {
 
 /// Read data from the controller configuration byte
 pub unsafe fn read_config() -> u8 {
-    wait_write();
+    if !wait_write() { return 0; }
     outb(PS2_COMMAND_PORT, 0x20);
-    wait_read();
+    if !wait_read() { return 0; }
     inb(PS2_DATA_PORT)
 }
 
 /// Write data to the controller configuration byte
 pub unsafe fn write_config(config: u8) {
-    wait_write();
-    outb(PS2_COMMAND_PORT, 0x60);
-    wait_write();
-    outb(PS2_DATA_PORT, config);
+    if wait_write() {
+        outb(PS2_COMMAND_PORT, 0x60);
+        if wait_write() {
+            outb(PS2_DATA_PORT, config);
+        }
+    }
 }
 
 /// Write command to the mouse (auxiliary device)
 pub unsafe fn write_mouse(cmd: u8) -> bool {
-    wait_write();
+    if !wait_write() { return false; }
     outb(PS2_COMMAND_PORT, 0xD4); // Signal next byte is for 2nd port (mouse)
-    wait_write();
+    if !wait_write() { return false; }
     outb(PS2_DATA_PORT, cmd);
     
-    // Wait for ACK
-    let ack = read_mouse();
-    ack == Some(0xFA)
+    // Wait for ACK from the device
+    let mut timeout = 100000;
+    while timeout > 0 {
+        let status = inb(PS2_STATUS_PORT);
+        if (status & 0x01) != 0 {
+            let val = inb(PS2_DATA_PORT);
+            if val == 0xFA { return true; }
+        }
+        timeout -= 1;
+    }
+    false
 }
 
 /// Read mouse data with timeout and verify it is from the auxiliary device
@@ -80,9 +90,7 @@ pub unsafe fn read_mouse() -> Option<u8> {
 
 /// Flush any pending bytes in the PS/2 controller buffers
 pub unsafe fn flush_buffers() {
-    let mut timeout = 100000;
-    while (inb(PS2_STATUS_PORT) & 0x01 != 0) && timeout > 0 {
+    while (inb(PS2_STATUS_PORT) & 0x01 != 0) {
         let _ = inb(PS2_DATA_PORT);
-        timeout -= 1;
     }
 }
