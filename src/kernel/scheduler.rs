@@ -1,8 +1,9 @@
 use crate::process::{Process, ProcessState};
 use crate::sync::Spinlock;
-use alloc::vec::Vec;
-use alloc::boxed::Box;
-use core::arch::asm;
+use alloc::vec::Vec; // Need Vec for processes list
+use alloc::boxed::Box; // Need Box for owning Process objects
+use core::arch::asm; // For inline assembly
+use crate::serial_println; // Import serial_println macro
 
 pub struct Scheduler {
     pub processes: Vec<Box<Process>>,
@@ -44,7 +45,6 @@ impl Scheduler {
     }
 
     pub fn spawn(&mut self, entry_point: u32) {
-        // Default to kernel task if only entry point is provided
         self.add_kernel_task(entry_point);
     }
 }
@@ -91,7 +91,6 @@ pub extern "C" fn schedule(regs_ptr: u32) -> u32 {
 
     if sched.processes.is_empty() {
         serial_println!("Scheduler: No processes to run!");
-        // Halt or enter an idle state. For now, return current regs.
         return regs_ptr;
     }
 
@@ -111,7 +110,6 @@ pub extern "C" fn schedule(regs_ptr: u32) -> u32 {
             _ => { // Continue to next process
                 next_pid = (next_pid + 1) % sched.processes.len();
                 if next_pid == start_idx {
-                    // Went through all processes, none ready or awake.
                     serial_println!("Scheduler: CPU Idle. All processes sleeping or dead.");
                     return regs_ptr; // Return current regs, effectively idling.
                 }

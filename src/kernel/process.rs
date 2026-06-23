@@ -2,8 +2,9 @@ use crate::syscalls::SyscallRegisters;
 use crate::memory::paging::{PageEntry, PAGE_WRITABLE, PAGE_USER, PAGE_PRESENT, PAGE_SIZE};
 use crate::allocator::ALLOCATOR; // Import the global allocator
 use alloc::boxed::Box;
-use alloc::vec::Vec; // Keep if used elsewhere, otherwise remove
-use core::arch::asm;
+use alloc::vec::Vec; // Needed for process list
+use core::arch::asm; // For inline assembly
+use alloc::string::ToString; // For .to_string()
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum ProcessState {
@@ -26,7 +27,6 @@ pub struct Process {
 }
 
 impl Process {
-    // Creates a new kernel task (like the initial kmain thread).
     #[allow(dead_code)]
     pub fn new_kernel_task(id: usize, entry_point: u32) -> Box<Self> {
         let mut p = Box::new(Self {
@@ -42,6 +42,7 @@ impl Process {
 
         // Calculate the address of the top of the stack for initial registers
         let stack_top = p.stack.as_ptr() as usize + 4096;
+        // Define regs_ptr here so it's accessible for p.kernel_stack_ptr
         let regs_ptr = (stack_top - core::mem::size_of::<SyscallRegisters>()) as *mut SyscallRegisters;
 
         unsafe {
@@ -58,7 +59,6 @@ impl Process {
         p
     }
 
-    /// Creates a new process for user-space execution.
     #[allow(dead_code)]
     pub fn new_user_process(
         id: usize,
@@ -66,20 +66,23 @@ impl Process {
         user_stack_size: usize,
         kernel_stack_size: usize,
     ) -> Box<Self> {
-        // 1. Get a page directory. For now, use kernel's, but should be a new one.
+        // 1. Get a page directory.
+        // THIS NEEDS TO BE A NEWLY ALLOCATED PAGE DIRECTORY, NOT A KERNEL ONE.
+        // For now, we use a placeholder that points to the kernel's PD.
+        // You MUST implement physical memory allocation and page directory creation here.
         let page_directory_phys_addr = crate::memory::paging::create_user_page_directory();
         
         // 2. Allocate kernel stack for this process using the global kernel heap.
         let kernel_stack_base = unsafe {
             let layout = alloc::alloc::Layout::from_size_align(kernel_stack_size, 16).unwrap();
-            let ptr = ALLOCATOR.alloc(layout) as u32;
+            let ptr = ALLOCATOR.alloc(layout) as u32; // Use kernel heap
             ptr + kernel_stack_size as u32 // Stack grows downwards
         };
 
         // 3. Allocate user stack using the global kernel heap.
         let user_stack_base = unsafe {
             let layout = alloc::alloc::Layout::from_size_align(user_stack_size, 16).unwrap();
-            let ptr = ALLOCATOR.alloc(layout) as u32;
+            let ptr = ALLOCATOR.alloc(layout) as u32; // Use kernel heap
             ptr + user_stack_size as u32 // Stack grows downwards
         };
         // TODO: Map this user stack region in the process's page directory.
@@ -97,8 +100,7 @@ impl Process {
 
         // Setup initial registers on the kernel stack for the first context switch to user mode.
         // This frame will be used by IRETD.
-        let current_kernel_stack_top = p.kernel_stack_ptr; // Get the top of the kernel stack
-        let regs_ptr = (current_kernel_stack_top as usize - core::mem::size_of::<SyscallRegisters>()) as *mut SyscallRegisters;
+        let regs_ptr = (kernel_stack_base as usize - core::mem::size_of::<SyscallRegisters>()) as *mut SyscallRegisters;
         
         unsafe {
             let regs = &mut *regs_ptr;
@@ -118,14 +120,11 @@ impl Process {
             // TODO: Map user stack into the process's page directory.
         }
 
-        // Update the process's kernel_stack_ptr to the newly created frame.
-        p.kernel_stack_ptr = regs_ptr as u32; 
+        p.kernel_stack_ptr = regs_ptr as u32; // Update the saved kernel stack pointer
         p
     }
 }
 
-/// Dummy function to create a user process for testing.
-/// In a real OS, this would parse an ELF and set up mappings.
 #[allow(dead_code)]
 pub fn create_user_process(
     id: usize,
@@ -133,5 +132,7 @@ pub fn create_user_process(
     user_stack_size: usize,
     kernel_stack_size: usize,
 ) -> Box<Process> {
+    // This function should ideally parse an ELF and set up mappings.
+    // For now, it just calls new_user_process.
     Process::new_user_process(id, entry_point, user_stack_size, kernel_stack_size)
 }

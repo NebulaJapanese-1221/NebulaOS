@@ -1,8 +1,9 @@
 use crate::framebuffer::{Framebuffer, Rect};
 use crate::gui::{draw_string, TITLE_BAR_HEIGHT};
 use alloc::string::{String, ToString}; // Import ToString
-use alloc::vec::Vec;
+use alloc::vec::Vec; // Needed for history
 
+#[derive(Debug)] // Add Debug derive for easier debugging
 pub struct TerminalState {
     pub buffer: String,
     pub cursor_pos: usize,
@@ -32,10 +33,11 @@ impl TerminalState {
             }
             "" => { /* Do nothing on empty input */ }
             _ => {
+                // Use format! macro which needs `use alloc::format;`
                 self.buffer.push_str(&format!("Command not found: {}\n", cmd));
             }
         }
-        // Add command to history if it's not empty and not a duplicate of the last entry
+        // Add command to history if it's not empty, not 'cls', and not a duplicate of the last entry
         if !cmd.trim().is_empty() && cmd.trim() != "cls" && (self.history.is_empty() || self.history.last().unwrap() != cmd) {
             self.history.push(cmd.to_string());
         }
@@ -58,7 +60,7 @@ impl TerminalState {
             '\x08' => { // Backspace key
                 if self.cursor_pos > 0 {
                     // Remove character before cursor if not at the beginning of the buffer
-                    // Ensure we don't delete the prompt characters "> "
+                    // Ensure we don't delete prompt characters "> "
                     if self.cursor_pos > self.buffer.rfind('>').map_or(0, |idx| idx + 1) { 
                         self.buffer.remove(self.cursor_pos - 1);
                         self.cursor_pos -= 1;
@@ -85,9 +87,11 @@ impl TerminalApp {
         let h = (bounds.height as usize).saturating_sub(TITLE_BAR_HEIGHT as usize);
 
         // Clear the entire window area first if 'cls' command was processed
-        // We check if the buffer starts with "> " and contains no other lines yet.
-        // This is a simple heuristic for detecting a cleared state.
-        if state.buffer.starts_with("> ") && state.buffer.lines().count() <= 2 { // "> ", "\n", "> "
+        // Check if the buffer starts with "> " and has only the prompt and a newline, or just the prompt.
+        let is_cleared_state = state.buffer.starts_with("> ") && 
+                                (state.buffer.len() == 2 || (state.buffer.len() > 2 && state.buffer.ends_with('\n') && state.buffer.lines().count() <= 2));
+        
+        if is_cleared_state {
             fb.draw_rect(x, y, w, h, 0x00000000); // Black background
         } else {
             // If not cleared, redraw the buffer content

@@ -28,11 +28,11 @@ mod panic;
 mod exceptions;
 mod memory; // New module for paging
 
-use allocator::LinkedHeap;
+use allocator::ALLOCATOR; 
 use core::arch::asm;
-use alloc::vec;
+use alloc::vec::Vec; // Required for processes Vec
 use gui::{CURSOR_BITMAP, CURSOR_WIDTH, CURSOR_HEIGHT};
-use framebuffer::{FRAMEBUFFER};
+use framebuffer::FRAMEBUFFER;
 
 #[path = "../drivers/vga.rs"]
 mod vga;
@@ -90,9 +90,6 @@ struct MultibootInfo {
     fb_type: u8,
 }
 
-#[global_allocator]
-static ALLOCATOR: LinkedHeap = LinkedHeap::empty();
-
 const TASKBAR_HEIGHT: u32 = 40;
 static mut LAST_MOUSE_X: i32 = 0;
 static mut LAST_MOUSE_Y: i32 = 0;
@@ -120,13 +117,22 @@ pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
                 let mmap_addr = info.mmap_addr;
                 let mmap_length = info.mmap_length;
                 serial_println!("Memory Map found at 0x{:X}, length: {} bytes", mmap_addr, mmap_length);
-                // Basic memory map parsing (Type 1 is available memory)
                 let mut current_addr = mmap_addr;
                 let end_addr = mmap_addr + mmap_length;
                 while current_addr < end_addr {
-                    let entry = unsafe { &*(current_addr as *const MultibootMmapEntry) };
-                    if entry.type_ == 1 { // Available memory
-                        serial_println!("  Available: 0x{:016X} - 0x{:016X} ({} MB)", entry.addr, entry.addr + entry.len, entry.len / (1024 * 1024));
+                    // Safely copy entry data to avoid potential unaligned access errors
+                    let mut entry_data: [u8; 24] = [0; 24]; // Max size of MmapEntry is 20, but size field is variable. Use max.
+                    let entry_slice = unsafe { core::slice::from_raw_parts(current_addr as *const u8, 24) };
+                    entry_data.copy_from_slice(entry_slice);
+                    
+                    let entry = unsafe { &*(entry_data.as_ptr() as *const MultibootMmapEntry) };
+                    
+                    let addr = entry.addr;
+                    let len = entry.len;
+                    let type_ = entry.type_;
+                    
+                    if type_ == 1 { // Available memory
+                        serial_println!("  Available: 0x{:016X} - 0x{:016X} ({} MB)", addr, addr + len, len / (1024 * 1024));
                     }
                     current_addr += entry.size + 4; // Move to the next entry
                 }
@@ -178,9 +184,6 @@ pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
             update_progress(30);
 
             serial_println!("Initializing Heap...");
-            // Initialize heap: first 1MB is reserved for kernel, then use 1MB for heap.
-            // Adjust start address based on where your kernel is loaded.
-            // Assuming kernel starts at 0x100000, heap can start after it.
             let heap_start = 0x1000000; // Example: start heap at 16MB
             let heap_size = 0x100000;   // 1MB heap size
             ALLOCATOR.init(heap_start, heap_size);
@@ -225,76 +228,66 @@ pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
     }
 
     // --- Launching the first user process ---
-    // Dummy user program entry point. In a real OS, you'd load an ELF binary.
     extern "C" fn user_program_entry() -> ! {
         serial_println!("Entering user mode!");
         
-        // Test drawing a pixel from user mode
         syscalls::syscall_draw_pixel(100, 100, 0x00FF0000); // Red pixel at (100, 100)
         serial_println!("User process drew a red pixel.");
 
-        // Test sleeping
         serial_println!("User process sleeping for 1 second...");
         syscalls::syscall_sleep(1000); // Sleep for 1000ms
         serial_println!("User process woke up.");
 
-        // Test exiting
         serial_println!("User process exiting.");
         syscalls::syscall_exit(); // Exit the process
     }
     
-    // Allocate memory for the user process's kernel stack and user stack.
     let user_kernel_stack_size = 4096;
     let user_stack_size = 4096 * 4; // 16KB user stack
 
     let entry_point_virtual_addr = user_program_entry as *const () as u32;
     
-    // Spawn the user process
     let new_pid = {
         let mut sched = scheduler::SCHEDULER.lock();
         sched.spawn_user_process(
             entry_point_virtual_addr,
             user_stack_size,
-            user_kernel_stack_size,
+            kernel_stack_size,
         )
     };
     
-    // Manually schedule the first user process to run and transition to user mode.
-    // This bypasses the initial kernel task and directly jumps to user mode.
     unsafe {
-        let process = &mut scheduler::SCHEDULER.lock().processes[new_pid];
+        // Retrieve the process from the scheduler's list using the obtained PID.
+        // Ensure the scheduler is locked to safely access the process list.
+        let process = match scheduler::SCHEDULER.lock().processes.get(new_pid) {
+            Some(proc) => proc,
+            None => {
+                serial_println!("Error: Could not find process with PID {} after spawning.", new_pid);
+                // Handle error: perhaps halt or panic.
+                loop { asm!("hlt"); }
+            }
+        };
         
-        // 1. Update TSS with the correct kernel stack for this process.
+        // Now access process fields safely.
         gdt::set_kernel_stack(process.kernel_stack_ptr);
-        
-        // 2. Load the process's page directory into CR3.
         asm!("mov cr3, {}", in(reg) process.page_directory_phys_addr);
         
-        // 3. Perform the privilege level transition using IRETD.
-        //    We construct the stack frame that IRETD expects.
         asm!(
-            "cli", // Disable interrupts temporarily
-
-            // Push kernel segments and stack pointer
+            "cli",
             "push {ss_kern}",
             "push {esp_kern}",
-            // Push EFLAGS, ensure interrupts are enabled in user mode (IF bit = 1)
             "pushfd",
             "or dword ptr [esp], 0x200",
-            // Push user segments and entry point
             "push {cs_user}",
             "push {eip_user}",
-            
-            // Perform the far return to user mode
             "iretd",
 
-            ss_kern = in(reg) 0x10u32,     // Kernel Data Segment Selector
-            esp_kern = in(reg) process.kernel_stack_ptr, // Kernel stack pointer for this process
-            cs_user = in(reg) 0x1Bu32,    // User Code Segment Selector (DPL=3)
-            eip_user = in(reg) process.user_eip, // User program entry point
+            ss_kern = in(reg) 0x10u32,     
+            esp_kern = in(reg) process.kernel_stack_ptr, 
+            cs_user = in(reg) 0x1Bu32,    
+            eip_user = in(reg) process.user_eip, 
 
             options(noreturn)
         );
     }
-    // The kernel will never reach here if the transition is successful.
 }
