@@ -1,5 +1,8 @@
 use crate::serial_println;
 use crate::process::ProcessState;
+use crate::allocator::ALLOCATOR; // Import the allocator
+use alloc::string::ToString; // For .to_string()
+use alloc::vec::Vec; // If Vec is used for syscall arguments etc.
 use core::arch::asm;
 
 #[repr(C, packed)]
@@ -18,12 +21,10 @@ pub struct SyscallRegisters {
 }
 
 impl SyscallRegisters {
-    /// Returns true if the interrupt/syscall came from user mode (Ring 3)
     pub fn is_user(&self) -> bool {
         (self.cs & 0x3) == 3 // Check the DPL bit of the code segment selector
     }
 
-    /// Safely gets the user-mode stack pointer if applicable
     pub fn get_user_esp(&self) -> u32 {
         if self.is_user() {
             self.esp // ESP is pushed by the CPU on inter-privilege transfer
@@ -34,9 +35,9 @@ impl SyscallRegisters {
 }
 
 pub fn syscall_handler_rust(regs_ptr: &mut SyscallRegisters) -> u32 {
-    // Create a local aligned copy for safety, as SyscallRegisters is packed.
-    // We'll write back any changes at the end.
-    let mut regs = *regs_ptr;
+    // Use a local copy to avoid unaligned access issues with packed struct
+    // and to modify registers before writing back.
+    let mut regs = *regs_ptr; 
     let eax = regs.eax;
 
     // Debugging unknown syscalls
@@ -51,9 +52,6 @@ pub fn syscall_handler_rust(regs_ptr: &mut SyscallRegisters) -> u32 {
             return_val = crate::scheduler::schedule(regs_ptr as *mut _ as u32);
         },
         1 => { // Syscall 1: Print to Serial (Kernel only for now)
-            // ebx could be a pointer to a string (in a real OS with paging)
-            // For now, assume it's a literal string and printing from kernel.
-            // In a real OS, you'd need to validate user pointers.
             serial_println!("Syscall: Kernel received request to print!");
         },
         2 => { // Syscall 2: Get System Time
@@ -67,7 +65,7 @@ pub fn syscall_handler_rust(regs_ptr: &mut SyscallRegisters) -> u32 {
             let x = regs.ebx as usize;
             let y = regs.ecx as usize;
             let color = regs.edx;
-            // TODO: Check if coordinates are valid and if the framebuffer is mapped correctly for user access.
+            // TODO: Add bounds checking and potentially user memory validation.
             crate::framebuffer::FRAMEBUFFER.lock().draw_pixel(x, y, color);
         },
         4 => { // Syscall 4: Sleep
@@ -76,8 +74,7 @@ pub fn syscall_handler_rust(regs_ptr: &mut SyscallRegisters) -> u32 {
             let ticks_to_sleep = ms / 10; // Assuming 100Hz PIT = 10ms per tick
             
             let mut sched = crate::scheduler::SCHEDULER.lock();
-            // Only allow sleeping if called from user mode.
-            if regs.is_user() {
+            if regs.is_user() { // Only allow user processes to sleep
                 if let Some(pid) = sched.current_pid {
                     let wakeup_tick = sched.ticks + ticks_to_sleep;
                     if pid < sched.processes.len() {
@@ -89,21 +86,18 @@ pub fn syscall_handler_rust(regs_ptr: &mut SyscallRegisters) -> u32 {
             return_val = crate::scheduler::schedule(regs_ptr as *mut _ as u32);
         },
         5 => { // Syscall 5: Exit Process
-            // Only allow user processes to exit via syscall.
-            if regs.is_user() {
+            if regs.is_user() { // Only allow user processes to exit
                 return_val = crate::scheduler::exit_current_process(regs_ptr as *mut _ as u32);
             } else {
                 serial_println!("Kernel tried to exit via syscall!");
-                // Prevent kernel from exiting. Maybe panic or just ignore.
             }
         },
         6 => { // Syscall 6: Spawn (Exec) New Process
             // ebx: entry point address (virtual address)
-            // For now, only allow user mode to spawn.
-            if regs.is_user() {
+            if regs.is_user() { // Only allow user mode to spawn for now
                  let entry_point = regs.ebx;
                  let user_kernel_stack_size = 4096; // Default sizes
-                 let user_stack_size = 4096 * 4;
+                 let user_stack_size = 4096 * 4; // 16KB user stack
 
                  // NOTE: This currently uses the kernel's page directory.
                  // A proper exec would load a new program and create a new page directory.
@@ -118,12 +112,11 @@ pub fn syscall_handler_rust(regs_ptr: &mut SyscallRegisters) -> u32 {
             serial_println!("Unknown syscall: {}", eax);
         }
     }
-    // Write the potentially modified registers back to the original pointer
+    // Write the (potentially modified) registers back to the original pointer
     *regs_ptr = regs;
     return_val
 }
 
-/// Helper function to trigger a syscall from kernel-land (for testing)
 #[allow(dead_code)]
 pub fn test_syscall() {
     unsafe {
@@ -136,7 +129,6 @@ pub fn test_syscall() {
     }
 }
 
-/// Userspace-style wrapper to spawn a new process at the given entry point
 #[allow(dead_code)]
 pub fn syscall_exec(entry_point: u32) {
     unsafe {
@@ -148,7 +140,6 @@ pub fn syscall_exec(entry_point: u32) {
     }
 }
 
-/// Userspace-style wrapper to sleep for a duration
 #[allow(dead_code)]
 pub fn syscall_sleep(ms: u32) {
     unsafe {
@@ -160,7 +151,6 @@ pub fn syscall_sleep(ms: u32) {
     }
 }
 
-/// Userspace-style wrapper to exit the current process
 #[allow(dead_code)]
 pub fn syscall_exit() -> ! {
     unsafe {
@@ -172,7 +162,6 @@ pub fn syscall_exit() -> ! {
     }
 }
 
-/// Userspace-style wrapper to yield the current time slice
 #[allow(dead_code)]
 pub fn syscall_yield() {
     unsafe {
@@ -184,7 +173,6 @@ pub fn syscall_yield() {
     }
 }
 
-/// Userspace-style wrapper to get time via syscall
 #[allow(dead_code)]
 pub fn syscall_get_time() -> (u32, u32, u32) {
     let h: u32; let m: u32; let s: u32;
@@ -201,7 +189,6 @@ pub fn syscall_get_time() -> (u32, u32, u32) {
     (h, m, s)
 }
 
-/// Userspace-style wrapper to draw a pixel via syscall
 #[allow(dead_code)]
 pub fn syscall_draw_pixel(x: u32, y: u32, color: u32) {
     unsafe {

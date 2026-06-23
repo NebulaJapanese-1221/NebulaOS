@@ -1,6 +1,6 @@
 use crate::framebuffer::{Framebuffer, Rect};
 use crate::gui::{draw_string, TITLE_BAR_HEIGHT};
-use alloc::string::String;
+use alloc::string::{String, ToString}; // Import ToString
 use alloc::vec::Vec;
 
 pub struct TerminalState {
@@ -13,8 +13,8 @@ pub struct TerminalState {
 impl TerminalState {
     pub fn new() -> Self {
         Self {
-            buffer: String::new(),
-            cursor_pos: 0,
+            buffer: String::from("> "), // Start with prompt
+            cursor_pos: 2, // Cursor starts after "> "
             history: Vec::new(),
             history_idx: None,
         }
@@ -25,33 +25,49 @@ impl TerminalState {
             "ver" => {
                 self.buffer.push_str("NebulaOS v0.0.1\n");
             }
+            "cls" => { // New command: Clear Screen
+                self.buffer.clear();
+                self.buffer.push_str("> ");
+                self.cursor_pos = 2; // Reset cursor position after clearing
+            }
             "" => { /* Do nothing on empty input */ }
             _ => {
                 self.buffer.push_str(&format!("Command not found: {}\n", cmd));
             }
         }
         // Add command to history if it's not empty and not a duplicate of the last entry
-        if !cmd.trim().is_empty() && (self.history.is_empty() || self.history.last().unwrap() != cmd) {
+        if !cmd.trim().is_empty() && cmd.trim() != "cls" && (self.history.is_empty() || self.history.last().unwrap() != cmd) {
             self.history.push(cmd.to_string());
         }
         self.history_idx = None; // Reset history index after executing a command
-        self.buffer.push_str("> ");
-        self.cursor_pos = self.buffer.len();
+        // If the command was not 'cls', we add a new prompt. If it was 'cls', the prompt is already there.
+        if cmd.trim() != "cls" {
+            self.buffer.push_str("> ");
+            self.cursor_pos = self.buffer.len(); // Move cursor to end of new prompt
+        }
     }
 
     pub fn handle_keypress(&mut self, c: char) {
         match c {
             '\n' => { // Enter key
-                let cmd = self.buffer[self.buffer.rfind('>' ..= self.buffer.len()).unwrap_or(0)..].trim_start_matches('>').trim().to_string();
+                // Extract command part after the last "> "
+                let cmd_start_idx = self.buffer.rfind('>').map_or(0, |idx| idx + 1); // Find last '>' and move past it
+                let cmd = self.buffer[cmd_start_idx..].trim().to_string(); // Trim whitespace
                 self.process_command(&cmd);
             }
             '\x08' => { // Backspace key
                 if self.cursor_pos > 0 {
-                    self.buffer.remove(self.cursor_pos - 1);
-                    self.cursor_pos -= 1;
+                    // Remove character before cursor if not at the beginning of the buffer
+                    // Ensure we don't delete the prompt characters "> "
+                    if self.cursor_pos > self.buffer.rfind('>').map_or(0, |idx| idx + 1) { 
+                        self.buffer.remove(self.cursor_pos - 1);
+                        self.cursor_pos -= 1;
+                    }
                 }
             }
+            // TODO: Add arrow key handling for history navigation (up/down)
             _ => { // Regular character
+                // Insert character at current cursor position
                 self.buffer.insert(self.cursor_pos, c);
                 self.cursor_pos += 1;
             }
@@ -62,36 +78,42 @@ impl TerminalState {
 pub struct TerminalApp;
 
 impl TerminalApp {
-    pub fn draw(fb: &mut Framebuffer, bounds: Rect, state: &TerminalState) {
+    pub fn draw(fb: &mut Framebuffer, bounds: Rect, state: &mut TerminalState) { // Changed to &mut state
         let x = bounds.x as usize;
         let y = bounds.y as usize + TITLE_BAR_HEIGHT as usize;
         let w = bounds.width as usize;
         let h = (bounds.height as usize).saturating_sub(TITLE_BAR_HEIGHT as usize);
 
-        // Background
-        fb.draw_rect(x, y, w, h, 0x00000000); // Black background
+        // Clear the entire window area first if 'cls' command was processed
+        // We check if the buffer starts with "> " and contains no other lines yet.
+        // This is a simple heuristic for detecting a cleared state.
+        if state.buffer.starts_with("> ") && state.buffer.lines().count() <= 2 { // "> ", "\n", "> "
+            fb.draw_rect(x, y, w, h, 0x00000000); // Black background
+        } else {
+            // If not cleared, redraw the buffer content
+            let mut current_y = y + 5;
+            let mut line_start = 0;
+            let mut lines_drawn = 0;
+            let max_lines = h / 12; // Approx max lines based on font height
 
-        // Display buffer content
-        let mut current_y = y + 5;
-        let mut line_start = 0;
-        for (i, char) in state.buffer.char_indices() {
-            if char == '\n' {
-                let line = &state.buffer[line_start..i];
-                draw_string(fb, x + 5, current_y, line, 0x00FFFFFF); // White text
-                current_y += 12; // Line height
-                line_start = i + 1;
+            for (i, char) in state.buffer.char_indices() {
+                if char == '\n' {
+                    let line = &state.buffer[line_start..i];
+                    if lines_drawn < max_lines {
+                        draw_string(fb, x + 5, current_y, line, 0x00FFFFFF); // White text
+                        current_y += 12; // Line height
+                        lines_drawn += 1;
+                    } else {
+                        // TODO: Implement scrolling if buffer exceeds screen height
+                    }
+                    line_start = i + 1;
+                }
             }
-        }
-        // Draw the last line (or only line if no newline)
-        let last_line = &state.buffer[line_start..];
-        draw_string(fb, x + 5, current_y, last_line, 0x00FFFFFF);
-
-        // Draw prompt at the end of the buffer
-        if state.buffer.is_empty() || state.buffer.ends_with('\n') {
-            let prompt = "> ";
-            draw_string(fb, x + 5, current_y + 12, prompt, 0x0000FF00); // Green prompt
-            // Cursor should be after prompt
-            state.cursor_pos = state.buffer.len() + prompt.len();
+            // Draw the last line (or only line if no newline)
+            let last_line = &state.buffer[line_start..];
+            if lines_drawn < max_lines {
+                draw_string(fb, x + 5, current_y, last_line, 0x00FFFFFF);
+            }
         }
     }
 

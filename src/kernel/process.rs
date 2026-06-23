@@ -1,7 +1,8 @@
 use crate::syscalls::SyscallRegisters;
-use crate::memory::paging::{PageEntry, PAGE_WRITABLE, PAGE_USER, PAGE_PRESENT, PAGE_SIZE}; // Import paging structures
+use crate::memory::paging::{PageEntry, PAGE_WRITABLE, PAGE_USER, PAGE_PRESENT, PAGE_SIZE};
+use crate::allocator::ALLOCATOR; // Import the global allocator
 use alloc::boxed::Box;
-use alloc::vec::Vec;
+use alloc::vec::Vec; // Keep if used elsewhere, otherwise remove
 use core::arch::asm;
 
 #[derive(Debug, PartialEq, Copy, Clone)]
@@ -13,7 +14,6 @@ pub enum ProcessState {
     Dead,
 }
 
-// Adjusted to include page directory and user stack info
 pub struct Process {
     pub id: usize,
     pub state: ProcessState,
@@ -26,17 +26,15 @@ pub struct Process {
 }
 
 impl Process {
-    // This `new` function will need to be more sophisticated to set up a user process context.
-    // For now, it's still largely kernel-focused but includes paging fields.
+    // Creates a new kernel task (like the initial kmain thread).
     #[allow(dead_code)]
     pub fn new_kernel_task(id: usize, entry_point: u32) -> Box<Self> {
         let mut p = Box::new(Self {
             id,
             state: ProcessState::Ready,
             kernel_stack_ptr: 0,
-            stack: [0; 4096],
+            stack: [0; 4096], // Kernel stack
 
-            // For kernel tasks, use the kernel's page directory.
             page_directory_phys_addr: crate::memory::paging::get_kernel_page_directory_phys_addr(),
             user_stack_base: 0, // Not applicable for kernel tasks
             user_eip: 0,        // Not applicable for kernel tasks
@@ -61,31 +59,27 @@ impl Process {
     }
 
     /// Creates a new process for user-space execution.
-    /// Requires: entry_point, user_stack_size, kernel_stack_size
     #[allow(dead_code)]
     pub fn new_user_process(
         id: usize,
         entry_point: u32, // Virtual address of the user program's entry point
         user_stack_size: usize,
         kernel_stack_size: usize,
-        // In a real scenario, you'd also pass program data/sections here.
     ) -> Box<Self> {
-        // 1. Allocate physical memory for the page directory.
-        //    This requires a physical memory allocator. For now, placeholder.
+        // 1. Get a page directory. For now, use kernel's, but should be a new one.
         let page_directory_phys_addr = crate::memory::paging::create_user_page_directory();
-        // TODO: Allocate actual physical memory for this page directory.
-
-        // 2. Allocate kernel stack for this process.
+        
+        // 2. Allocate kernel stack for this process using the global kernel heap.
         let kernel_stack_base = unsafe {
             let layout = alloc::alloc::Layout::from_size_align(kernel_stack_size, 16).unwrap();
-            let ptr = crate::allocator::ALLOCATOR.alloc(layout) as u32; // Use kernel heap
+            let ptr = ALLOCATOR.alloc(layout) as u32;
             ptr + kernel_stack_size as u32 // Stack grows downwards
         };
 
-        // 3. Allocate user stack.
+        // 3. Allocate user stack using the global kernel heap.
         let user_stack_base = unsafe {
             let layout = alloc::alloc::Layout::from_size_align(user_stack_size, 16).unwrap();
-            let ptr = crate::allocator::ALLOCATOR.alloc(layout) as u32; // Use kernel heap
+            let ptr = ALLOCATOR.alloc(layout) as u32;
             ptr + user_stack_size as u32 // Stack grows downwards
         };
         // TODO: Map this user stack region in the process's page directory.
@@ -103,8 +97,10 @@ impl Process {
 
         // Setup initial registers on the kernel stack for the first context switch to user mode.
         // This frame will be used by IRETD.
+        let current_kernel_stack_top = p.kernel_stack_ptr; // Get the top of the kernel stack
+        let regs_ptr = (current_kernel_stack_top as usize - core::mem::size_of::<SyscallRegisters>()) as *mut SyscallRegisters;
+        
         unsafe {
-            let regs_ptr = (p.kernel_stack_ptr as usize - core::mem::size_of::<SyscallRegisters>()) as *mut SyscallRegisters;
             let regs = &mut *regs_ptr;
             core::ptr::write(regs, core::mem::zeroed());
 
@@ -119,20 +115,17 @@ impl Process {
             regs.gs = 0; regs.fs = 0; regs.es = 0; regs.ds = 0; // Initial kernel segments
             regs.kernel_esp = regs_ptr as u32; // This is the current kernel stack pointer
             
-            // Map user stack into the process's page directory (placeholder)
-            // TODO: This requires actually setting up page tables.
-            // For now, the page directory is just a copy of kernel's.
-            // let user_stack_phys = ... // Allocate physical frames for user stack
-            // map_page(p.page_directory_phys_addr, p.user_stack_base, user_stack_phys, PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
-
+            // TODO: Map user stack into the process's page directory.
         }
 
-        p.kernel_stack_ptr = regs_ptr as u32; // Update the saved kernel stack pointer
+        // Update the process's kernel_stack_ptr to the newly created frame.
+        p.kernel_stack_ptr = regs_ptr as u32; 
         p
     }
 }
 
-// Dummy function to create a user process. Replace with ELF loading.
+/// Dummy function to create a user process for testing.
+/// In a real OS, this would parse an ELF and set up mappings.
 #[allow(dead_code)]
 pub fn create_user_process(
     id: usize,
@@ -140,8 +133,5 @@ pub fn create_user_process(
     user_stack_size: usize,
     kernel_stack_size: usize,
 ) -> Box<Process> {
-    // This is where you would parse an ELF file, map its sections,
-    // and then call `new_user_process` with the correct parameters.
-    // For now, we'll just simulate it.
     Process::new_user_process(id, entry_point, user_stack_size, kernel_stack_size)
 }

@@ -19,14 +19,12 @@ impl Scheduler {
         }
     }
 
-    // Renamed add_process to be more specific to kernel tasks
     #[allow(dead_code)]
     pub fn add_kernel_task(&mut self, entry_point: u32) {
         let id = self.processes.len();
         self.processes.push(Process::new_kernel_task(id, entry_point));
     }
 
-    // New method to spawn a user process
     #[allow(dead_code)]
     pub fn spawn_user_process(
         &mut self,
@@ -46,35 +44,32 @@ impl Scheduler {
     }
 
     pub fn spawn(&mut self, entry_point: u32) {
-        // For backward compatibility, assume kernel task if only entry point is given
+        // Default to kernel task if only entry point is provided
         self.add_kernel_task(entry_point);
     }
 }
 
 pub static SCHEDULER: Spinlock<Scheduler> = Spinlock::new(Scheduler::new());
 
-/// Removes the current process and switches to the next one.
 pub fn exit_current_process(regs_ptr: u32) -> u32 {
     let mut sched = SCHEDULER.lock();
     if let Some(pid) = sched.current_pid.take() {
         if pid < sched.processes.len() {
-            // Remove process from the list
             sched.processes.remove(pid);
-            // Adjust current_pid if necessary (e.g., if it was the last process)
+            // Adjust current_pid if necessary
             if pid == sched.processes.len() {
-                 sched.current_pid = Some(0); // Wrap around or handle empty list
+                 sched.current_pid = if sched.processes.is_empty() { None } else { Some(0) };
             } else if !sched.processes.is_empty() {
-                 sched.current_pid = Some(pid); // New process at this index
+                 sched.current_pid = Some(pid);
             } else {
-                 sched.current_pid = None; // No processes left
+                 sched.current_pid = None;
             }
         }
     }
-    drop(sched); // Release lock before potentially long schedule operation
-    schedule(regs_ptr) // Schedule the next process
+    drop(sched);
+    schedule(regs_ptr)
 }
 
-/// Increments system ticks. Called by the timer interrupt.
 pub fn timer_tick() {
     SCHEDULER.lock().ticks += 1;
 }
@@ -87,20 +82,16 @@ pub extern "C" fn schedule(regs_ptr: u32) -> u32 {
     if let Some(pid) = sched.current_pid.take() {
         if pid < sched.processes.len() {
             let proc = &mut sched.processes.as_mut_slice()[pid];
-            // Store the current state of the registers as the process's context
-            proc.kernel_stack_ptr = regs_ptr;
-            // Only revert to Ready if it was explicitly Running.
-            // Sleeping processes should not be reset to Ready here.
+            proc.kernel_stack_ptr = regs_ptr; // Save current kernel stack top
             if proc.state == ProcessState::Running {
-                proc.state = ProcessState::Ready;
+                proc.state = ProcessState::Ready; // Reset to Ready if it was Running
             }
         }
     }
 
-    // If no processes, return current registers (should ideally halt or panic)
     if sched.processes.is_empty() {
-        // This should not happen in a running system.
-        // Perhaps halt the CPU or trigger a kernel panic.
+        serial_println!("Scheduler: No processes to run!");
+        // Halt or enter an idle state. For now, return current regs.
         return regs_ptr;
     }
 
@@ -120,10 +111,9 @@ pub extern "C" fn schedule(regs_ptr: u32) -> u32 {
             _ => { // Continue to next process
                 next_pid = (next_pid + 1) % sched.processes.len();
                 if next_pid == start_idx {
-                    // Went through all processes and found no one ready.
-                    // This could happen if all are sleeping or dead.
-                    // Return current registers, effectively idling.
-                    return regs_ptr;
+                    // Went through all processes, none ready or awake.
+                    serial_println!("Scheduler: CPU Idle. All processes sleeping or dead.");
+                    return regs_ptr; // Return current regs, effectively idling.
                 }
             }
         }
@@ -134,15 +124,12 @@ pub extern "C" fn schedule(regs_ptr: u32) -> u32 {
     let next_proc = &mut sched.processes.as_mut_slice()[next_pid];
     next_proc.state = ProcessState::Running;
 
-    // --- CRITICAL for Paging ---
-    // Load the page directory of the new process into CR3.
+    // CRITICAL for Paging: Load the page directory of the new process into CR3.
     unsafe {
         asm!("mov cr3, {}", in(reg) next_proc.page_directory_phys_addr);
     }
 
     // Update the TSS with the kernel stack for the NEW process.
-    // This ensures that if an interrupt or syscall occurs while in user mode,
-    // the CPU switches to the correct kernel stack for this process.
     crate::gdt::set_kernel_stack(next_proc.kernel_stack_ptr);
 
     // Return the context (kernel stack pointer) of the process to be restored.
