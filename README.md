@@ -2,6 +2,9 @@
 
 A hobbyist 32-bit operating system written in Rust for the i686 architecture.
 
+# Notice
+Development of NebulaOS is currently paused as I am currently working on other projects.
+
 ## License
 
 This project is licensed under the GNU General Public License (GPL) v3.0.
