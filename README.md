@@ -34,6 +34,3 @@ make run
 Donations are completely voluntary and are welcome.
 I currently only accept cryptocurrency donations.
 BTC (Lightning Network): shabbyjoke61@walletofsatoshi.com
-
-## Notice
-Development of NebulaOS is currently paused as I am currently working on other projects.
