@@ -11,7 +11,7 @@ pub struct TextEditorState {
 impl TextEditorState {
     pub fn new() -> Self {
         Self {
-            content: String::from(""),
+            content: String::new(),
             cursor_pos: 0,
             blink_state: true,
         }

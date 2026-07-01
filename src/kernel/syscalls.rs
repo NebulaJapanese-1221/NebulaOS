@@ -1,9 +1,5 @@
 use crate::serial_println;
 use crate::process::ProcessState;
-use crate::allocator::ALLOCATOR; // Import the allocator
-use alloc::string::ToString; // For .to_string()
-use alloc::vec::Vec; // Needed for process list in scheduler and history in terminal
-use core::arch::asm;
 
 #[repr(C, packed)]
 #[derive(Copy, Clone)]
@@ -21,6 +17,7 @@ impl SyscallRegisters {
         (self.cs & 0x3) == 3 
     }
 
+    #[allow(dead_code)]
     pub fn get_user_esp(&self) -> u32 {
         if self.is_user() {
             self.esp 

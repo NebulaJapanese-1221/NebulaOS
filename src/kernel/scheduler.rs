@@ -44,6 +44,7 @@ impl Scheduler {
         id // Return the new process ID
     }
 
+    #[allow(dead_code)]
     pub fn spawn(&mut self, entry_point: u32) {
         self.add_kernel_task(entry_point);
     }

@@ -14,12 +14,14 @@ pub const CURSOR_BITMAP: [u16; 19] = [
 pub enum AppType {
     None,
     Calculator,
+    Terminal,
     TextEditor,
 }
 
 pub enum AppData {
     None,
     Calculator(crate::apps::calculator::CalculatorState),
+    Terminal(crate::apps::terminal::TerminalState),
     TextEditor(crate::apps::text_editor::TextEditorState),
 }
 
@@ -27,6 +29,7 @@ impl AppData {
     pub fn draw(&self, fb: &mut Framebuffer, bounds: Rect, is_focused: bool) {
         match self {
             AppData::Calculator(state) => crate::apps::calculator::CalculatorApp::draw(fb, bounds, state), // Calculator doesn't use is_focused yet
+            AppData::Terminal(state) => crate::apps::terminal::TerminalApp::draw(fb, bounds, state),
             AppData::TextEditor(state) => crate::apps::text_editor::TextEditorApp::draw(fb, bounds, state, is_focused),
             AppData::None => {}
         }
@@ -36,6 +39,7 @@ impl AppData {
         match self {
             AppData::TextEditor(state) => crate::apps::text_editor::TextEditorApp::handle_keyboard_input(state, c),
             AppData::Calculator(state) => crate::apps::calculator::CalculatorApp::handle_keyboard_input(state, c),
+            AppData::Terminal(state) => crate::apps::terminal::TerminalApp::handle_keypress(state, c),
             AppData::None => {}
         }
     }
@@ -43,6 +47,7 @@ impl AppData {
     pub fn handle_click(&mut self, bounds: Rect, mx: i32, my: i32) {
         match self {
             AppData::Calculator(state) => crate::apps::calculator::CalculatorApp::handle_click(state, bounds, mx, my),
+            AppData::Terminal(state) => crate::apps::terminal::TerminalApp::handle_click(state, bounds, mx, my),
             AppData::TextEditor(state) => crate::apps::text_editor::TextEditorApp::handle_click(state, bounds, mx, my),
             AppData::None => {}
         }
@@ -149,7 +154,6 @@ impl WindowManager {
                 } else {
                     // Clicked outside context menu, close it
                     self.context_menu = None;
-                    menu_toggle = true;
                 }
             }
 

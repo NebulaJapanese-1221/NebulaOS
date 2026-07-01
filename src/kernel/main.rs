@@ -30,8 +30,6 @@ mod memory; // New module for paging
 
 use allocator::ALLOCATOR; 
 use core::arch::asm;
-use alloc::vec::Vec; // Required for processes Vec
-use gui::{CURSOR_BITMAP, CURSOR_WIDTH, CURSOR_HEIGHT};
 use framebuffer::FRAMEBUFFER;
 
 #[path = "../drivers/vga.rs"]
@@ -90,9 +88,6 @@ struct MultibootInfo {
     fb_type: u8,
 }
 
-const TASKBAR_HEIGHT: u32 = 40;
-static mut LAST_MOUSE_X: i32 = 0;
-static mut LAST_MOUSE_Y: i32 = 0;
 
 core::arch::global_asm!(
     ".global _start",
@@ -247,19 +242,20 @@ pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
 
     let entry_point_virtual_addr = user_program_entry as *const () as u32;
     
-    let new_pid = {
+        let new_pid = {
         let mut sched = scheduler::SCHEDULER.lock();
         sched.spawn_user_process(
             entry_point_virtual_addr,
             user_stack_size,
-            kernel_stack_size,
+                user_kernel_stack_size,
         )
     };
     
     unsafe {
         // Retrieve the process from the scheduler's list using the obtained PID.
-        // Ensure the scheduler is locked to safely access the process list.
-        let process = match scheduler::SCHEDULER.lock().processes.get(new_pid) {
+        // Keep the scheduler lock guard in scope so the borrowed reference remains valid.
+        let sched_guard = scheduler::SCHEDULER.lock();
+        let process = match sched_guard.processes.get(new_pid) {
             Some(proc) => proc,
             None => {
                 serial_println!("Error: Could not find process with PID {} after spawning.", new_pid);
@@ -268,7 +264,6 @@ pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
             }
         };
         
-        // Now access process fields safely.
         gdt::set_kernel_stack(process.kernel_stack_ptr);
         asm!("mov cr3, {}", in(reg) process.page_directory_phys_addr);
         

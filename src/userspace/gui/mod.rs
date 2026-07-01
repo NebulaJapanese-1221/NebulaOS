@@ -133,6 +133,6 @@ pub fn render_ui(fb: &mut Framebuffer, start_menu_open: bool, h: u8, m: u8, s: u
 
     // 5. Draw Start Menu
     if start_menu_open {
-        start_menu::draw(fb, ty);
+        start_menu::draw(fb, ty as u32);
     }
 }

@@ -1,7 +1,9 @@
 use crate::framebuffer::{Framebuffer, Rect};
 use crate::gui::{draw_string, TITLE_BAR_HEIGHT};
 use alloc::string::{String, ToString}; // Import ToString
-use alloc::vec::Vec; // Keep if used elsewhere, otherwise remove
+use alloc::format;
+use libm;
+
 
 #[derive(PartialEq)]
 pub enum CalcMode {
@@ -22,12 +24,12 @@ pub struct CalculatorState {
 impl CalculatorState {
     pub fn new() -> Self {
         Self {
-            display: String::from("0"),
+            display: "0".to_string(),
             last_val: 0,
             op: None,
             clear_on_next: false,
             mode: CalcMode::Standard,
-            graph_func: String::from("x"),
+            graph_func: "x".to_string(),
         }
     }
 }
@@ -67,21 +69,21 @@ impl CalculatorApp {
     fn draw_buttons(fb: &mut Framebuffer, x: usize, y: usize, w: usize, h: usize, state: &CalculatorState) {
         // Scientific mode has 20 buttons (4x5 grid), Standard has 16 (4x4 grid).
         // Let's use 4 columns for all.
-        let labels = match state.mode {
-            CalcMode::Standard => [
+        let labels: &[&str] = match state.mode {
+            CalcMode::Standard => &[
                 "7", "8", "9", "/",
                 "4", "5", "6", "*",
                 "1", "2", "3", "-",
                 "0", "C", "=", "+"
             ],
-            CalcMode::Scientific => [
+            CalcMode::Scientific => &[
                 "sin", "cos", "tan", "sqrt", // Row 1 (4 buttons)
                 "7", "8", "9", "/",          // Row 2 (4 buttons)
                 "4", "5", "6", "*",          // Row 3 (4 buttons)
                 "1", "2", "3", "-",          // Row 4 (4 buttons)
                 "0", "C", "=", "+"           // Row 5 (4 buttons)
             ],
-            _ => [], // Should not happen for draw_buttons
+            _ => &[], // Should not happen for draw_buttons
         };
 
         let padding = 8;
@@ -198,21 +200,21 @@ impl CalculatorApp {
             let col = rel_x / cell_w;
             let row = rel_y / cell_h;
             
-            let labels = match state.mode {
-                CalcMode::Standard => [
+            let labels: &[&str] = match state.mode {
+                CalcMode::Standard => &[
                     "7", "8", "9", "/",
                     "4", "5", "6", "*",
                     "1", "2", "3", "-",
                     "0", "C", "=", "+"
                 ],
-                CalcMode::Scientific => [
+                CalcMode::Scientific => &[
                     "sin", "cos", "tan", "sqrt", // Row 1 (4 buttons)
                     "7", "8", "9", "/",          // Row 2 (4 buttons)
                     "4", "5", "6", "*",          // Row 3 (4 buttons)
                     "1", "2", "3", "-",          // Row 4 (4 buttons)
                     "0", "C", "=", "+"           // Row 5 (4 buttons)
                 ],
-                _ => [], // Should not happen for handle_click when mode is not Graphing
+                _ => &[], // Should not happen for handle_click when mode is not Graphing
             };
             
             if let Some(label) = labels.get((row * cols + col) as usize) {
@@ -249,7 +251,7 @@ impl CalculatorApp {
                 state.clear_on_next = true;
             }
             "C" => { // Clear button
-                state.display = String::from("0");
+                state.display = "0".to_string();
                 state.last_val = 0;
                 state.op = None;
                 state.clear_on_next = false;
@@ -258,10 +260,10 @@ impl CalculatorApp {
             "sin" | "cos" | "tan" | "sqrt" => {
                 let val: f32 = state.display.parse().unwrap_or(0.0);
                 let res = match label {
-                    "sin" => val.to_radians().sin(),
-                    "cos" => val.to_radians().cos(),
-                    "tan" => val.to_radians().tan(),
-                    "sqrt" => val.sqrt(),
+                    "sin" => libm::sinf(val.to_radians()),
+                    "cos" => libm::cosf(val.to_radians()),
+                    "tan" => libm::tanf(val.to_radians()),
+                    "sqrt" => libm::sqrtf(val),
                     _ => 0.0, // Should not happen
                 };
                 // Format result to a reasonable precision
@@ -294,7 +296,7 @@ impl CalculatorApp {
                 // 's' => "sin".to_string(), 
                 _ => return, // Ignore other keys
             };
-            Self::process_input(state, &label);
+            Self::process_input(state, label.as_str());
         }
     }
 }

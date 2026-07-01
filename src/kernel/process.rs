@@ -1,10 +1,7 @@
 use crate::syscalls::SyscallRegisters;
-use crate::memory::paging::{PageEntry, PAGE_WRITABLE, PAGE_USER, PAGE_PRESENT, PAGE_SIZE};
 use crate::allocator::ALLOCATOR; // Import the global allocator
+use core::alloc::GlobalAlloc; // For calling alloc on the allocator
 use alloc::boxed::Box;
-use alloc::vec::Vec; // Needed for process list
-use core::arch::asm; // For inline assembly
-use alloc::string::ToString; // For .to_string()
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum ProcessState {
@@ -16,6 +13,7 @@ pub enum ProcessState {
 }
 
 pub struct Process {
+    #[allow(dead_code)]
     pub id: usize,
     pub state: ProcessState,
     pub kernel_stack_ptr: u32, // Pointer to the current top of the kernel stack for this process

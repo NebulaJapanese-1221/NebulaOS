@@ -1,7 +1,5 @@
-use crate::framebuffer::{Framebuffer, Rect};
+use crate::framebuffer::Framebuffer;
 use crate::gui::{draw_string, Window, WindowManager, AppType, TITLE_BAR_HEIGHT};
-use alloc::string::{String, ToString}; // Import ToString
-use alloc::vec::Vec; // Needed for history
 
 // Constants for layout and appearance
 const START_MENU_WIDTH: u32 = 250;
@@ -15,10 +13,7 @@ const MENU_TEXT_COLOR: u32 = 0xFFFFFF;
 // Make AppType public in window_manager.rs to include Terminal
 // For now, assuming it's fixed.
 
-pub fn draw(fb: &mut Framebuffer, y_start: u32, start_menu_open: bool) {
-    if !start_menu_open {
-        return;
-    }
+pub fn draw(fb: &mut Framebuffer, y_start: u32) {
     
     let menu_y = y_start - START_MENU_HEIGHT;
     
@@ -42,7 +37,6 @@ pub fn draw(fb: &mut Framebuffer, y_start: u32, start_menu_open: bool) {
     // Terminal Entry
     fb.draw_rect(item_area_x_start, current_y as usize, item_area_x_end, MENU_ITEM_HEIGHT as usize, MENU_ITEM_BG_COLOR);
     draw_string(fb, (MENU_ITEM_PADDING + 5) as usize, (current_y + 8) as usize, "Terminal", MENU_TEXT_COLOR);
-    current_y += MENU_ITEM_HEIGHT + MENU_ITEM_PADDING;
 }
 
 pub fn handle_click(mx: i32, my: i32, height: i32, wm: &mut WindowManager, start_menu_open: &mut bool) {
@@ -72,7 +66,7 @@ pub fn handle_click(mx: i32, my: i32, height: i32, wm: &mut WindowManager, start
         wm.windows.push(Window::new("Calculator", 300, 200, 220, 300, AppType::Calculator));
         opened_app = true;
     }
-    current_item_y += MENU_ITEM_HEIGHT + MENU_ITEM_PADDING;
+        current_item_y += (MENU_ITEM_HEIGHT + MENU_ITEM_PADDING) as i32;
 
     // Text Editor entry
     if mx >= item_area_x_start && mx <= item_area_x_end &&
@@ -80,7 +74,7 @@ pub fn handle_click(mx: i32, my: i32, height: i32, wm: &mut WindowManager, start
         wm.windows.push(Window::new("Text Editor", 350, 250, 400, 300, AppType::TextEditor));
         opened_app = true;
     }
-    current_item_y += MENU_ITEM_HEIGHT + MENU_ITEM_PADDING;
+        current_item_y += (MENU_ITEM_HEIGHT + MENU_ITEM_PADDING) as i32;
     
     // Terminal entry
     if mx >= item_area_x_start && mx <= item_area_x_end &&

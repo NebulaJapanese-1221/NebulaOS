@@ -2,6 +2,7 @@ use crate::framebuffer::{Framebuffer, Rect};
 use crate::gui::{draw_string, TITLE_BAR_HEIGHT};
 use alloc::string::{String, ToString}; // Import ToString
 use alloc::vec::Vec; // Needed for history
+use alloc::format;
 
 #[derive(Debug)] // Add Debug derive for easier debugging
 pub struct TerminalState {
@@ -14,7 +15,7 @@ pub struct TerminalState {
 impl TerminalState {
     pub fn new() -> Self {
         Self {
-            buffer: String::from("> "), // Start with prompt
+            buffer: String::from("> ".to_string()), // Start with prompt
             cursor_pos: 2, // Cursor starts after "> "
             history: Vec::new(),
             history_idx: None,
@@ -54,7 +55,7 @@ impl TerminalState {
             '\n' => { // Enter key
                 // Extract command part after the last "> "
                 let cmd_start_idx = self.buffer.rfind('>').map_or(0, |idx| idx + 1); // Find last '>' and move past it
-                let cmd = self.buffer[cmd_start_idx..].trim().to_string(); // Trim whitespace
+                let cmd = self.buffer.chars().skip(cmd_start_idx).collect::<String>().trim().to_string(); // Trim whitespace
                 self.process_command(&cmd);
             }
             '\x08' => { // Backspace key
@@ -80,7 +81,7 @@ impl TerminalState {
 pub struct TerminalApp;
 
 impl TerminalApp {
-    pub fn draw(fb: &mut Framebuffer, bounds: Rect, state: &mut TerminalState) { // Changed to &mut state
+    pub fn draw(fb: &mut Framebuffer, bounds: Rect, state: &TerminalState) {
         let x = bounds.x as usize;
         let y = bounds.y as usize + TITLE_BAR_HEIGHT as usize;
         let w = bounds.width as usize;
@@ -96,29 +97,23 @@ impl TerminalApp {
         } else {
             // If not cleared, redraw the buffer content
             let mut current_y = y + 5;
-            let mut line_start = 0;
             let mut lines_drawn = 0;
             let max_lines = h / 12; // Approx max lines based on font height
 
-            for (i, char) in state.buffer.char_indices() {
-                if char == '\n' {
-                    let line = &state.buffer[line_start..i];
-                    if lines_drawn < max_lines {
-                        draw_string(fb, x + 5, current_y, line, 0x00FFFFFF); // White text
-                        current_y += 12; // Line height
-                        lines_drawn += 1;
-                    } else {
-                        // TODO: Implement scrolling if buffer exceeds screen height
-                    }
-                    line_start = i + 1;
+            for line in state.buffer.lines() {
+                if lines_drawn < max_lines {
+                    draw_string(fb, x + 5, current_y, line, 0x00FFFFFF); // White text
+                    current_y += 12; // Line height
+                    lines_drawn += 1;
+                } else {
+                    // TODO: Implement scrolling if buffer exceeds screen height
                 }
             }
-            // Draw the last line (or only line if no newline)
-            let last_line = &state.buffer[line_start..];
-            if lines_drawn < max_lines {
-                draw_string(fb, x + 5, current_y, last_line, 0x00FFFFFF);
-            }
         }
+    }
+
+    pub fn handle_click(_state: &mut TerminalState, _bounds: Rect, _mx: i32, _my: i32) {
+        // Terminal doesn't have clickable UI yet; placeholder for future input handling
     }
 
     pub fn handle_keypress(state: &mut TerminalState, c: char) {

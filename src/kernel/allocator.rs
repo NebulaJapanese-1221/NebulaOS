@@ -58,6 +58,7 @@ impl LinkedHeap {
 
 // --- Define the static ALLOCATOR instance ---
 // This makes the heap accessible globally via `crate::allocator::ALLOCATOR`
+#[global_allocator]
 pub static ALLOCATOR: LinkedHeap = LinkedHeap::empty();
 // -------------------------------------------
 

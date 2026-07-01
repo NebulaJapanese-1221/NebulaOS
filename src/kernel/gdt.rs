@@ -1,6 +1,7 @@
 use core::arch::asm;
 
 #[repr(C, packed)]
+#[derive(Copy, Clone)]
 struct GdtEntry {
     limit_low: u16,
     base_low: u16,
@@ -29,19 +30,15 @@ pub struct Tss {
 }
 
 static mut TSS: Tss = Tss {
-    prev_tss: 0, esp0: 0, ss0: 0x10, // ss0 is Kernel Data
+    prev_tss: 0, esp0: 0, ss0: 0x10,
     esp1: 0, ss1: 0, esp2: 0, ss2: 0,
     cr3: 0, eip: 0, eflags: 0, eax: 0, ecx: 0, edx: 0, ebx: 0, esp: 0, ebp: 0, esi: 0, edi: 0,
     es: 0, cs: 0, ss: 0, ds: 0, fs: 0, gs: 0, ldt: 0, trap: 0, iomap_base: 104,
 };
 
 static mut GDT: [GdtEntry; 6] = [
-    GdtEntry { limit_low: 0, base_low: 0, base_middle: 0, access: 0, granularity: 0, base_high: 0 },
-    GdtEntry { limit_low: 0, base_low: 0, base_middle: 0, access: 0, granularity: 0, base_high: 0 },
-    GdtEntry { limit_low: 0, base_low: 0, base_middle: 0, access: 0, granularity: 0, base_high: 0 },
-    GdtEntry { limit_low: 0, base_low: 0, base_middle: 0, access: 0, granularity: 0, base_high: 0 },
-    GdtEntry { limit_low: 0, base_low: 0, base_middle: 0, access: 0, granularity: 0, base_high: 0 },
-    GdtEntry { limit_low: 0, base_low: 0, base_middle: 0, access: 0, granularity: 0, base_high: 0 },
+    GdtEntry { limit_low: 0, base_low: 0, base_middle: 0, access: 0, granularity: 0, base_high: 0 };
+    6
 ];
 
 static mut GDT_PTR: GdtPtr = GdtPtr { limit: 0, base: 0 };
@@ -51,31 +48,31 @@ pub fn init() {
         // 1. Null Descriptor
         GDT[0] = GdtEntry { limit_low: 0, base_low: 0, base_middle: 0, access: 0, granularity: 0, base_high: 0 };
 
-        // 2. Kernel Code Segment (0x08): Base 0, Limit 0xFFFFF, Access 0x9A, Granularity 0xCF
-        GDT[1] = GdtEntry { 
-            limit_low: 0xFFFF, base_low: 0, base_middle: 0, 
-            access: 0x9A, granularity: 0xCF, base_high: 0 
+        // 2. Kernel Code Segment (0x08)
+        GDT[1] = GdtEntry {
+            limit_low: 0xFFFF, base_low: 0, base_middle: 0,
+            access: 0x9A, granularity: 0xCF, base_high: 0
         };
 
-        // 3. Kernel Data Segment (0x10): Base 0, Limit 0xFFFFF, Access 0x92, Granularity 0xCF
-        GDT[2] = GdtEntry { 
-            limit_low: 0xFFFF, base_low: 0, base_middle: 0, 
-            access: 0x92, granularity: 0xCF, base_high: 0 
+        // 3. Kernel Data Segment (0x10)
+        GDT[2] = GdtEntry {
+            limit_low: 0xFFFF, base_low: 0, base_middle: 0,
+            access: 0x92, granularity: 0xCF, base_high: 0
         };
 
-        // 4. User Code Segment (Index 3, Selector 0x1B): Access 0xFA, Granularity 0xCF
-        GDT[3] = GdtEntry { 
-            limit_low: 0xFFFF, base_low: 0, base_middle: 0, 
-            access: 0xFA, granularity: 0xCF, base_high: 0 
+        // 4. User Code Segment (0x1B)
+        GDT[3] = GdtEntry {
+            limit_low: 0xFFFF, base_low: 0, base_middle: 0,
+            access: 0xFA, granularity: 0xCF, base_high: 0
         };
 
-        // 5. User Data Segment (Index 4, Selector 0x23): Access 0xF2, Granularity 0xCF
-        GDT[4] = GdtEntry { 
-            limit_low: 0xFFFF, base_low: 0, base_middle: 0, 
-            access: 0xF2, granularity: 0xCF, base_high: 0 
+        // 5. User Data Segment (0x23)
+        GDT[4] = GdtEntry {
+            limit_low: 0xFFFF, base_low: 0, base_middle: 0,
+            access: 0xF2, granularity: 0xCF, base_high: 0
         };
 
-        // 6. TSS Descriptor (Index 5, Selector 0x28): Access 0x89
+        // 6. TSS Descriptor (0x28)
         let tss_base = &raw const TSS as u32;
         let tss_limit = (core::mem::size_of::<Tss>() - 1) as u32;
         GDT[5] = GdtEntry {
@@ -116,7 +113,6 @@ pub fn init() {
     }
 }
 
-#[allow(dead_code)]
 pub fn set_kernel_stack(addr: u32) {
     unsafe {
         TSS.esp0 = addr;

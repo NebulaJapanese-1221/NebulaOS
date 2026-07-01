@@ -21,3 +21,4 @@ panic = "abort"
 
 [dependencies]
 # Basic core library is used automatically in no_std
+libm = "0.2"

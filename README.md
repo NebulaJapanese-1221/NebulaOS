@@ -2,7 +2,6 @@
 
 A hobbyist 32-bit operating system written in Rust for the i686 architecture.
 
-
 ## License
 
 This project is licensed under the GNU General Public License (GPL) v3.0.
@@ -11,6 +10,7 @@ This project is licensed under the GNU General Public License (GPL) v3.0.
 - **Calculator**
 - **Text Editor**
 - **Terminal**
+- **System Settings**
 
 ## Prerequisites
 - Rust Nightly toolchain

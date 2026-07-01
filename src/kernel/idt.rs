@@ -59,9 +59,7 @@ pub unsafe fn init_pic() {
     super::ps2::outb(0x21, 0x01); // 8086 mode
     super::ps2::outb(0xA1, 0x01);
 
-    // Unmask Timer (IRQ0), Keyboard (IRQ1), Cascade (IRQ2), and Mouse (IRQ12)
-    // Master: 0xFB = 11111011 (IRQ0, 1, 2 unmasked)
-    // Slave:  0xEF = 11101111 (IRQ12 unmasked)
-    super::ps2::outb(0x21, 0xFB); 
-    super::ps2::outb(0xA1, 0xEF);
+    // Mask all interrupts initially
+    super::ps2::outb(0x21, 0xFF);
+    super::ps2::outb(0xA1, 0xFF);
 }
