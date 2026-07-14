@@ -1,6 +1,3 @@
-// ZFS POSIX Layer for NebulaFS
-// Inspired by ZFS's ZPL layer
-
 use crate::fs::{NebulaFS, FileSystemOps};
 use crate::fs::dmu::{Object, ObjectType, BlockPointer};
 use crate::fs::zio::{IOOperation, IOType, IOPriority};
@@ -161,8 +158,31 @@ impl FileSystemState {
         self.inodes.insert(inode_num, inode);
         inode_num
     }
-}
 
+    pub fn get_object(&self, obj_id: u64) -> Option<&Object> {
+        // In a real implementation, we would look up the object
+        // For now, we'll return None
+        None
+    }
+
+    pub fn get_object_mut(&mut self, obj_id: u64) -> Option<&mut Object> {
+        // In a real implementation, we would look up the object
+        // For now, we'll return None
+        None
+    }
+
+    pub fn create_object(&mut self, inode_num: u64) -> Object {
+        let mut obj = Object::new(inode_num);
+        // Set appropriate type based on inode
+        if let Some(inode) = self.inodes.get(&inode_num) {
+            if inode.is_dir() {
+    obj.set_type(ObjectType::Directory);
+            }
+        }
+        obj
+    }
+}
+    
 /// File system operations
 pub fn read_file(fs: &NebulaFS, inode: u64, offset: u64, buffer: &mut [u8]) -> Result<usize, &'static str> {
     // Get the filesystem state
@@ -185,8 +205,8 @@ pub fn read_file(fs: &NebulaFS, inode: u64, offset: u64, buffer: &mut [u8]) -> R
     
     if bytes_to_read == 0 {
         return Ok(0);
-    }
-    
+}
+
     // Read from the object's blocks
     let mut bytes_read = 0;
     let mut remaining = bytes_to_read;
@@ -233,7 +253,6 @@ pub fn read_file(fs: &NebulaFS, inode: u64, offset: u64, buffer: &mut [u8]) -> R
     
     Ok(bytes_read)
 }
-
 pub fn write_file(fs: &mut NebulaFS, inode: u64, offset: u64, data: &[u8]) -> Result<usize, &'static str> {
     // Get the filesystem state
     let state = fs.get_state_mut();
@@ -361,7 +380,6 @@ pub fn lookup(fs: &NebulaFS, parent_inode: u64, name: &str) -> Result<u64, &'sta
     // Look up the name in the directory
     let parent_dir = state.directories.get(&parent_inode.ino)
         .ok_or("Parent directory not found")?;
-    
     parent_dir.lookup(name)
         .ok_or("File not found")
 }
@@ -400,7 +418,6 @@ pub fn link_file(fs: &mut NebulaFS, inode: u64, parent_inode: u64, name: &str) -
     if let Some(inode_data) = state.inodes.get_mut(&inode) {
         inode_data.nlink += 1;
     }
-    
     Ok(())
 }
 
@@ -436,7 +453,6 @@ pub fn unlink_file(fs: &mut NebulaFS, parent_inode: u64, name: &str) -> Result<(
             // In a real implementation, we would also free the object's blocks
         }
     }
-    
     Ok(())
 }
 

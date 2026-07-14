@@ -1,9 +1,9 @@
 use crate::framebuffer::{Framebuffer, Rect};
 use crate::gui::{draw_string, TITLE_BAR_HEIGHT};
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::format;
-use crate::fs::{NebulaFS, FileSystemOps};
+use crate::fs::{NebulaFS, FileSystemOps, vfs::FileSystem};
 
 #[derive(Debug)]
 pub struct FileManagerState {

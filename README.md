@@ -23,7 +23,8 @@ This project is licensed under the GNU General Public License (GPL) v3.0.
 - **Text Editor**
 - **Terminal**
 - **System Settings**
-- **File Manager** (New!)
+- **File Manager**
+- **Web Browser**
 
 ## Prerequisites
 - Rust Nightly toolchain

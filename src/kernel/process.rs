@@ -19,6 +19,7 @@ pub enum ProcessState {
     Created,
     Running,
     Blocked,
+    Sleeping(usize), // Add wakeup tick
     Zombie,
     Stopped,
 }
@@ -395,3 +396,4 @@ impl ProcessManager {
         sid
     }
 }
+

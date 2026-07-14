@@ -3,6 +3,7 @@ use crate::gui::{draw_string, TITLE_BAR_HEIGHT};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::format;
+use crate::fs::{FileSystemOps, vfs::FileSystem};
 use crate::drivers::rtc;
 
 #[derive(Debug)]
@@ -112,7 +113,7 @@ impl TerminalState {
                 if parts.len() > 1 {
                     let filename = parts[1];
                     if let Some(fs) = &mut self.fs {
-                        match fs.create_file(2, filename) {
+                        match FileSystemOps::create_file(fs, 2, filename) {
                             Ok(inode) => {
                                 self.buffer.push_str(&format!("Created file: {} (inode {})\n", filename, inode));
                             }
@@ -127,12 +128,13 @@ impl TerminalState {
                     self.buffer.push_str("Usage: touch <filename>\n");
                 }
             }
-            "mkdir" => {
+            "mkdir" => { // Create directory
+                // Extract directory name
                 let parts: Vec<&str> = cmd.split_whitespace().collect();
                 if parts.len() > 1 {
                     let dirname = parts[1];
                     if let Some(fs) = &mut self.fs {
-                        match fs.create_dir(2, dirname) {
+                        match FileSystemOps::create_dir(fs, 2, dirname) {
                             Ok(inode) => {
                                 self.buffer.push_str(&format!("Created directory: {} (inode {})\n", dirname, inode));
                             }
@@ -147,12 +149,13 @@ impl TerminalState {
                     self.buffer.push_str("Usage: mkdir <dirname>\n");
                 }
             }
-            "rm" => {
+            "rm" => { // Remove file/directory
+                // Extract filename
                 let parts: Vec<&str> = cmd.split_whitespace().collect();
                 if parts.len() > 1 {
                     let filename = parts[1];
                     if let Some(fs) = &mut self.fs {
-                        match fs.unlink(2, filename) {
+                        match FileSystemOps::unlink(fs, 2, filename) {
                             Ok(_) => {
                                 self.buffer.push_str(&format!("Removed: {}\n", filename));
                             }

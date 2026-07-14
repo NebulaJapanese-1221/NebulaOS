@@ -51,6 +51,7 @@ impl VDevStats {
 }
 
 /// Main virtual device structure
+#[derive(Clone)]
 pub struct VDev {
     pub vdev_id: u64,
     pub vdev_type: VDevType,

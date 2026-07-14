@@ -1,6 +1,3 @@
-// Adaptive Replacement Cache (ARC) for NebulaFS
-// Enhanced implementation inspired by ZFS's ARC
-
 use alloc::collections::LinkedList;
 use alloc::collections::btree_map::BTreeMap;
 use crate::fs::dmu::BlockPointer;
@@ -74,13 +71,27 @@ impl ARCCache {
             
             // Move to MRU position in the appropriate list
             if self.mru.contains(&key) {
-                // Was in MRU list - move to front
-                self.mru.move_to_front(key);
-            } else if self.mfu.contains(&key) {
-                // Was in MFU list - move to front
-                self.mfu.move_to_front(key);
+                // Was in MRU list - remove and re-add to move to front
+                let mut new_mru = LinkedList::new();
+                for &k in self.mru.iter() {
+                    if k != key {
+                        new_mru.push_back(k);
+                    }
+                }
+                new_mru.push_front(key);
+                self.mru = new_mru;
+                } else if self.mfu.contains(&key) {
+                // Was in MFU list - remove and re-add to move to front
+                let mut new_mfu = LinkedList::new();
+                for &k in self.mfu.iter() {
+                    if k != key {
+                        new_mfu.push_back(k);
+                }
             }
-            
+                new_mfu.push_front(key);
+                self.mfu = new_mfu;
+        }
+        
             Some(entry.data.clone())
         } else {
             self.misses += 1;
@@ -103,9 +114,25 @@ impl ARCCache {
                 
                 // Move to appropriate position
                 if self.mru.contains(&key) {
-                    self.mru.move_to_front(key);
+                    // Remove and re-add to move to front
+                    let mut new_mru = LinkedList::new();
+                    for &k in self.mru.iter() {
+                        if k != key {
+                            new_mru.push_back(k);
+                        }
+                    }
+                    new_mru.push_front(key);
+                    self.mru = new_mru;
                 } else if self.mfu.contains(&key) {
-                    self.mfu.move_to_front(key);
+                    // Remove and re-add to move to front
+                    let mut new_mfu = LinkedList::new();
+                    for &k in self.mfu.iter() {
+                        if k != key {
+                            new_mfu.push_back(k);
+                        }
+                    }
+                    new_mfu.push_front(key);
+                    self.mfu = new_mfu;
                 }
                 return;
             }
@@ -129,22 +156,26 @@ impl ARCCache {
         // Adaptive replacement algorithm
         if self.mru.len() + self.mfu.len() == self.c {
             if self.mru.len() > 0 {
-                self.mru_ghost.push_back(self.mru.pop_back().unwrap());
+                let key_to_move = self.mru.pop_back().unwrap();
+                self.mru_ghost.push_back(key_to_move);
             } else {
-                self.mru_ghost.push_back(self.mfu.pop_back().unwrap());
-            }
+                let key_to_move = self.mfu.pop_back().unwrap();
+                self.mru_ghost.push_back(key_to_move);
+        }
         }
         
         let total_cache = self.mru.len() + self.mfu.len() + self.mru_ghost.len() + self.mfu_ghost.len();
         if total_cache == 2 * self.c {
             if (self.mru_ghost.len() > self.mfu_ghost.len() && self.mfu.len() > 0) ||
                (self.mru.len() == 0 && self.mfu.len() > 0) {
-                self.mfu_ghost.push_back(self.mfu.pop_back().unwrap());
-            } else {
-                self.mru_ghost.push_back(self.mru.pop_back().unwrap());
-            }
+                let key_to_move = self.mfu.pop_back().unwrap();
+                self.mfu_ghost.push_back(key_to_move);
+        } else {
+                let key_to_move = self.mru.pop_back().unwrap();
+                self.mru_ghost.push_back(key_to_move);
         }
-        
+    }
+
         // Update target ratio p
         let delta = if self.mru_ghost.len() >= self.mfu_ghost.len() && self.mfu.len() > 0 {
             1
@@ -156,16 +187,16 @@ impl ARCCache {
         
         if delta != 0 {
             self.p = (self.p * (self.c as f64 - 1.0) + delta as f64) / self.c as f64;
-        }
-        
+    }
+
         // Decide which list to add to
         let mfu_target = (self.p * self.c as f64) as usize;
         if self.mfu.len() + (if self.mru.contains(&key) { 1 } else { 0 }) < mfu_target {
             self.mfu.push_front(key);
         } else {
             self.mru.push_front(key);
-        }
-        
+}
+
         self.current_size += size;
     }
 

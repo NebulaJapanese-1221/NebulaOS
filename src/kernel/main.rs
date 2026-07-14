@@ -27,6 +27,7 @@ mod syscalls;
 mod panic;
 mod exceptions;
 mod memory; // New module for paging
+mod services;
 
 #[path = "../fs/mod.rs"]
 mod fs;
@@ -37,6 +38,7 @@ use framebuffer::FRAMEBUFFER;
 use alloc::vec::Vec;
 use alloc::format;
 use crate::drivers::rtc;
+use crate::fs::{FileSystemOps, vfs::FileSystem};
 
 #[path = "../drivers/vga.rs"]
 mod vga;
@@ -192,6 +194,10 @@ pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
             serial_println!("Initializing Paging...");
             memory::paging::init_paging(); // Initialize paging for kernel
             update_progress(55);
+
+            serial_println!("Initializing System Services...");
+            services::init();
+            update_progress(60);
 
             mouse::init_mouse();
 

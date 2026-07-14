@@ -17,6 +17,9 @@ pub enum AppType {
     Terminal,
     TextEditor,
     FileManager,
+    WebBrowser,
+    ImageViewer,
+    SystemMonitor,
 }
 
 pub enum AppData {
@@ -25,6 +28,9 @@ pub enum AppData {
     Terminal(crate::apps::terminal::TerminalState),
     TextEditor(crate::apps::text_editor::TextEditorState),
     FileManager(crate::apps::file_manager::FileManagerState),
+    WebBrowser(crate::apps::web_browser::WebBrowserState),
+    ImageViewer(crate::apps::image_viewer::ImageViewerState),
+    SystemMonitor(crate::apps::system_monitor::SystemMonitorState),
 }
 
 impl AppData {
@@ -34,6 +40,9 @@ impl AppData {
             AppData::Terminal(state) => crate::apps::terminal::TerminalApp::draw(fb, bounds, state),
             AppData::TextEditor(state) => crate::apps::text_editor::TextEditorApp::draw(fb, bounds, state, is_focused),
             AppData::FileManager(state) => crate::apps::file_manager::FileManagerApp::draw(fb, bounds, state),
+            AppData::WebBrowser(state) => crate::apps::web_browser::WebBrowserApp::draw(fb, bounds, state),
+            AppData::ImageViewer(state) => crate::apps::image_viewer::ImageViewerApp::draw(fb, bounds, state),
+            AppData::SystemMonitor(state) => crate::apps::system_monitor::SystemMonitorApp::draw(fb, bounds, state),
             AppData::None => {}
         }
     }
@@ -44,6 +53,9 @@ impl AppData {
             AppData::Calculator(state) => crate::apps::calculator::CalculatorApp::handle_keyboard_input(state, c),
             AppData::Terminal(state) => crate::apps::terminal::TerminalApp::handle_keypress(state, c),
             AppData::FileManager(state) => crate::apps::file_manager::FileManagerApp::handle_keyboard_input(state, c),
+            AppData::WebBrowser(state) => crate::apps::web_browser::WebBrowserApp::handle_keyboard_input(state, c),
+            AppData::ImageViewer(state) => crate::apps::image_viewer::ImageViewerApp::handle_keyboard_input(state, c),
+            AppData::SystemMonitor(state) => crate::apps::system_monitor::SystemMonitorApp::handle_keyboard_input(state, c),
             AppData::None => {}
         }
     }
@@ -54,6 +66,9 @@ impl AppData {
             AppData::Terminal(state) => crate::apps::terminal::TerminalApp::handle_click(state, bounds, mx, my),
             AppData::TextEditor(state) => crate::apps::text_editor::TextEditorApp::handle_click(state, bounds, mx, my),
             AppData::FileManager(state) => crate::apps::file_manager::FileManagerApp::handle_click(state, bounds, mx, my),
+            AppData::WebBrowser(state) => crate::apps::web_browser::WebBrowserApp::handle_click(state, bounds, mx, my),
+            AppData::ImageViewer(state) => crate::apps::image_viewer::ImageViewerApp::handle_click(state, bounds, mx, my),
+            AppData::SystemMonitor(state) => crate::apps::system_monitor::SystemMonitorApp::handle_click(state, bounds, mx, my),
             AppData::None => {}
         }
     }
@@ -76,6 +91,9 @@ impl Window {
             AppType::TextEditor => AppData::TextEditor(crate::apps::text_editor::TextEditorState::new()),
             AppType::Terminal => AppData::Terminal(crate::apps::terminal::TerminalState::new()),
             AppType::FileManager => AppData::FileManager(crate::apps::file_manager::FileManagerState::new()),
+            AppType::WebBrowser => AppData::WebBrowser(crate::apps::web_browser::WebBrowserState::new()),
+            AppType::ImageViewer => AppData::ImageViewer(crate::apps::image_viewer::ImageViewerState::new()),
+            AppType::SystemMonitor => AppData::SystemMonitor(crate::apps::system_monitor::SystemMonitorState::new()),
             _ => AppData::None,
         };
         Self {
@@ -147,35 +165,38 @@ impl WindowManager {
                 if rel_x >= 0 && rel_x < 150 && rel_y >= 0 && rel_y < 100 {
                     let item = rel_y / 20;
                     match item {
-                        0 => {
+                        0 => { // New Calculator
                             self.windows.push(Window::new("Calculator", mx as u32, my as u32, 220, 300, AppType::Calculator));
                         }
-                        1 => {
+                        1 => { // New Text Editor
                             self.windows.push(Window::new("Text Editor", mx as u32, my as u32, 400, 300, AppType::TextEditor));
                         }
-                        2 => {
-                            let mut terminal = Window::new("Terminal", mx as u32, my as u32, 400, 300, AppType::Terminal);
-                            if let AppData::Terminal(ref mut state) = terminal.data {
-                                if let Some(vfs) = &self.vfs {
-                                    state.set_filesystem(vfs.clone());
-                                }
-                            }
-                            self.windows.push(terminal);
+                        2 => { // New Terminal
+                            self.windows.push(Window::new("Terminal", mx as u32, my as u32, 400, 300, AppType::Terminal));
                         }
-                        3 => {
+                        3 => { // New Web Browser
+                            self.windows.push(Window::new("Web Browser", mx as u32, my as u32, 600, 400, AppType::WebBrowser));
+                        }
+                        4 => { // New Image Viewer
+                            self.windows.push(Window::new("Image Viewer", mx as u32, my as u32, 500, 400, AppType::ImageViewer));
+                        }
+                        5 => { // New System Monitor
+                            self.windows.push(Window::new("System Monitor", mx as u32, my as u32, 500, 400, AppType::SystemMonitor));
+                        }
+                        6 => { // New File Manager
                             let mut fm = Window::new("File Manager", mx as u32, my as u32, 500, 400, AppType::FileManager);
                             if let AppData::FileManager(ref mut state) = fm.data {
-                                state.refresh_files();
                                 if let Some(vfs) = &self.vfs {
-                                    state.set_filesystem(vfs.clone());
+                                    // Create a NebulaFS handle for the file manager
+                                    state.set_filesystem(fs::NebulaFS::new("nebula_pool", 4096, 1024 * 1024));
                                 }
+                                state.refresh_files();
                             }
                             self.windows.push(fm);
                         }
-                        4 => {
+                        _ => { // Close All
                             self.windows.clear();
                         }
-                        _ => {}
                     }
                     self.context_menu = None;
                     self.last_mouse_btn = ml;
@@ -330,8 +351,14 @@ impl WindowManager {
             draw_string(fb, cx as usize + 10, cy as usize + 5,  "New Calculator", 0x000000);
             draw_string(fb, cx as usize + 10, cy as usize + 25, "New Text Editor", 0x000000);
             draw_string(fb, cx as usize + 10, cy as usize + 45, "New Terminal", 0x000000);
-            draw_string(fb, cx as usize + 10, cy as usize + 65, "New File Manager", 0x000000);
-            draw_string(fb, cx as usize + 10, cy as usize + 85, "Close All", 0x000000);
+            draw_string(fb, cx as usize + 10, cy as usize + 65, "New Web Browser", 0x000000);
+            draw_string(fb, cx as usize + 10, cy as usize + 85, "New Image Viewer", 0x000000);
+            draw_string(fb, cx as usize + 10, cy as usize + 105, "New System Monitor", 0x000000);
+            draw_string(fb, cx as usize + 10, cy as usize + 125, "New File Manager", 0x000000);
+            draw_string(fb, cx as usize + 10, cy as usize + 145, "Close All", 0x000000);
         }
     }
 }
+
+
+

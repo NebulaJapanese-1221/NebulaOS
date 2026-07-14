@@ -24,6 +24,7 @@ pub mod vfs;    // Virtual File System layer
 mod test;
 
 /// Main NebulaFS structure
+#[derive(Debug)]
 pub struct NebulaFS {
     pub pool_name: String,
     pub root_vdev: VDev,

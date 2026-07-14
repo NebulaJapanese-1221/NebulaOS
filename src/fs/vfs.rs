@@ -1,9 +1,7 @@
-// Virtual File System (VFS) for NebulaOS
-// Provides a unified interface for multiple file systems
-
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
+use alloc::string::ToString;
 use crate::fs::{NebulaFS, FileSystemOps};
 
 /// VFS node types
@@ -18,6 +16,7 @@ pub enum VFSNodeType {
 }
 
 /// VFS node structure
+#[derive(Debug, Clone)]
 pub struct VFSNode {
     pub node_type: VFSNodeType,
     pub name: String,
@@ -55,6 +54,7 @@ impl VFSNode {
 pub struct MountedFS {
     pub mount_point: String,
     pub fs: Box<dyn FileSystem + Send + Sync>,
+    pub fs_id: usize,
 }
 
 /// VFS trait that all file systems must implement
@@ -97,6 +97,9 @@ pub trait FileSystem: Send + Sync {
     
     /// Read directory entries
     fn readdir(&self, inode: u64) -> Result<Vec<VFSNode>, &'static str>;
+    
+    /// Get file system ID
+    fn fs_id(&self) -> usize;
 }
 
 /// File handle
@@ -126,7 +129,7 @@ impl VFS {
     }
     
     /// Mount a file system
-    pub fn mount(&mut self, fs: Box<dyn FileSystem + Send + Sync>, mount_point: &str) -> Result<(), &'static str> {
+    pub fn mount(&mut self, mut fs: Box<dyn FileSystem + Send + Sync>, mount_point: &str) -> Result<(), &'static str> {
         // Check if mount point exists
         let _node = self.lookup(mount_point)?;
         
@@ -139,6 +142,7 @@ impl VFS {
         self.mounted_fs.push(MountedFS {
             mount_point: mount_point.to_string(),
             fs,
+            fs_id,
         });
         
         Ok(())
@@ -186,7 +190,7 @@ impl VFS {
     }
     
     /// Split a path into components
-    fn split_path(&self, path: &str) -> Vec<&str> {
+    fn split_path<'a>(&self, path: &'a str) -> Vec<&'a str> {
         path.split('/').collect()
     }
     
@@ -224,7 +228,9 @@ impl VFS {
         // Find the file system that contains this inode
         for mounted_fs in &mut self.mounted_fs {
             // Simplified - in real implementation, track inode -> fs mapping
-            return mounted_fs.fs.open(node.inode, flags);
+            let mut handle = mounted_fs.fs.open(node.inode, flags)?;
+            handle.fs_id = mounted_fs.fs_id;
+            return Ok(handle);
         }
         
         Err("File system not found")
@@ -234,7 +240,7 @@ impl VFS {
     pub fn close(&mut self, handle: FileHandle) -> Result<(), &'static str> {
         // Find the file system
         for mounted_fs in &mut self.mounted_fs {
-            if mounted_fs.fs_id() == handle.fs_id {
+            if mounted_fs.fs_id == handle.fs_id {
                 return mounted_fs.fs.close(handle);
             }
         }
@@ -246,7 +252,7 @@ impl VFS {
     pub fn read(&self, handle: FileHandle, buffer: &mut [u8]) -> Result<usize, &'static str> {
         // Find the file system
         for mounted_fs in &self.mounted_fs {
-            if mounted_fs.fs_id() == handle.fs_id {
+            if mounted_fs.fs_id == handle.fs_id {
                 return mounted_fs.fs.read(handle, buffer);
             }
         }
@@ -258,7 +264,7 @@ impl VFS {
     pub fn write(&mut self, handle: FileHandle, buffer: &[u8]) -> Result<usize, &'static str> {
         // Find the file system
         for mounted_fs in &mut self.mounted_fs {
-            if mounted_fs.fs_id() == handle.fs_id {
+            if mounted_fs.fs_id == handle.fs_id {
                 return mounted_fs.fs.write(handle, buffer);
             }
         }
@@ -269,63 +275,63 @@ impl VFS {
 
 /// Implement FileSystem trait for NebulaFS
 impl FileSystem for NebulaFS {
-    fn mount(&mut self, mount_point: &str) -> Result<(), &'static str> {
+    fn mount(&mut self, _mount_point: &str) -> Result<(), &'static str> {
         // NebulaFS mount is handled in the main mount function
         Ok(())
     }
-    
+
     fn unmount(&self) -> Result<(), &'static str> {
         NebulaFS::unmount(self)
     }
-    
-    fn create_file(&mut self, parent_inode: u64, name: &str, permissions: u32) -> Result<u64, &'static str> {
-        NebulaFS::create_file(self, parent_inode, name)
+
+    fn create_file(&mut self, parent_inode: u64, name: &str, _permissions: u32) -> Result<u64, &'static str> {
+        FileSystemOps::create_file(self, parent_inode, name)
     }
-    
-    fn create_dir(&mut self, parent_inode: u64, name: &str, permissions: u32) -> Result<u64, &'static str> {
-        NebulaFS::create_dir(self, parent_inode, name)
+
+    fn create_dir(&mut self, parent_inode: u64, name: &str, _permissions: u32) -> Result<u64, &'static str> {
+        FileSystemOps::create_dir(self, parent_inode, name)
     }
-    
-    fn open(&mut self, inode: u64, flags: u32) -> Result<FileHandle, &'static str> {
+
+    fn open(&mut self, inode: u64, _flags: u32) -> Result<FileHandle, &'static str> {
         Ok(FileHandle {
             inode,
             offset: 0,
-            flags,
+            flags: 0,
             fs_id: 0, // Would be set by VFS
         })
     }
-    
+
     fn close(&mut self, _handle: FileHandle) -> Result<(), &'static str> {
         Ok(())
     }
-    
+
     fn read(&self, handle: FileHandle, buffer: &mut [u8]) -> Result<usize, &'static str> {
-        NebulaFS::read(self, handle.inode, handle.offset, buffer)
+        FileSystemOps::read(self, handle.inode, handle.offset, buffer)
     }
-    
+
     fn write(&mut self, handle: FileHandle, buffer: &[u8]) -> Result<usize, &'static str> {
-        let bytes_written = NebulaFS::write(self, handle.inode, handle.offset, buffer)?;
+        let bytes_written = FileSystemOps::write(self, handle.inode, handle.offset, buffer)?;
         Ok(bytes_written)
     }
-    
+
     fn lookup(&self, parent_inode: u64, name: &str) -> Result<VFSNode, &'static str> {
-        let inode = NebulaFS::lookup(self, parent_inode, name)?;
+        let inode = FileSystemOps::lookup(self, parent_inode, name)?;
         Ok(VFSNode::new(VFSNodeType::File, name, inode))
     }
-    
+
     fn stat(&self, inode: u64) -> Result<VFSNode, &'static str> {
         // In a real implementation, we'd get the actual node info
         Ok(VFSNode::new(VFSNodeType::File, "", inode))
     }
-    
+
     fn link(&mut self, inode: u64, parent_inode: u64, name: &str) -> Result<(), &'static str> {
-        NebulaFS::link(self, inode, parent_inode, name)
+        FileSystemOps::link(self, inode, parent_inode, name)
     }
-    
+
     fn unlink(&mut self, parent_inode: u64, name: &str) -> Result<(), &'static str> {
-        NebulaFS::unlink(self, parent_inode, name)
+        FileSystemOps::unlink(self, parent_inode, name)
     }
-    
+
     fn readdir(&self, inode: u64) -> Result<Vec<VFSNode>, &'static str> {
         // In a real implementation, we'd read the directory contents
         let mut entries = Vec::new();
@@ -333,9 +339,10 @@ impl FileSystem for NebulaFS {
         entries.push(VFSNode::new(VFSNodeType::Directory, "..", inode));
         Ok(entries)
     }
-    
+
     /// Get the file system ID (simplified)
     fn fs_id(&self) -> usize {
         0
     }
 }
+

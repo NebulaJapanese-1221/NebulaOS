@@ -1,6 +1,3 @@
-// Scheduler for NebulaOS
-// Enhanced with thread support
-
 use alloc::collections::VecDeque;
 use alloc::boxed::Box;
 use spin::Mutex;
@@ -165,3 +162,13 @@ pub fn init() {
     let mut scheduler = SCHEDULER.lock();
     scheduler.spawn_kernel_task(0); // Placeholder entry point
 }
+
+#[derive(Debug, PartialEq, Copy, Clone)]
+pub enum ProcessState {
+    Ready,
+    Running,
+    Sleeping(usize),
+    #[allow(dead_code)]
+    Dead,
+}
+

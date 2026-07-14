@@ -1,6 +1,23 @@
 use crate::serial_println;
 use crate::process::ProcessState;
 
+// Service-related system calls
+const SYS_NETWORK_SOCKET: usize = 40;
+const SYS_NETWORK_BIND: usize = 41;
+const SYS_NETWORK_CONNECT: usize = 42;
+const SYS_NETWORK_SEND: usize = 43;
+const SYS_NETWORK_RECEIVE: usize = 44;
+const SYS_NETWORK_CLOSE: usize = 45;
+
+const SYS_SECURITY_AUTHENTICATE: usize = 50;
+const SYS_SECURITY_GET_UID: usize = 51;
+const SYS_SECURITY_CHECK_PERMISSION: usize = 52;
+
+const SYS_POWER_GET_CPU_FREQ: usize = 60;
+const SYS_POWER_SET_CPU_FREQ: usize = 61;
+const SYS_POWER_GET_BATTERY: usize = 62;
+const SYS_POWER_GET_THERMAL: usize = 63;
+
 #[repr(C, packed)]
 #[derive(Copy, Clone)]
 pub struct SyscallRegisters {
@@ -51,33 +68,13 @@ pub fn syscall_handler_rust(regs_ptr: &mut SyscallRegisters) -> u32 {
             regs.edx = time.second as u32;
         },
         3 => { // Syscall 3: Draw Pixel
-            let x = regs.ebx as usize;
-            let y = regs.ecx as usize;
-            let color = regs.edx;
-            crate::framebuffer::FRAMEBUFFER.lock().draw_pixel(x, y, color);
+            syscall_draw_pixel(regs.eax, regs.ebx, regs.ecx);
         },
         4 => { // Syscall 4: Sleep
-            let ms = regs.ebx as usize;
-            let ticks_to_sleep = ms / 10; // Assuming 100Hz PIT = 10ms per tick
-            
-            let mut sched = crate::scheduler::SCHEDULER.lock();
-            if regs.is_user() { // Only allow user processes to sleep
-                if let Some(pid) = sched.current_pid {
-                    let wakeup_tick = sched.ticks + ticks_to_sleep;
-                    if pid < sched.processes.len() {
-                        sched.processes.as_mut_slice()[pid].state = ProcessState::Sleeping(wakeup_tick);
-                    }
-                }
-            }
-            drop(sched); 
-            return_val = crate::scheduler::schedule(regs_ptr as *mut _ as u32);
+            syscall_sleep(regs.eax);
         },
         5 => { // Syscall 5: Exit Process
-            if regs.is_user() { // Only allow user processes to exit
-                return_val = crate::scheduler::exit_current_process(regs_ptr as *mut _ as u32);
-            } else {
-                serial_println!("Kernel tried to exit via syscall!");
-            }
+            syscall_exit();
         },
         6 => { // Syscall 6: Spawn (Exec) New Process
             if regs.is_user() { // Only allow user mode to spawn for now
@@ -91,6 +88,45 @@ pub fn syscall_handler_rust(regs_ptr: &mut SyscallRegisters) -> u32 {
                  };
                  serial_println!("Spawned new user process with PID: {}", new_pid);
             }
+        },
+        SYS_NETWORK_SOCKET => {
+            syscall_network_socket(regs.eax);
+        },
+        SYS_NETWORK_BIND => {
+            syscall_network_bind(regs.eax, regs.ebx, regs.ecx);
+        },
+        SYS_NETWORK_CONNECT => {
+            syscall_network_connect(regs.eax, regs.ebx, regs.ecx);
+        },
+        SYS_NETWORK_SEND => {
+            syscall_network_send(regs.eax, regs.ebx, regs.ecx);
+        },
+        SYS_NETWORK_RECEIVE => {
+            syscall_network_receive(regs.eax, regs.ebx, regs.ecx);
+        },
+        SYS_NETWORK_CLOSE => {
+            syscall_network_close(regs.eax);
+        },
+        SYS_SECURITY_AUTHENTICATE => {
+            syscall_security_authenticate(regs.eax, regs.ebx);
+        },
+        SYS_SECURITY_GET_UID => {
+            syscall_security_get_uid();
+        },
+        SYS_SECURITY_CHECK_PERMISSION => {
+            syscall_security_check_permission(regs.eax, regs.ebx);
+        },
+        SYS_POWER_GET_CPU_FREQ => {
+            syscall_power_get_cpu_freq();
+        },
+        SYS_POWER_SET_CPU_FREQ => {
+            syscall_power_set_cpu_freq(regs.eax);
+        },
+        SYS_POWER_GET_BATTERY => {
+            syscall_power_get_battery();
+        },
+        SYS_POWER_GET_THERMAL => {
+            syscall_power_get_thermal();
         },
         _ => {
             serial_println!("Unknown syscall: {}", eax);
@@ -185,3 +221,123 @@ pub fn syscall_draw_pixel(x: u32, y: u32, color: u32) {
         );
     }
 }
+
+pub fn syscall_network_socket(socket_type: u32) -> u32 {
+    let mut network_service = services::network::NETWORK_SERVICE.lock();
+    match network_service.create_socket(match socket_type {
+        1 => services::network::SocketType::TCP,
+        2 => services::network::SocketType::UDP,
+        _ => services::network::SocketType::Raw,
+    }) {
+        Ok(socket_id) => socket_id,
+        Err(_) => 0,
+    }
+}
+
+pub fn syscall_network_bind(socket_id: u32, addr: u32, port: u32) -> u32 {
+    let mut network_service = services::network::NETWORK_SERVICE.lock();
+    if let Some(socket) = network_service.get_socket_mut(socket_id) {
+        socket.bind((addr, port)).is_ok() as u32
+    } else {
+        0
+    }
+}
+
+pub fn syscall_network_connect(socket_id: u32, addr: u32, port: u32) -> u32 {
+    let mut network_service = services::network::NETWORK_SERVICE.lock();
+    if let Some(socket) = network_service.get_socket_mut(socket_id) {
+        socket.connect((addr, port)).is_ok() as u32
+    } else {
+        0
+    }
+}
+
+pub fn syscall_network_send(socket_id: u32, data_ptr: u32, len: u32) -> u32 {
+    let mut network_service = services::network::NETWORK_SERVICE.lock();
+    if let Some(socket) = network_service.get_socket_mut(socket_id) {
+        // In a real implementation, we would copy data from user space
+        let data = unsafe { core::slice::from_raw_parts(data_ptr as *const u8, len as usize) };
+        socket.send(data).unwrap_or(0)
+    } else {
+        0
+    }
+}
+
+pub fn syscall_network_receive(socket_id: u32, buffer_ptr: u32, len: u32) -> u32 {
+    let mut network_service = services::network::NETWORK_SERVICE.lock();
+    if let Some(socket) = network_service.get_socket_mut(socket_id) {
+        let mut buffer = vec![0; len as usize];
+        match socket.receive(&mut buffer) {
+            Ok(bytes_read) => {
+                // In a real implementation, we would copy data to user space
+                unsafe { core::ptr::copy_nonoverlapping(buffer.as_ptr(), buffer_ptr as *mut u8, bytes_read) };
+                bytes_read as u32
+            }
+            Err(_) => 0,
+        }
+    } else {
+        0
+    }
+}
+
+pub fn syscall_network_close(socket_id: u32) -> u32 {
+    let mut network_service = services::network::NETWORK_SERVICE.lock();
+    network_service.close_socket(socket_id).is_ok() as u32
+}
+
+pub fn syscall_security_authenticate(username_ptr: u32, password_ptr: u32) -> u32 {
+    let mut security_service = services::security::SECURITY_SERVICE.lock();
+
+    // In a real implementation, we would copy strings from user space
+    let username = unsafe { core::ffi::CStr::from_ptr(username_ptr as *const i8) };
+    let password = unsafe { core::ffi::CStr::from_ptr(password_ptr as *const i8) };
+
+    match (username.to_str(), password.to_str()) {
+        (Ok(username), Ok(password)) => {
+            security_service.authenticate(username, password).is_ok() as u32
+        }
+        _ => 0,
+    }
+}
+
+pub fn syscall_security_get_uid() -> u32 {
+    let security_service = services::security::SECURITY_SERVICE.lock();
+    security_service.current_user().map(|u| u.uid).unwrap_or(0)
+}
+
+pub fn syscall_security_check_permission(uid: u32, permission: u32) -> u32 {
+    let security_service = services::security::SECURITY_SERVICE.lock();
+    let permission = match permission {
+        1 => services::security::Permission::Read,
+        2 => services::security::Permission::Write,
+        3 => services::security::Permission::Execute,
+        4 => services::security::Permission::Admin,
+        _ => return 0,
+    };
+    security_service.check_permission(uid, permission) as u32
+}
+
+pub fn syscall_power_get_cpu_freq() -> u32 {
+    let power_service = services::power::POWER_SERVICE.lock();
+    power_service.get_cpu_frequency()
+}
+
+pub fn syscall_power_set_cpu_freq(freq: u32) -> u32 {
+    let mut power_service = services::power::POWER_SERVICE.lock();
+    power_service.set_cpu_frequency(freq).is_ok() as u32
+}
+
+pub fn syscall_power_get_battery() -> u32 {
+    // Return battery percentage
+    let power_service = services::power::POWER_SERVICE.lock();
+    power_service.get_battery_status().capacity as u32
+}
+
+pub fn syscall_power_get_thermal() -> u32 {
+    // Return CPU temperature in Celsius
+    let power_service = services::power::POWER_SERVICE.lock();
+    power_service.get_thermal_status().cpu_temp as u32
+}
+
+
+

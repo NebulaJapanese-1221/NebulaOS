@@ -1,3 +1,5 @@
+use crate::framebuffer::Framebuffer;
+mod font;
 pub mod window_manager;
 pub mod start_menu;
 pub mod widgets;
@@ -10,8 +12,6 @@ pub const CURSOR_HEIGHT: usize = 19;
 
 pub const TASKBAR_HEIGHT: u32 = 40;
 pub const TITLE_BAR_HEIGHT: u32 = 25;
-
-use crate::framebuffer::Framebuffer;
 
 pub fn draw_boot_screen(fb: &mut Framebuffer) {
     // Dark Background
