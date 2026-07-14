@@ -1,5 +1,5 @@
 // Adaptive Replacement Cache (ARC) for NebulaFS
-// Simplified implementation inspired by ZFS's ARC
+// Enhanced implementation inspired by ZFS's ARC
 
 use alloc::collections::LinkedList;
 use alloc::collections::btree_map::BTreeMap;
@@ -10,6 +10,7 @@ struct ARCEntry {
     bp: BlockPointer,       // Block pointer
     data: Vec<u8>,          // Cached data
     freq: u32,             // Frequency count
+    last_used: u64,        // Last used timestamp
 }
 
 /// ARC cache state
@@ -32,6 +33,13 @@ pub struct ARCCache {
     hits: u64,
     misses: u64,
     evictions: u64,
+    
+    // Adaptive parameters
+    p: f64,                // Target ratio of MFU to total cache
+    c: usize,             // Total cache size
+    
+    // Time tracking
+    time: u64,
 }
 
 impl ARCCache {
@@ -48,15 +56,21 @@ impl ARCCache {
             hits: 0,
             misses: 0,
             evictions: 0,
+            p: 0.0,
+            c: target_size,
+            time: 0,
         }
     }
 
     /// Lookup a block in the cache
     pub fn lookup(&mut self, bp: &BlockPointer) -> Option<Vec<u8>> {
+        self.time += 1;
         let key = self.block_key(bp);
         
         if let Some(entry) = self.cache.get(&key) {
             self.hits += 1;
+            entry.freq += 1;
+            entry.last_used = self.time;
             
             // Move to MRU position in the appropriate list
             if self.mru.contains(&key) {
@@ -76,6 +90,7 @@ impl ARCCache {
 
     /// Insert a block into the cache
     pub fn insert(&mut self, bp: BlockPointer, data: Vec<u8>) {
+        self.time += 1;
         let key = self.block_key(&bp);
         let size = data.len();
         
@@ -83,6 +98,8 @@ impl ARCCache {
         if self.cache.contains_key(&key) {
             if let Some(entry) = self.cache.get_mut(&key) {
                 entry.data = data;
+                entry.freq += 1;
+                entry.last_used = self.time;
                 
                 // Move to appropriate position
                 if self.mru.contains(&key) {
@@ -104,21 +121,76 @@ impl ARCCache {
             bp,
             data,
             freq: 1,
+            last_used: self.time,
         };
         
         self.cache.insert(key, entry);
-        self.mru.push_front(key);
+        
+        // Adaptive replacement algorithm
+        if self.mru.len() + self.mfu.len() == self.c {
+            if self.mru.len() > 0 {
+                self.mru_ghost.push_back(self.mru.pop_back().unwrap());
+            } else {
+                self.mru_ghost.push_back(self.mfu.pop_back().unwrap());
+            }
+        }
+        
+        let total_cache = self.mru.len() + self.mfu.len() + self.mru_ghost.len() + self.mfu_ghost.len();
+        if total_cache == 2 * self.c {
+            if (self.mru_ghost.len() > self.mfu_ghost.len() && self.mfu.len() > 0) ||
+               (self.mru.len() == 0 && self.mfu.len() > 0) {
+                self.mfu_ghost.push_back(self.mfu.pop_back().unwrap());
+            } else {
+                self.mru_ghost.push_back(self.mru.pop_back().unwrap());
+            }
+        }
+        
+        // Update target ratio p
+        let delta = if self.mru_ghost.len() >= self.mfu_ghost.len() && self.mfu.len() > 0 {
+            1
+        } else if self.mru.len() > 0 {
+            -1
+        } else {
+            0
+        };
+        
+        if delta != 0 {
+            self.p = (self.p * (self.c as f64 - 1.0) + delta as f64) / self.c as f64;
+        }
+        
+        // Decide which list to add to
+        let mfu_target = (self.p * self.c as f64) as usize;
+        if self.mfu.len() + (if self.mru.contains(&key) { 1 } else { 0 }) < mfu_target {
+            self.mfu.push_front(key);
+        } else {
+            self.mru.push_front(key);
+        }
+        
         self.current_size += size;
     }
 
-    /// Evict an entry from the cache
+    /// Evict an entry from the cache using adaptive policy
     fn evict(&mut self) {
-        // Simple eviction strategy: remove from MRU first
-        if let Some(key) = self.mru.pop_back() {
-            if let Some(entry) = self.cache.remove(&key) {
-                self.current_size -= entry.data.len();
-                self.evictions += 1;
-                self.mru_ghost.push_front(key);
+        // Check if we should evict from MRU or MFU based on target ratio
+        let mfu_target = (self.p * self.c as f64) as usize;
+        
+        if self.mru.len() > 0 && (self.mru.len() > mfu_target || self.mfu.len() < mfu_target) {
+            // Evict from MRU
+            if let Some(key) = self.mru.pop_back() {
+                if let Some(entry) = self.cache.remove(&key) {
+                    self.current_size -= entry.data.len();
+                    self.evictions += 1;
+                    self.mru_ghost.push_front(key);
+                }
+            }
+        } else if self.mfu.len() > 0 {
+            // Evict from MFU
+            if let Some(key) = self.mfu.pop_back() {
+                if let Some(entry) = self.cache.remove(&key) {
+                    self.current_size -= entry.data.len();
+                    self.evictions += 1;
+                    self.mfu_ghost.push_front(key);
+                }
             }
         }
     }
@@ -142,10 +214,24 @@ impl ARCCache {
         self.mru_ghost.clear();
         self.mfu_ghost.clear();
         self.current_size = 0;
+        self.hits = 0;
+        self.misses = 0;
+        self.evictions = 0;
+        self.p = 0.0;
+        self.time = 0;
     }
-}
 
-/// Initialize the ARC cache
-pub fn init_arc(target_size: usize) -> ARCCache {
-    ARCCache::new(target_size)
+    /// Get cache utilization
+    pub fn utilization(&self) -> f64 {
+        self.current_size as f64 / self.target_size as f64
+    }
+
+    /// Get hit rate
+    pub fn hit_rate(&self) -> f64 {
+        if self.hits + self.misses > 0 {
+            self.hits as f64 / (self.hits + self.misses) as f64
+        } else {
+            0.0
+        }
+    }
 }

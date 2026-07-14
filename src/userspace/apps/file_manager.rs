@@ -36,20 +36,27 @@ impl FileManagerState {
         // If we have a filesystem, try to read the directory
         if let Some(fs) = &self.fs {
             // In a real implementation, we would read the directory contents
-            // For now, we'll add some dummy files
-        self.files.push(String::from("Documents"));
-        self.files.push(String::from("Downloads"));
-        self.files.push(String::from("Pictures"));
-        self.files.push(String::from("Music"));
-        self.files.push(String::from("Videos"));
-        self.files.push(String::from("file1.txt"));
-        self.files.push(String::from("file2.txt"));
-        self.files.push(String::from("file3.txt"));
-        self.files.push(String::from("file4.txt"));
-        self.files.push(String::from("file5.txt"));
-    }
-    }
+            // For now, we'll simulate some files
 
+            // Try to create some test files if they don't exist
+            let test_files = ["test1.txt", "test2.txt", "test3.txt"];
+            for file in &test_files {
+                let _ = fs.create_file(2, file); // 2 is root directory inode
+            }
+
+            // Add directories
+            let test_dirs = ["Documents", "Downloads", "Pictures"];
+            for dir in &test_dirs {
+                let _ = fs.create_dir(2, dir);
+                self.files.push(String::from(*dir));
+            }
+
+            // Add files
+            for file in &test_files {
+                self.files.push(String::from(*file));
+            }
+        }
+    }
     pub fn handle_keypress(&mut self, c: char) {
         match c {
             'j' => { // Move down

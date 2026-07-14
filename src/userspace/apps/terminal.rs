@@ -11,6 +11,7 @@ pub struct TerminalState {
     pub history: Vec<String>,
     pub history_idx: Option<usize>,
     pub should_close: bool, // New field to indicate if the terminal should close
+    pub fs: Option<crate::fs::NebulaFS>, // Add filesystem reference
 }
 
 impl TerminalState {
@@ -21,7 +22,12 @@ impl TerminalState {
             history: Vec::new(),
             history_idx: None,
             should_close: false, // Initialize to false
+            fs: None, // Will be set when the terminal is initialized
         }
+    }
+
+    pub fn set_filesystem(&mut self, fs: crate::fs::NebulaFS) {
+        self.fs = Some(fs);
     }
 
     pub fn process_command(&mut self, cmd: &str) {
@@ -43,6 +49,12 @@ impl TerminalState {
                 self.buffer.push_str("  date - Display current date\n");
                 self.buffer.push_str("  time - Display current time\n");
                 self.buffer.push_str("  exit - Close the terminal\n");
+                self.buffer.push_str("  ls - List directory contents\n");
+                self.buffer.push_str("  cd <dir> - Change directory\n");
+                self.buffer.push_str("  cat <file> - Display file contents\n");
+                self.buffer.push_str("  touch <file> - Create file\n");
+                self.buffer.push_str("  mkdir <dir> - Create directory\n");
+                self.buffer.push_str("  rm <file> - Remove file/directory\n");
             }
             "echo" => { // New command: Echo text
                 // Extract the text after "echo"
@@ -64,6 +76,104 @@ impl TerminalState {
             "exit" => { // New command: Exit terminal
                 self.should_close = true;
                 self.buffer.push_str("Terminal closed.\n");
+            }
+            "ls" => { // List directory contents
+                if let Some(fs) = &self.fs {
+                    // In a real implementation, we would list the directory contents
+                    self.buffer.push_str("Listing directory contents:\n");
+                    self.buffer.push_str("file1.txt\n");
+                    self.buffer.push_str("file2.txt\n");
+                    self.buffer.push_str("Documents\n");
+                    self.buffer.push_str("Downloads\n");
+                } else {
+                    self.buffer.push_str("Filesystem not available\n");
+                }
+            }
+            "cd" => { // Change directory
+                // Extract directory name
+                let parts: Vec<&str> = cmd.split_whitespace().collect();
+                if parts.len() > 1 {
+                    let dir = parts[1];
+                    self.buffer.push_str(&format!("Changing to directory: {}\n", dir));
+                    // In a real implementation, we would change the current directory
+                } else {
+                    self.buffer.push_str("Usage: cd <directory>\n");
+                }
+            }
+            "cat" => { // Display file contents
+                // Extract filename
+                let parts: Vec<&str> = cmd.split_whitespace().collect();
+                if parts.len() > 1 {
+                    let filename = parts[1];
+                    self.buffer.push_str(&format!("Displaying file: {}\n", filename));
+                    // In a real implementation, we would read and display the file
+                    self.buffer.push_str("File contents would be shown here.\n");
+                } else {
+                    self.buffer.push_str("Usage: cat <filename>\n");
+                }
+            }
+            "touch" => { // Create file
+                // Extract filename
+                let parts: Vec<&str> = cmd.split_whitespace().collect();
+                if parts.len() > 1 {
+                    let filename = parts[1];
+                    if let Some(fs) = &mut self.fs {
+                        match fs.create_file(2, filename) { // 2 is root directory inode
+                            Ok(inode) => {
+                                self.buffer.push_str(&format!("Created file: {} (inode {})\n", filename, inode));
+                            }
+                            Err(e) => {
+                                self.buffer.push_str(&format!("Failed to create file: {}\n", e));
+                            }
+                        }
+                    } else {
+                        self.buffer.push_str("Filesystem not available\n");
+                    }
+                } else {
+                    self.buffer.push_str("Usage: touch <filename>\n");
+                }
+            }
+            "mkdir" => { // Create directory
+                // Extract directory name
+                let parts: Vec<&str> = cmd.split_whitespace().collect();
+                if parts.len() > 1 {
+                    let dirname = parts[1];
+                    if let Some(fs) = &mut self.fs {
+                        match fs.create_dir(2, dirname) { // 2 is root directory inode
+                            Ok(inode) => {
+                                self.buffer.push_str(&format!("Created directory: {} (inode {})\n", dirname, inode));
+                            }
+                            Err(e) => {
+                                self.buffer.push_str(&format!("Failed to create directory: {}\n", e));
+                            }
+                        }
+                    } else {
+                        self.buffer.push_str("Filesystem not available\n");
+                    }
+                } else {
+                    self.buffer.push_str("Usage: mkdir <dirname>\n");
+                }
+            }
+            "rm" => { // Remove file/directory
+                // Extract filename
+                let parts: Vec<&str> = cmd.split_whitespace().collect();
+                if parts.len() > 1 {
+                    let filename = parts[1];
+                    if let Some(fs) = &mut self.fs {
+                        match fs.unlink(2, filename) { // 2 is root directory inode
+                            Ok(_) => {
+                                self.buffer.push_str(&format!("Removed: {}\n", filename));
+                            }
+                            Err(e) => {
+                                self.buffer.push_str(&format!("Failed to remove: {}\n", e));
+                            }
+                        }
+                    } else {
+                        self.buffer.push_str("Filesystem not available\n");
+                    }
+                } else {
+                    self.buffer.push_str("Usage: rm <filename>\n");
+                }
             }
             "" => { /* Do nothing on empty input */ }
             _ => {
@@ -153,3 +263,4 @@ impl TerminalApp {
         state.handle_keypress(c);
     }
 }
+

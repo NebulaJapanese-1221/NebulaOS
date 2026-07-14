@@ -154,7 +154,13 @@ impl WindowManager {
                             self.windows.push(Window::new("Text Editor", mx as u32, my as u32, 400, 300, AppType::TextEditor));
                         }
                         2 => {
-                            self.windows.push(Window::new("Terminal", mx as u32, my as u32, 400, 300, AppType::Terminal));
+                            let mut terminal = Window::new("Terminal", mx as u32, my as u32, 400, 300, AppType::Terminal);
+                            if let AppData::Terminal(ref mut state) = terminal.data {
+                                if let Some(fs) = &self.fs {
+                                    state.set_filesystem(fs.clone());
+                                }
+                            }
+                            self.windows.push(terminal);
                         }
                         3 => {
                             let mut fm = Window::new("File Manager", mx as u32, my as u32, 500, 400, AppType::FileManager);

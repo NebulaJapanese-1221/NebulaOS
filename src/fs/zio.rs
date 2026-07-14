@@ -1,6 +1,6 @@
 use crate::fs::vdev::VDev;
 use crate::fs::dmu::BlockPointer;
-use crate::fs::checksum::{fletcher4, sha256_simple, ChecksumAlgorithm};
+use crate::fs::checksum::{fletcher4, sha256_simple, ChecksumAlgorithm, verify_checksum};
 
 /// I/O operation types
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -72,22 +72,27 @@ impl IOOperation {
         // Read from the vdev
         self.vdev.read(self.offset, &mut self.data)?;
         
-        // Verify checksum using Fletcher-4
-        let calculated_checksum = self.calculate_fletcher4(&self.data);
-        if calculated_checksum != self.checksum && self.checksum != 0 {
+        // Verify checksum
+        if !self.checksum.is_empty() {
+        let data_slice = &self.data[..self.size as usize];
+            if !verify_checksum(data_slice, &self.checksum, self.checksum_alg) {
                 self.error = Some(1); // Checksum error
                 return Err("Checksum mismatch");
             }
+        }
+
         Ok(())
     }
 
     /// Execute a write operation
     fn execute_write(&mut self) -> Result<(), &'static str> {
-        // Calculate checksum using Fletcher-4
-        self.checksum = self.calculate_fletcher4(&self.data);
-        // Write to the vdev
-        self.vdev.write(self.offset, &self.data)?;
+        let data_slice = &self.data[..self.size as usize];
 
+        // Calculate checksum
+        self.calculate_checksum();
+
+        // Write to the vdev
+        self.vdev.write(self.offset, data_slice)?;
         Ok(())
     }
 
@@ -95,20 +100,20 @@ impl IOOperation {
     fn calculate_checksum(&mut self) {
         let data_slice = &self.data[..self.size as usize];
 
-        self.checksum = match self.checksum_alg {
+        match self.checksum_alg {
             ChecksumAlgorithm::Fletcher2 => {
                 let checksum = fletcher2(data_slice);
-                checksum.to_le_bytes().to_vec()
-            }
+                self.checksum = checksum.to_le_bytes().to_vec();
+}
             ChecksumAlgorithm::Fletcher4 => {
                 let (sum1, sum2) = fletcher4(data_slice);
                 let mut bytes = Vec::with_capacity(8);
                 bytes.extend_from_slice(&sum1.to_le_bytes());
                 bytes.extend_from_slice(&sum2.to_le_bytes());
-                bytes
+                self.checksum = bytes;
             }
             ChecksumAlgorithm::SHA256 => {
-                sha256_simple(data_slice).to_vec()
+                self.checksum = sha256_simple(data_slice).to_vec();
             }
         };
     }

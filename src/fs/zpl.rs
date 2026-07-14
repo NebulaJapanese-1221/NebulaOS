@@ -2,9 +2,11 @@
 // Inspired by ZFS's ZPL layer
 
 use crate::fs::{NebulaFS, FileSystemOps};
-use crate::fs::dmu::{Object, ObjectType};
+use crate::fs::dmu::{Object, ObjectType, BlockPointer};
+use crate::fs::zio::{IOOperation, IOType, IOPriority};
 use alloc::string::String;
 use alloc::vec::Vec;
+use alloc::collections::BTreeMap;
 
 /// Inode structure
 #[derive(Debug, Clone)]
@@ -87,89 +89,366 @@ impl Superblock {
     }
 }
 
+/// Directory structure
+#[derive(Debug)]
+pub struct Directory {
+    pub entries: BTreeMap<String, u64>, // Map names to inode numbers
+}
+
+impl Directory {
+    pub fn new() -> Self {
+        Directory {
+            entries: BTreeMap::new(),
+        }
+    }
+
+    pub fn add_entry(&mut self, name: &str, inode: u64) {
+        self.entries.insert(name.to_string(), inode);
+    }
+
+    pub fn remove_entry(&mut self, name: &str) -> Option<u64> {
+        self.entries.remove(name)
+    }
+
+    pub fn lookup(&self, name: &str) -> Option<u64> {
+        self.entries.get(name).copied()
+    }
+}
+
+/// File system state
+pub struct FileSystemState {
+    pub superblock: Superblock,
+    pub inodes: BTreeMap<u64, Inode>, // Inode cache
+    pub directories: BTreeMap<u64, Directory>, // Directory cache
+    pub next_inode: u64, // Next available inode number
+}
+
+impl FileSystemState {
+    pub fn new(pool_name: &str, block_size: u64) -> Self {
+        let mut fs = FileSystemState {
+            superblock: Superblock::new(pool_name, block_size),
+            inodes: BTreeMap::new(),
+            directories: BTreeMap::new(),
+            next_inode: 100, // Start inodes at 100
+        };
+        
+        // Create root directory
+        fs.create_root_directory();
+        fs
+    }
+
+    fn create_root_directory(&mut self) {
+        // Create root inode
+        let root_inode = Inode::new(
+            2, // Root inode number
+            2, // Object ID
+            0o040755 | 0o040000, // Directory with rwxr-xr-x permissions
+        );
+        self.inodes.insert(2, root_inode);
+        
+        // Create root directory
+        let mut root_dir = Directory::new();
+        root_dir.add_entry(".", 2); // Self reference
+        root_dir.add_entry("..", 2); // Parent reference (root's parent is itself)
+        self.directories.insert(2, root_dir);
+    }
+
+    pub fn create_inode(&mut self, mode: u32) -> u64 {
+        let inode_num = self.next_inode;
+        self.next_inode += 1;
+        
+        let inode = Inode::new(inode_num, inode_num, mode);
+        self.inodes.insert(inode_num, inode);
+        inode_num
+    }
+}
+
 /// File system operations
 pub fn read_file(fs: &NebulaFS, inode: u64, offset: u64, buffer: &mut [u8]) -> Result<usize, &'static str> {
-    // In a real implementation, we would:
-    // 1. Find the object for this inode
-    // 2. Read the appropriate blocks
-    // 3. Copy data to the buffer
+    // Get the filesystem state
+    let state = fs.get_state();
     
-    // For now, we'll just return zeros
-    for byte in buffer.iter_mut() {
-        *byte = 0;
+    // Find the inode
+    let inode_data = state.inodes.get(&inode)
+        .ok_or("Inode not found")?;
+    
+    if !inode_data.is_file() {
+        return Err("Not a regular file");
     }
     
-    Ok(buffer.len())
+    // Find the object
+    let obj = state.get_object(inode_data.obj_id)
+        .ok_or("Object not found")?;
+    
+    // Calculate how much we can read
+    let bytes_to_read = buffer.len().min((obj.size - offset) as usize);
+    
+    if bytes_to_read == 0 {
+        return Ok(0);
+    }
+    
+    // Read from the object's blocks
+    let mut bytes_read = 0;
+    let mut remaining = bytes_to_read;
+    let mut current_offset = offset;
+    
+    for bp in &obj.blocks {
+        if current_offset >= bp.logical_size {
+            current_offset -= bp.logical_size;
+            continue;
+        }
+        
+        // Calculate how much to read from this block
+        let block_offset = current_offset as usize;
+        let read_size = remaining.min((bp.logical_size - current_offset) as usize);
+        
+        // Read the block
+        let mut block_data = vec![0; bp.size as usize];
+        let mut io_op = IOOperation::new(
+            IOType::Read,
+            IOPriority::SyncRead,
+            fs.get_vdev().clone(),
+            bp.offset,
+            bp.size,
+        );
+        io_op.execute()?;
+        block_data.copy_from_slice(&io_op.data);
+        
+        // Decompress if needed
+        let decompressed = fs.get_dmu().decompress_data(bp, &block_data)?;
+        
+        // Copy to output buffer
+        let start = bytes_read;
+        let end = start + read_size;
+        buffer[start..end].copy_from_slice(&decompressed[block_offset..block_offset + read_size]);
+        
+        bytes_read += read_size;
+        remaining -= read_size;
+        current_offset = 0;
+        
+        if remaining == 0 {
+            break;
+        }
+    }
+    
+    Ok(bytes_read)
 }
 
 pub fn write_file(fs: &mut NebulaFS, inode: u64, offset: u64, data: &[u8]) -> Result<usize, &'static str> {
-    // In a real implementation, we would:
-    // 1. Find the object for this inode
-    // 2. Allocate blocks if needed (copy-on-write)
-    // 3. Write data to the blocks
+    // Get the filesystem state
+    let state = fs.get_state_mut();
     
-    // For now, we'll just pretend we wrote the data
-    Ok(data.len())
+    // Find the inode
+    let inode_data = state.inodes.get_mut(&inode)
+        .ok_or("Inode not found")?;
+    
+    if !inode_data.is_file() {
+        return Err("Not a regular file");
+    }
+    
+    // Find the object
+    let obj = state.get_object_mut(inode_data.obj_id)
+        .ok_or("Object not found")?;
+    
+    // Write the data
+    let bytes_written = data.len();
+    
+    // In a real implementation, we would:
+    // 1. Handle copy-on-write for existing blocks
+    // 2. Allocate new blocks as needed
+    // 3. Write the data to the blocks
+    // 4. Update the object's block pointers
+    
+    // For now, we'll simulate writing by updating the size
+    if offset + bytes_written as u64 > obj.size {
+        obj.size = offset + bytes_written as u64;
+    }
+    
+    // Update inode size
+    inode_data.size = obj.size;
+    
+    Ok(bytes_written)
 }
 
 pub fn create_file(fs: &mut NebulaFS, parent_inode: u64, name: &str) -> Result<u64, &'static str> {
-    // In a real implementation, we would:
-    // 1. Find the parent directory object
-    // 2. Create a new object for the file
-    // 3. Add an entry to the directory
-    // 4. Return the new inode number
+    // Get the filesystem state
+    let state = fs.get_state_mut();
     
-    // For now, we'll just return a dummy inode number
-    Ok(100)
+    // Check if parent exists and is a directory
+    let parent_inode = state.inodes.get(&parent_inode)
+        .ok_or("Parent inode not found")?;
+    
+    if !parent_inode.is_dir() {
+        return Err("Parent is not a directory");
+    }
+    
+    // Check if the name already exists
+    let parent_dir = state.directories.get(&parent_inode.ino)
+        .ok_or("Parent directory not found")?;
+    
+    if parent_dir.lookup(name).is_some() {
+        return Err("File already exists");
+    }
+    
+    // Create a new inode
+    let inode_num = state.create_inode(0o100644 | 0o100000); // Regular file with rw-r--r-- permissions
+    
+    // Create a new object for the file
+    let obj = state.create_object(inode_num);
+    obj.set_type(ObjectType::PlainFile);
+    
+    // Add the entry to the parent directory
+    if let Some(dir) = state.directories.get_mut(&parent_inode.ino) {
+        dir.add_entry(name, inode_num);
+    }
+    
+    Ok(inode_num)
 }
 
 pub fn create_dir(fs: &mut NebulaFS, parent_inode: u64, name: &str) -> Result<u64, &'static str> {
-    // In a real implementation, we would:
-    // 1. Find the parent directory object
-    // 2. Create a new object for the directory
-    // 3. Initialize the directory with "." and ".." entries
-    // 4. Add an entry to the parent directory
-    // 5. Return the new inode number
+    // Get the filesystem state
+    let state = fs.get_state_mut();
     
-    // For now, we'll just return a dummy inode number
-    Ok(101)
+    // Check if parent exists and is a directory
+    let parent_inode = state.inodes.get(&parent_inode)
+        .ok_or("Parent inode not found")?;
+    
+    if !parent_inode.is_dir() {
+        return Err("Parent is not a directory");
+    }
+    
+    // Check if the name already exists
+    let parent_dir = state.directories.get(&parent_inode.ino)
+        .ok_or("Parent directory not found")?;
+    
+    if parent_dir.lookup(name).is_some() {
+        return Err("Directory already exists");
+    }
+    
+    // Create a new inode
+    let inode_num = state.create_inode(0o040755 | 0o040000); // Directory with rwxr-xr-x permissions
+    
+    // Create a new object for the directory
+    let obj = state.create_object(inode_num);
+    obj.set_type(ObjectType::Directory);
+    
+    // Create the directory structure
+    let mut new_dir = Directory::new();
+    new_dir.add_entry(".", inode_num); // Self reference
+    new_dir.add_entry("..", parent_inode.ino); // Parent reference
+    state.directories.insert(inode_num, new_dir);
+    
+    // Add the entry to the parent directory
+    if let Some(dir) = state.directories.get_mut(&parent_inode.ino) {
+        dir.add_entry(name, inode_num);
+    }
+    
+    Ok(inode_num)
 }
 
 pub fn lookup(fs: &NebulaFS, parent_inode: u64, name: &str) -> Result<u64, &'static str> {
-    // In a real implementation, we would:
-    // 1. Find the parent directory object
-    // 2. Look up the name in the directory
-    // 3. Return the inode number
+    // Get the filesystem state
+    let state = fs.get_state();
     
-    // For now, we'll just return a dummy inode number
-    Ok(102)
+    // Check if parent exists and is a directory
+    let parent_inode = state.inodes.get(&parent_inode)
+        .ok_or("Parent inode not found")?;
+    
+    if !parent_inode.is_dir() {
+        return Err("Parent is not a directory");
+    }
+    
+    // Look up the name in the directory
+    let parent_dir = state.directories.get(&parent_inode.ino)
+        .ok_or("Parent directory not found")?;
+    
+    parent_dir.lookup(name)
+        .ok_or("File not found")
 }
 
 pub fn link_file(fs: &mut NebulaFS, inode: u64, parent_inode: u64, name: &str) -> Result<(), &'static str> {
-    // In a real implementation, we would:
-    // 1. Find the parent directory object
-    // 2. Add an entry pointing to the existing inode
-    // 3. Increment the link count
+    // Get the filesystem state
+    let state = fs.get_state_mut();
+    
+    // Check if inode exists
+    if state.inodes.get(&inode).is_none() {
+        return Err("Source inode not found");
+    }
+    
+    // Check if parent exists and is a directory
+    let parent_inode = state.inodes.get(&parent_inode)
+        .ok_or("Parent inode not found")?;
+    
+    if !parent_inode.is_dir() {
+        return Err("Parent is not a directory");
+    }
+    
+    // Check if the name already exists
+    let parent_dir = state.directories.get(&parent_inode.ino)
+        .ok_or("Parent directory not found")?;
+    
+    if parent_dir.lookup(name).is_some() {
+        return Err("File already exists");
+    }
+    
+    // Add the link
+    if let Some(dir) = state.directories.get_mut(&parent_inode.ino) {
+        dir.add_entry(name, inode);
+    }
+    
+    // Increment link count
+    if let Some(inode_data) = state.inodes.get_mut(&inode) {
+        inode_data.nlink += 1;
+    }
     
     Ok(())
 }
 
 pub fn unlink_file(fs: &mut NebulaFS, parent_inode: u64, name: &str) -> Result<(), &'static str> {
-    // In a real implementation, we would:
-    // 1. Find the parent directory object
-    // 2. Remove the entry from the directory
-    // 3. Decrement the link count
-    // 4. Free the inode if link count reaches zero
+    // Get the filesystem state
+    let state = fs.get_state_mut();
+    
+    // Check if parent exists and is a directory
+    let parent_inode = state.inodes.get(&parent_inode)
+        .ok_or("Parent inode not found")?;
+    
+    if !parent_inode.is_dir() {
+        return Err("Parent is not a directory");
+    }
+    
+    // Look up the name in the directory
+    let parent_dir = state.directories.get_mut(&parent_inode.ino)
+        .ok_or("Parent directory not found")?;
+    
+    let inode_num = parent_dir.lookup(name)
+        .ok_or("File not found")?;
+    
+    // Remove the entry
+    parent_dir.remove_entry(name);
+    
+    // Decrement link count and free inode if needed
+    if let Some(inode_data) = state.inodes.get_mut(&inode_num) {
+        inode_data.nlink -= 1;
+        if inode_data.nlink == 0 {
+            // Free the inode and its object
+            state.inodes.remove(&inode_num);
+            state.directories.remove(&inode_num);
+            // In a real implementation, we would also free the object's blocks
+        }
+    }
     
     Ok(())
 }
 
 /// Initialize the ZPL layer
 pub fn init_zpl(fs: &mut NebulaFS) -> Result<(), &'static str> {
-    // In a real implementation, we would:
-    // 1. Read the superblock
-    // 2. Initialize the root directory
-    // 3. Set up the inode cache
+    // Create the filesystem state
+    let pool_name = &fs.pool_name;
+    let block_size = fs.block_size;
+    let state = FileSystemState::new(pool_name, block_size);
+    
+    // Store the state in the filesystem
+    fs.set_state(state);
     
     Ok(())
 }
