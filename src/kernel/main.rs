@@ -27,6 +27,7 @@ mod syscalls;
 mod panic;
 mod exceptions;
 mod memory; // New module for paging
+mod fs;
 
 use allocator::ALLOCATOR; 
 use core::arch::asm;
@@ -87,7 +88,6 @@ struct MultibootInfo {
     fb_bpp: u8,
     fb_type: u8,
 }
-
 
 core::arch::global_asm!(
     ".global _start",
@@ -209,6 +209,34 @@ pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
             idt::init_pic();
             exceptions::init();
             
+            serial_println!("Initializing Window Manager...");
+            let mut window_manager = gui::WindowManager::new();
+            window_manager.set_screen_size(fb.width as u32, fb.height as u32);
+
+            // Pass the filesystem to the window manager
+            if let Ok(mut fs) = fs::NebulaFS::new("nebula_pool", 4096, 1024 * 1024) {
+                if fs.mount().is_ok() {
+                    window_manager.set_filesystem(fs);
+                    serial_println!("Filesystem initialized and passed to window manager");
+                }
+            }
+            update_progress(75);
+            serial_println!("Initializing NebulaFS...");
+            let mut fs = fs::NebulaFS::new("nebula_pool", 4096, 1024 * 1024); // 4KB blocks, 4GB max
+            if let Err(e) = fs.mount() {
+                serial_println!("Failed to mount NebulaFS: {}", e);
+            } else {
+                serial_println!("NebulaFS mounted successfully!");
+
+                // Test filesystem operations
+                if let Err(e) = test_filesystem(&mut fs) {
+                    serial_println!("Filesystem test failed: {}", e);
+                } else {
+                    serial_println!("Filesystem test passed!");
+                }
+            }
+            update_progress(70);
+            
             idt::set_gate(32, interrupts::timer_handler_asm as *const () as u32, 0x08, 0x8E); // IRQ 0 -> Vector 32
             idt::set_gate(33, interrupts::keyboard_handler_asm as *const () as u32, 0x08, 0x8E); // IRQ 1 -> Vector 33
             idt::set_gate(44, interrupts::mouse_handler_asm as *const () as u32, 0x08, 0x8E); // IRQ 12 -> Vector 44
@@ -286,3 +314,37 @@ pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
         );
     }
 }
+
+fn test_filesystem(fs: &mut fs::NebulaFS) -> Result<(), &'static str> {
+    // Test creating a file
+    let file_inode = fs.create_file(2, "test_file.txt")?;
+    serial_println!("Created file with inode: {}", file_inode);
+
+    // Test writing to the file
+    let test_data = b"Hello, NebulaFS!";
+    let bytes_written = fs.write(file_inode, 0, test_data)?;
+    serial_println!("Wrote {} bytes to file", bytes_written);
+
+    // Test reading from the file
+    let mut read_buffer = vec![0; test_data.len()];
+    let bytes_read = fs.read(file_inode, 0, &mut read_buffer)?;
+    serial_println!("Read {} bytes from file", bytes_read);
+
+    // Verify the data
+    if &read_buffer[..bytes_read] == test_data {
+        serial_println!("Data verification successful!");
+    } else {
+        return Err("Data verification failed");
+    }
+
+    // Test creating a directory
+    let dir_inode = fs.create_dir(2, "test_dir")?;
+    serial_println!("Created directory with inode: {}", dir_inode);
+
+    // Test creating a snapshot
+    fs.snapshot("test_snapshot")?;
+    serial_println!("Created snapshot: test_snapshot");
+
+    Ok(())
+}
+

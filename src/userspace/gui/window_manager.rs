@@ -16,6 +16,7 @@ pub enum AppType {
     Calculator,
     Terminal,
     TextEditor,
+    FileManager,
 }
 
 pub enum AppData {
@@ -23,14 +24,16 @@ pub enum AppData {
     Calculator(crate::apps::calculator::CalculatorState),
     Terminal(crate::apps::terminal::TerminalState),
     TextEditor(crate::apps::text_editor::TextEditorState),
+    FileManager(crate::apps::file_manager::FileManagerState),
 }
 
 impl AppData {
     pub fn draw(&self, fb: &mut Framebuffer, bounds: Rect, is_focused: bool) {
         match self {
-            AppData::Calculator(state) => crate::apps::calculator::CalculatorApp::draw(fb, bounds, state), // Calculator doesn't use is_focused yet
+            AppData::Calculator(state) => crate::apps::calculator::CalculatorApp::draw(fb, bounds, state),
             AppData::Terminal(state) => crate::apps::terminal::TerminalApp::draw(fb, bounds, state),
             AppData::TextEditor(state) => crate::apps::text_editor::TextEditorApp::draw(fb, bounds, state, is_focused),
+            AppData::FileManager(state) => crate::apps::file_manager::FileManagerApp::draw(fb, bounds, state),
             AppData::None => {}
         }
     }
@@ -40,6 +43,7 @@ impl AppData {
             AppData::TextEditor(state) => crate::apps::text_editor::TextEditorApp::handle_keyboard_input(state, c),
             AppData::Calculator(state) => crate::apps::calculator::CalculatorApp::handle_keyboard_input(state, c),
             AppData::Terminal(state) => crate::apps::terminal::TerminalApp::handle_keypress(state, c),
+            AppData::FileManager(state) => crate::apps::file_manager::FileManagerApp::handle_keyboard_input(state, c),
             AppData::None => {}
         }
     }
@@ -49,6 +53,7 @@ impl AppData {
             AppData::Calculator(state) => crate::apps::calculator::CalculatorApp::handle_click(state, bounds, mx, my),
             AppData::Terminal(state) => crate::apps::terminal::TerminalApp::handle_click(state, bounds, mx, my),
             AppData::TextEditor(state) => crate::apps::text_editor::TextEditorApp::handle_click(state, bounds, mx, my),
+            AppData::FileManager(state) => crate::apps::file_manager::FileManagerApp::handle_click(state, bounds, mx, my),
             AppData::None => {}
         }
     }
@@ -69,6 +74,8 @@ impl Window {
         let data = match app_type {
             AppType::Calculator => AppData::Calculator(crate::apps::calculator::CalculatorState::new()),
             AppType::TextEditor => AppData::TextEditor(crate::apps::text_editor::TextEditorState::new()),
+            AppType::Terminal => AppData::Terminal(crate::apps::terminal::TerminalState::new()),
+            AppType::FileManager => AppData::FileManager(crate::apps::file_manager::FileManagerState::new()),
             _ => AppData::None,
         };
         Self {
@@ -93,6 +100,7 @@ pub struct WindowManager {
     context_menu: Option<(i32, i32)>,
     screen_w: u32,
     screen_h: u32,
+    fs: Option<crate::fs::NebulaFS>,
 }
 
 impl WindowManager {
@@ -107,6 +115,7 @@ impl WindowManager {
             context_menu: None,
             screen_w: 1024,
             screen_h: 768,
+            fs: None,
         }
     }
 
@@ -115,13 +124,17 @@ impl WindowManager {
         self.screen_h = h;
     }
 
+    pub fn set_filesystem(&mut self, fs: crate::fs::NebulaFS) {
+        self.fs = Some(fs);
+    }
+
     pub fn handle_mouse(&mut self, mx: i32, my: i32, ml: bool, mr: bool) -> bool {
         let mut menu_toggle = false;
 
         // Handle Right Click (Open Context Menu)
         if mr && !self.last_right_btn {
             self.context_menu = Some((mx, my));
-            menu_toggle = true; // Signal main loop to close start menu
+            menu_toggle = true;
         }
         self.last_right_btn = mr;
 
@@ -131,19 +144,29 @@ impl WindowManager {
                 let rel_x = mx - cx;
                 let rel_y = my - cy;
 
-                if rel_x >= 0 && rel_x < 150 && rel_y >= 0 && rel_y < 80 {
+                if rel_x >= 0 && rel_x < 150 && rel_y >= 0 && rel_y < 100 {
                     let item = rel_y / 20;
                     match item {
-                        0 => { // New Calculator
+                        0 => {
                             self.windows.push(Window::new("Calculator", mx as u32, my as u32, 220, 300, AppType::Calculator));
                         }
-                        1 => { // New Text Editor
+                        1 => {
                             self.windows.push(Window::new("Text Editor", mx as u32, my as u32, 400, 300, AppType::TextEditor));
                         }
-                        2 => { // System Settings Placeholder
-                            self.windows.push(Window::new("System Settings", mx as u32, my as u32, 300, 200, AppType::None));
+                        2 => {
+                            self.windows.push(Window::new("Terminal", mx as u32, my as u32, 400, 300, AppType::Terminal));
                         }
-                        3 => { // Close All
+                        3 => {
+                            let mut fm = Window::new("File Manager", mx as u32, my as u32, 500, 400, AppType::FileManager);
+                            if let AppData::FileManager(ref mut state) = fm.data {
+                                state.refresh_files();
+                                if let Some(fs) = &self.fs {
+                                    state.set_filesystem(fs.clone());
+                                }
+                            }
+                            self.windows.push(fm);
+                        }
+                        4 => {
                             self.windows.clear();
                         }
                         _ => {}
@@ -152,7 +175,6 @@ impl WindowManager {
                     self.last_mouse_btn = ml;
                     return false;
                 } else {
-                    // Clicked outside context menu, close it
                     self.context_menu = None;
                 }
             }
@@ -185,67 +207,60 @@ impl WindowManager {
             // Hit test windows (top to bottom)
             if !taskbar_handled {
                 for (i, win) in self.windows.iter_mut().enumerate().rev() {
-                if win.is_minimized { continue; }
-                
-                let x = win.bounds.x as i32;
-                let y = win.bounds.y as i32;
-                let w = win.bounds.width as i32;
-
-                // Check title bar (for dragging)
-                if mx >= x && mx <= x + w &&
-                   my >= y && my <= y + TITLE_BAR_HEIGHT as i32 {
-                    clicked_idx = Some(i);
-
-                    // Close button check (rightmost 25px)
-                    if mx >= x + w - 25 {
-                        close_clicked = true;
-                        break;
-                    }
-                    // Maximize button check
-                    if mx >= x + w - 50 {
-                        if win.is_maximized {
-                            win.bounds = win.old_bounds;
-                            win.is_maximized = false;
-                        } else {
-                            win.old_bounds = win.bounds;
-                            win.bounds = Rect { x: 0, y: 0, width: self.screen_w, height: self.screen_h - TASKBAR_HEIGHT };
-                            win.is_maximized = true;
-                        }
-                        break;
-                    }
-                    // Minimize button check
-                    if mx >= x + w - 75 {
-                        win.is_minimized = true;
-                        break;
-                    }
-
-                    is_dragging = true;
-                    self.drag_off_x = mx - x;
-                    self.drag_off_y = my - y;
-                    break;
-                }
-
-                // Check window body (for app interaction)
-                if mx >= win.bounds.x as i32 && mx <= (win.bounds.x + win.bounds.width) as i32 &&
-                   my > (win.bounds.y + TITLE_BAR_HEIGHT) as i32 && my <= (win.bounds.y + win.bounds.height) as i32 {
-                    clicked_idx = Some(i);
+                    if win.is_minimized { continue; }
                     
-                    win.data.handle_click(win.bounds, mx, my);
-                    break;
+                    let x = win.bounds.x as i32;
+                    let y = win.bounds.y as i32;
+                    let w = win.bounds.width as i32;
+
+                    // Check title bar (for dragging)
+                    if mx >= x && mx <= x + w &&
+                       my >= y && my <= y + TITLE_BAR_HEIGHT as i32 {
+                        clicked_idx = Some(i);
+
+                        // Close button check (rightmost 25px)
+                        if mx >= x + w - 25 {
+                            close_clicked = true;
+                            break;
+                        }
+                        // Maximize button check
+                        if mx >= x + w - 50 {
+                            if win.is_maximized {
+                                win.bounds = win.old_bounds;
+                                win.is_maximized = false;
+                            } else {
+                                win.old_bounds = win.bounds;
+                                win.bounds = Rect { x: 0, y: 0, width: self.screen_w, height: self.screen_h - TASKBAR_HEIGHT };
+                                win.is_maximized = true;
+                            }
+                            break;
+                        }
+                        // Minimize button check
+                        if mx >= x + w - 75 {
+                            win.is_minimized = true;
+                            break;
+                        }
+
+                        is_dragging = true;
+                        self.drag_off_x = mx - x;
+                        self.drag_off_y = my - y;
+                        break;
+                    }
+
+                    // Check window body (for app interaction)
+                    if mx >= win.bounds.x as i32 && mx <= (win.bounds.x + win.bounds.width) as i32 &&
+                       my > (win.bounds.y + TITLE_BAR_HEIGHT) as i32 && my <= (win.bounds.y + win.bounds.height) as i32 {
+                        clicked_idx = Some(i);
+                        
+                        win.data.handle_click(win.bounds, mx, my);
+                        break;
+                    }
                 }
-            }
             }
 
             if let Some(idx) = clicked_idx {
                 if close_clicked {
-                    // Mark the area as dirty so the background can overwrite the closed window
-                    let win_bounds = self.windows.as_slice()[idx].bounds;
-                    // We need to mark damage on the global framebuffer. 
-                    // Since we don't have a reference here, main.rs handles redrawing 
-                    // but we can ensure the next frame clears it by marking the whole window area
-                    // if your system supports a global damage queue.
-                    
-                    self.windows.remove(idx); // Dropping the Window automatically frees AppData heap memory
+                    self.windows.remove(idx);
                 } else {
                     let win = self.windows.remove(idx);
                     self.windows.push(win);
@@ -253,7 +268,7 @@ impl WindowManager {
                         self.dragging_idx = Some(self.windows.len() - 1);
                     }
                 }
-                menu_toggle = false; // Prevent menu toggle when clicking windows
+                menu_toggle = false;
             }
         }
 
@@ -273,9 +288,17 @@ impl WindowManager {
     }
 
     pub fn handle_keyboard_input(&mut self, c: char) {
-        // Dispatch keyboard input to the top-most non-minimized window
         if let Some(win) = self.windows.iter_mut().rev().find(|w| !w.is_minimized) {
             win.data.handle_keyboard_input(c);
+
+            if let AppData::Terminal(state) = &win.data {
+                if state.should_close {
+                    if let Some(idx) = self.windows.iter().rev().position(|w| !w.is_minimized) {
+                        let idx = self.windows.len() - 1 - idx;
+                        self.windows.remove(idx);
+                    }
+                }
+            }
         }
     }
 
@@ -283,30 +306,26 @@ impl WindowManager {
         for (i, window) in self.windows.iter().enumerate() {
             if window.is_minimized { continue; }
 
-            // Window Body
             fb.draw_rect(window.bounds.x as usize, window.bounds.y as usize, window.bounds.width as usize, window.bounds.height as usize, 0x00C0C0C0);
             
-            // Title Bar
             fb.draw_rect(window.bounds.x as usize, window.bounds.y as usize, window.bounds.width as usize, TITLE_BAR_HEIGHT as usize, 0x000078D7);
             
             draw_string(fb, window.bounds.x as usize + 5, window.bounds.y as usize + 8, window.title, 0xFFFFFF);
 
-            // Dispatch to application-specific drawing logic
             let is_focused = i == self.windows.len() - 1;
             window.data.draw(fb, window.bounds, is_focused);
         }
 
-        // Draw Context Menu
         if let Some((cx, cy)) = self.context_menu {
-            fb.draw_rect(cx as usize, cy as usize, 150, 80, 0x00E0E0E0); // Menu BG
-            // Draw borders
+            fb.draw_rect(cx as usize, cy as usize, 150, 100, 0x00E0E0E0);
             fb.draw_rect(cx as usize, cy as usize, 150, 1, 0x00000000);
-            fb.draw_rect(cx as usize, cy as usize + 79, 150, 1, 0x00000000);
+            fb.draw_rect(cx as usize, cy as usize + 99, 150, 1, 0x00000000);
             
             draw_string(fb, cx as usize + 10, cy as usize + 5,  "New Calculator", 0x000000);
             draw_string(fb, cx as usize + 10, cy as usize + 25, "New Text Editor", 0x000000);
-            draw_string(fb, cx as usize + 10, cy as usize + 45, "System Settings", 0x000000);
-            draw_string(fb, cx as usize + 10, cy as usize + 65, "Close All", 0x000000);
+            draw_string(fb, cx as usize + 10, cy as usize + 45, "New Terminal", 0x000000);
+            draw_string(fb, cx as usize + 10, cy as usize + 65, "New File Manager", 0x000000);
+            draw_string(fb, cx as usize + 10, cy as usize + 85, "Close All", 0x000000);
         }
     }
 }

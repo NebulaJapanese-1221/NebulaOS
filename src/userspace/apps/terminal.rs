@@ -10,6 +10,7 @@ pub struct TerminalState {
     pub cursor_pos: usize,
     pub history: Vec<String>,
     pub history_idx: Option<usize>,
+    pub should_close: bool, // New field to indicate if the terminal should close
 }
 
 impl TerminalState {
@@ -19,6 +20,7 @@ impl TerminalState {
             cursor_pos: 2, // Cursor starts after "> "
             history: Vec::new(),
             history_idx: None,
+            should_close: false, // Initialize to false
         }
     }
 
@@ -31,6 +33,37 @@ impl TerminalState {
                 self.buffer.clear();
                 self.buffer.push_str("> ");
                 self.cursor_pos = 2; // Reset cursor position after clearing
+            }
+            "help" => { // New command: Display help
+                self.buffer.push_str("Available commands:\n");
+                self.buffer.push_str("  ver - Display OS version\n");
+                self.buffer.push_str("  cls - Clear the screen\n");
+                self.buffer.push_str("  help - Display this help message\n");
+                self.buffer.push_str("  echo <text> - Print text\n");
+                self.buffer.push_str("  date - Display current date\n");
+                self.buffer.push_str("  time - Display current time\n");
+                self.buffer.push_str("  exit - Close the terminal\n");
+            }
+            "echo" => { // New command: Echo text
+                // Extract the text after "echo"
+                if let Some(text) = cmd.split_whitespace().nth(1) {
+                    self.buffer.push_str(text);
+                    self.buffer.push_str("\n");
+                } else {
+                    self.buffer.push_str("Usage: echo <text>\n");
+                }
+            }
+            "date" => { // New command: Display date
+                let time = crate::drivers::rtc::get_time();
+                self.buffer.push_str(&format!("Current date: {}-{}-{} [Not fully implemented]\n", 2023, 1, 1));
+            }
+            "time" => { // New command: Display time
+                let time = crate::drivers::rtc::get_time();
+                self.buffer.push_str(&format!("Current time: {:02}:{:02}:{:02}\n", time.hour, time.minute, time.second));
+            }
+            "exit" => { // New command: Exit terminal
+                self.should_close = true;
+                self.buffer.push_str("Terminal closed.\n");
             }
             "" => { /* Do nothing on empty input */ }
             _ => {
