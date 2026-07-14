@@ -1,136 +1,167 @@
-use crate::process::{Process, ProcessState};
-use crate::sync::Spinlock;
-use alloc::vec::Vec; // Need Vec for processes list
-use alloc::boxed::Box; // Need Box for owning Process objects
-use core::arch::asm; // For inline assembly
-use crate::serial_println; // Import serial_println macro
+// Scheduler for NebulaOS
+// Enhanced with thread support
 
+use alloc::collections::VecDeque;
+use alloc::boxed::Box;
+use spin::Mutex;
+use x86_64::structures::paging::{PageTable, Mapper, Size4KiB, FrameAllocator};
+use x86_64::{VirtAddr, PhysAddr};
+use crate::process::{Process, ProcessState, Thread};
+use core::sync::atomic::{AtomicUsize, Ordering};
+
+/// Scheduler structure
 pub struct Scheduler {
-    pub processes: Vec<Box<Process>>,
-    pub current_pid: Option<usize>,
-    pub ticks: usize,
+    pub processes: VecDeque<Box<Process>>,
+    current_process_index: usize,
+    pub tick_count: usize,
 }
 
 impl Scheduler {
-    pub const fn new() -> Self {
-        Self {
-            processes: Vec::new(),
-            current_pid: None,
-            ticks: 0,
+    /// Create a new scheduler
+    pub fn new() -> Self {
+        Scheduler {
+            processes: VecDeque::new(),
+            current_process_index: 0,
+            tick_count: 0,
         }
     }
 
-    #[allow(dead_code)]
-    pub fn add_kernel_task(&mut self, entry_point: u32) {
-        let id = self.processes.len();
-        self.processes.push(Process::new_kernel_task(id, entry_point));
+    /// Spawn a new kernel task
+    pub fn spawn_kernel_task(&mut self, entry_point: u32) -> usize {
+        let pid = self.processes.len() + 1;
+        let mut process = Process::new_kernel_task(pid as usize, entry_point);
+
+        // Create a main thread
+        let _thread = process.create_thread(entry_point, 4096);
+
+        self.processes.push_back(process);
+        pid
     }
 
-    #[allow(dead_code)]
+    /// Spawn a new user process
     pub fn spawn_user_process(
         &mut self,
         entry_point: u32,
         user_stack_size: usize,
         kernel_stack_size: usize,
     ) -> usize {
-        let id = self.processes.len();
-        let process = Process::new_user_process(
-            id,
+        let pid = self.processes.len() + 1;
+        let mut process = Process::new_user_process(
+            pid as usize,
             entry_point,
             user_stack_size,
             kernel_stack_size,
         );
-        self.processes.push(process);
-        id // Return the new process ID
+
+        // Create a main thread
+        let _thread = process.create_thread(entry_point, user_stack_size);
+        self.processes.push_back(process);
+        pid
     }
 
-    #[allow(dead_code)]
-    pub fn spawn(&mut self, entry_point: u32) {
-        self.add_kernel_task(entry_point);
-    }
-}
-
-pub static SCHEDULER: Spinlock<Scheduler> = Spinlock::new(Scheduler::new());
-
-pub fn exit_current_process(regs_ptr: u32) -> u32 {
-    let mut sched = SCHEDULER.lock();
-    if let Some(pid) = sched.current_pid.take() {
-        if pid < sched.processes.len() {
-            sched.processes.remove(pid);
-            // Adjust current_pid if necessary
-            if pid == sched.processes.len() {
-                 sched.current_pid = if sched.processes.is_empty() { None } else { Some(0) };
-            } else if !sched.processes.is_empty() {
-                 sched.current_pid = Some(pid);
-            } else {
-                 sched.current_pid = None;
-            }
-        }
-    }
-    drop(sched);
-    schedule(regs_ptr)
-}
-
-pub fn timer_tick() {
-    SCHEDULER.lock().ticks += 1;
-}
-
-#[no_mangle]
-pub extern "C" fn schedule(regs_ptr: u32) -> u32 {
-    let mut sched = SCHEDULER.lock();
-
-    // Save current process state if there was one running
-    if let Some(pid) = sched.current_pid.take() {
-        if pid < sched.processes.len() {
-            let proc = &mut sched.processes.as_mut_slice()[pid];
-            proc.kernel_stack_ptr = regs_ptr; // Save current kernel stack top
-            if proc.state == ProcessState::Running {
-                proc.state = ProcessState::Ready; // Reset to Ready if it was Running
-            }
+    /// Create a new thread in an existing process
+    pub fn create_thread(
+        &mut self,
+        pid: usize,
+        entry: u32,
+        stack_size: usize,
+    ) -> Option<usize> {
+        if let Some(process) = self.processes.iter_mut().find(|p| p.pid == pid) {
+            let thread = process.create_thread(entry, stack_size);
+            Some(thread.tid)
+        } else {
+            None
         }
     }
 
-    if sched.processes.is_empty() {
-        serial_println!("Scheduler: No processes to run!");
-        return regs_ptr;
-    }
+    /// Get the next process to run
+    pub fn next_process(&mut self) -> Option<&mut Process> {
+        self.tick_count += 1;
 
-    // Find the next process to run (Round Robin)
-    let start_idx = sched.current_pid.map_or(0, |pid| (pid + 1) % sched.processes.len());
-    let mut next_pid = start_idx;
-    let current_ticks = sched.ticks;
+        // Round-robin scheduling
+        let mut attempts = 0;
+        while attempts < self.processes.len() {
+            self.current_process_index = (self.current_process_index + 1) % self.processes.len();
 
-    loop {
-        let proc = &mut sched.processes.as_mut_slice()[next_pid];
-        match proc.state {
-            ProcessState::Ready => break, // Found a ready process
-            ProcessState::Sleeping(wake_tick) if current_ticks >= wake_tick => {
-                proc.state = ProcessState::Ready; // Wake up
-                break;
-            }
-            _ => { // Continue to next process
-                next_pid = (next_pid + 1) % sched.processes.len();
-                if next_pid == start_idx {
-                    serial_println!("Scheduler: CPU Idle. All processes sleeping or dead.");
-                    return regs_ptr; // Return current regs, effectively idling.
+            if let Some(process) = self.processes.get_mut(self.current_process_index) {
+                // Check if process has any runnable threads
+                if process.threads.iter().any(|t| t.state == ProcessState::Ready) {
+                    return Some(process);
                 }
             }
+
+            attempts += 1;
+        }
+
+        None
+    }
+
+    /// Get the current process
+    pub fn current_process(&self) -> Option<&Process> {
+        self.processes.get(self.current_process_index)
+    }
+
+    /// Get the current process (mutable)
+    pub fn current_process_mut(&mut self) -> Option<&mut Process> {
+        self.processes.get_mut(self.current_process_index)
+    }
+
+    /// Block the current process
+    pub fn block_current(&mut self) {
+        if let Some(process) = self.current_process_mut() {
+            process.set_state(ProcessState::Blocked);
         }
     }
 
-    // Set the new current process and update its state to Running
-    sched.current_pid = Some(next_pid);
-    let next_proc = &mut sched.processes.as_mut_slice()[next_pid];
-    next_proc.state = ProcessState::Running;
-
-    // CRITICAL for Paging: Load the page directory of the new process into CR3.
-    unsafe {
-        asm!("mov cr3, {}", in(reg) next_proc.page_directory_phys_addr);
+    /// Wake up a process
+    pub fn wake_up(&mut self, pid: usize) {
+        if let Some(process) = self.processes.iter_mut().find(|p| p.pid == pid) {
+            process.set_state(ProcessState::Ready);
+        }
     }
 
-    // Update the TSS with the kernel stack for the NEW process.
-    crate::gdt::set_kernel_stack(next_proc.kernel_stack_ptr);
+    /// Exit the current process
+    pub fn exit_current(&mut self, exit_code: i32) {
+        if let Some(process) = self.processes.remove(self.current_process_index) {
+            // Clean up resources
+            // Reparent children to init process
+            for &child_pid in &process.children {
+                if let Some(child) = self.processes.iter_mut().find(|p| p.pid == child_pid) {
+                    child.parent_pid = 1; // Reparent to init
+                }
+            }
 
-    // Return the context (kernel stack pointer) of the process to be restored.
-    next_proc.kernel_stack_ptr
+            // If we removed the current process, select a new one
+            if self.current_process_index >= self.processes.len() {
+                self.current_process_index = 0;
+            }
+        }
+    }
+
+    /// Send signal to a process
+    pub fn send_signal(&mut self, pid: usize, signal: crate::process::Signal) {
+        if let Some(process) = self.processes.iter_mut().find(|p| p.pid == pid) {
+            process.send_signal(signal);
+        }
+    }
+
+    /// Get process by ID
+    pub fn get_process(&self, pid: usize) -> Option<&Process> {
+        self.processes.iter().find(|p| p.pid == pid)
+    }
+
+    /// Get process by ID (mutable)
+    pub fn get_process_mut(&mut self, pid: usize) -> Option<&mut Process> {
+        self.processes.iter_mut().find(|p| p.pid == pid)
+    }
+}
+
+/// Global scheduler instance
+pub static SCHEDULER: Mutex<Scheduler> = Mutex::new(Scheduler::new());
+
+/// Initialize the scheduler
+pub fn init() {
+    // Create init process (PID 1)
+    let mut scheduler = SCHEDULER.lock();
+    scheduler.spawn_kernel_task(0); // Placeholder entry point
 }

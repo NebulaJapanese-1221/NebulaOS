@@ -100,7 +100,7 @@ pub struct WindowManager {
     context_menu: Option<(i32, i32)>,
     screen_w: u32,
     screen_h: u32,
-    fs: Option<crate::fs::NebulaFS>,
+    vfs: Option<crate::fs::vfs::VFS>,
 }
 
 impl WindowManager {
@@ -115,7 +115,7 @@ impl WindowManager {
             context_menu: None,
             screen_w: 1024,
             screen_h: 768,
-            fs: None,
+            vfs: None,
         }
     }
 
@@ -124,8 +124,8 @@ impl WindowManager {
         self.screen_h = h;
     }
 
-    pub fn set_filesystem(&mut self, fs: crate::fs::NebulaFS) {
-        self.fs = Some(fs);
+    pub fn set_filesystem(&mut self, vfs: crate::fs::vfs::VFS) {
+        self.vfs = Some(vfs);
     }
 
     pub fn handle_mouse(&mut self, mx: i32, my: i32, ml: bool, mr: bool) -> bool {
@@ -156,8 +156,8 @@ impl WindowManager {
                         2 => {
                             let mut terminal = Window::new("Terminal", mx as u32, my as u32, 400, 300, AppType::Terminal);
                             if let AppData::Terminal(ref mut state) = terminal.data {
-                                if let Some(fs) = &self.fs {
-                                    state.set_filesystem(fs.clone());
+                                if let Some(vfs) = &self.vfs {
+                                    state.set_filesystem(vfs.clone());
                                 }
                             }
                             self.windows.push(terminal);
@@ -166,8 +166,8 @@ impl WindowManager {
                             let mut fm = Window::new("File Manager", mx as u32, my as u32, 500, 400, AppType::FileManager);
                             if let AppData::FileManager(ref mut state) = fm.data {
                                 state.refresh_files();
-                                if let Some(fs) = &self.fs {
-                                    state.set_filesystem(fs.clone());
+                                if let Some(vfs) = &self.vfs {
+                                    state.set_filesystem(vfs.clone());
                                 }
                             }
                             self.windows.push(fm);

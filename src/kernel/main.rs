@@ -221,36 +221,23 @@ pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
     
             window_manager.set_screen_size(fb_width, fb_height);
 
-            // Initialize and pass the filesystem to the window manager
-            let mut fs = fs::NebulaFS::new("nebula_pool", 4096, 1024 * 1024);
-                if fs.mount().is_ok() {
-                // Test filesystem operations
-                if let Err(e) = test_filesystem(&mut fs) {
-                    serial_println!("Filesystem test failed: {}", e);
-                } else {
-                    serial_println!("Filesystem test passed!");
-                }
+            // Initialize VFS and mount file systems
+            let mut vfs = fs::vfs::VFS::new();
 
-                window_manager.set_filesystem(fs);
-                serial_println!("Filesystem initialized and passed to window manager");
+            // Mount NebulaFS as the root file system
+            let mut nebula_fs = Box::new(fs::NebulaFS::new("nebula_pool", 4096, 1024 * 1024));
+            if nebula_fs.mount("/").is_ok() {
+                if let Err(e) = vfs.mount(nebula_fs, "/") {
+                    serial_println!("Failed to mount NebulaFS: {}", e);
+                } else {
+                    serial_println!("Mounted NebulaFS at /");
+                }
             }
+
+            // Pass VFS to window manager
+            window_manager.set_filesystem(vfs);
+            serial_println!("Filesystem initialized and passed to window manager");
             update_progress(75);
-            
-            serial_println!("Initializing NebulaFS...");
-            let mut fs = fs::NebulaFS::new("nebula_pool", 4096, 1024 * 1024); // 4KB blocks, 4GB max
-            if let Err(e) = fs.mount() {
-                serial_println!("Failed to mount NebulaFS: {}", e);
-            } else {
-                serial_println!("NebulaFS mounted successfully!");
-
-                // Test filesystem operations
-                if let Err(e) = test_filesystem(&mut fs) {
-                    serial_println!("Filesystem test failed: {}", e);
-                } else {
-                    serial_println!("Filesystem test passed!");
-                }
-            }
-            update_progress(70);
             
             serial_println!("Initializing PIC and Exceptions...");
             idt::init_pic();

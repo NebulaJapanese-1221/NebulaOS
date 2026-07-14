@@ -10,6 +10,19 @@ use crate::fs::journal::Journal;
 use alloc::sync::Arc;
 use core::cell::RefCell;
 
+pub mod vdev; // Virtual device management
+pub mod dmu;  // Data Management Unit (block allocation)
+pub mod zio;  // ZFS I/O pipeline
+pub mod spa;  // Storage Pool Allocator
+pub mod zpl;  // ZFS POSIX Layer (file system interface)
+pub mod arc;  // Adaptive Replacement Cache
+pub mod checksum; // Checksum algorithms
+pub mod journal; // Journaling system
+pub mod vfs;    // Virtual File System layer
+
+#[cfg(test)]
+mod test;
+
 /// Main NebulaFS structure
 pub struct NebulaFS {
     pub pool_name: String,

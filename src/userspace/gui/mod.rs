@@ -1,28 +1,43 @@
-use crate::framebuffer::Framebuffer;
-mod font;
 pub mod window_manager;
 pub mod start_menu;
+pub mod widgets;
+
+pub use window_manager::{Window, WindowManager, CURSOR_BITMAP, AppType, AppData};
+pub use widgets::{Widget, Button, TextBox, Dropdown, WidgetContainer};
 
 pub const CURSOR_WIDTH: usize = 12;
 pub const CURSOR_HEIGHT: usize = 19;
 
 pub const TASKBAR_HEIGHT: u32 = 40;
 pub const TITLE_BAR_HEIGHT: u32 = 25;
-pub use window_manager::{Window, WindowManager, CURSOR_BITMAP, AppType};
+
+use crate::framebuffer::Framebuffer;
 
 pub fn draw_boot_screen(fb: &mut Framebuffer) {
     // Dark Background
     fb.draw_rect(0, 0, fb.width, fb.height, 0x00000000);
 
-    // Draw a stylized "N" logo for NebulaOS
+    // Draw "NebulaOS" title
     let center_x = fb.width / 2;
-    let center_y = fb.height / 2;
-    fb.draw_rect(center_x - 40, center_y - 50, 20, 100, 0x000078D7); // Left bar
-    fb.draw_rect(center_x + 20, center_y - 50, 20, 100, 0x000078D7); // Right bar
-    // Diagonal (simplified as three steps)
-    fb.draw_rect(center_x - 20, center_y - 30, 20, 30, 0x000078D7);
-    fb.draw_rect(center_x, center_y - 10, 20, 30, 0x000078D7);
-    fb.draw_rect(center_x + 10, center_y + 10, 10, 20, 0x000078D7);
+    let center_y = fb.height / 2 - 50;
+    draw_large_string(fb, center_x - 150, center_y, "NebulaOS", 0x0078D7FF, 4);
+
+    // Draw fancy tilted "Alpha" text
+    let alpha_x = center_x - 50;
+    let alpha_y = center_y + 60;
+
+    // Draw "Alpha" with a tilt effect
+    for (i, c) in "Alpha".chars().enumerate() {
+        let x = alpha_x + i * 20;
+        let y = alpha_y + i * 4; // Tilt effect
+        let scale = 3;
+        let idx = match c {
+            'A'..='Z' => (c as usize) - ('A' as usize) + 11,
+            'a'..='z' => (c as usize) - ('a' as usize) + 37,
+            _ => 65,
+        };
+        draw_large_digit(fb, x, y, idx, 0x00FF8800, scale);
+    }
 
     fb.present();
 }

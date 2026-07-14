@@ -1,136 +1,397 @@
-use crate::syscalls::SyscallRegisters;
-use crate::allocator::ALLOCATOR; // Import the global allocator
-use core::alloc::GlobalAlloc; // For calling alloc on the allocator
-use alloc::boxed::Box;
+// Process Management for NebulaOS
+// Enhanced with threading support and process groups
 
-#[derive(Debug, PartialEq, Copy, Clone)]
+use alloc::vec::Vec;
+use alloc::string::String;
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use core::sync::atomic::{AtomicUsize, Ordering};
+use x86_64::structures::paging::{PageTable, Mapper, Size4KiB, FrameAllocator};
+use x86_64::{VirtAddr, PhysAddr};
+use crate::memory::protection::MemoryProtection;
+
+/// Process ID generator
+static NEXT_PID: AtomicUsize = AtomicUsize::new(1);
+
+/// Process state
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ProcessState {
-    Ready,
+    Created,
     Running,
-    Sleeping(usize),
-    #[allow(dead_code)]
-    Dead,
+    Blocked,
+    Zombie,
+    Stopped,
 }
 
+/// Process structure
 pub struct Process {
-    #[allow(dead_code)]
-    pub id: usize,
+    pub pid: usize,
+    pub parent_pid: usize,
     pub state: ProcessState,
-    pub kernel_stack_ptr: u32, // Pointer to the current top of the kernel stack for this process
-    pub stack: [u8; 4096],   // Kernel stack for this process
-
-    pub page_directory_phys_addr: u32, // Physical address of this process's page directory
-    pub user_stack_base: u32,          // Base virtual address of the user stack
-    pub user_eip: u32,                 // Entry point for user code
+    pub page_table: PageTable,
+    pub kernel_stack_ptr: u64,
+    pub user_stack_ptr: u64,
+    pub page_directory_phys_addr: u64,
+    pub user_eip: u32,
+    pub name: String,
+    pub threads: Vec<Thread>,
+    pub children: Vec<usize>,
+    pub exit_code: i32,
+    pub memory_protection: MemoryProtection,
+    pub process_group: usize,
+    pub session: usize,
+    pub signals: SignalHandler,
 }
 
 impl Process {
-    #[allow(dead_code)]
-    pub fn new_kernel_task(id: usize, entry_point: u32) -> Box<Self> {
-        let mut p = Box::new(Self {
-            id,
-            state: ProcessState::Ready,
+    /// Create a new process
+    pub fn new(name: &str, parent_pid: usize) -> Self {
+        let pid = NEXT_PID.fetch_add(1, Ordering::SeqCst);
+        
+        Process {
+            pid,
+            parent_pid,
+            state: ProcessState::Created,
+            page_table: unsafe { PageTable::new() },
             kernel_stack_ptr: 0,
-            stack: [0; 4096], // Kernel stack
-
-            page_directory_phys_addr: crate::memory::paging::get_kernel_page_directory_phys_addr(),
-            user_stack_base: 0, // Not applicable for kernel tasks
-            user_eip: 0,        // Not applicable for kernel tasks
-        });
-
-        // Calculate the address of the top of the stack for initial registers
-        let stack_top = p.stack.as_ptr() as usize + 4096;
-        // Define regs_ptr here so it's accessible for p.kernel_stack_ptr
-        let regs_ptr = (stack_top - core::mem::size_of::<SyscallRegisters>()) as *mut SyscallRegisters;
-
-        unsafe {
-            let regs = &mut *regs_ptr;
-            core::ptr::write(regs, core::mem::zeroed());
-            regs.eip = entry_point;
-            regs.cs = 0x08; // Kernel code segment
-            regs.ds = 0x10; regs.es = 0x10; regs.fs = 0x10; regs.gs = 0x10;
-            regs.eflags = 0x202; // IF set
-            regs.kernel_esp = regs_ptr as u32; // Store the kernel stack pointer for this process
+            user_stack_ptr: 0,
+            page_directory_phys_addr: 0,
+            user_eip: 0,
+            name: name.to_string(),
+            threads: Vec::new(),
+            children: Vec::new(),
+            exit_code: 0,
+            memory_protection: MemoryProtection::new(),
+            process_group: pid, // New processes start their own process group
+            session: pid,       // New processes start their own session
+            signals: SignalHandler::new(),
         }
-
-        p.kernel_stack_ptr = regs_ptr as u32;
-        p
     }
-
-    #[allow(dead_code)]
-    pub fn new_user_process(
-        id: usize,
-        entry_point: u32, // Virtual address of the user program's entry point
-        user_stack_size: usize,
-        kernel_stack_size: usize,
-    ) -> Box<Self> {
-        // 1. Get a page directory.
-        // THIS NEEDS TO BE A NEWLY ALLOCATED PAGE DIRECTORY, NOT A KERNEL ONE.
-        // For now, we use a placeholder that points to the kernel's PD.
-        // You MUST implement physical memory allocation and page directory creation here.
-        let page_directory_phys_addr = crate::memory::paging::create_user_page_directory();
-        
-        // 2. Allocate kernel stack for this process using the global kernel heap.
-        let kernel_stack_base = unsafe {
-            let layout = alloc::alloc::Layout::from_size_align(kernel_stack_size, 16).unwrap();
-            let ptr = ALLOCATOR.alloc(layout) as u32; // Use kernel heap
-            ptr + kernel_stack_size as u32 // Stack grows downwards
-        };
-
-        // 3. Allocate user stack using the global kernel heap.
-        let user_stack_base = unsafe {
-            let layout = alloc::alloc::Layout::from_size_align(user_stack_size, 16).unwrap();
-            let ptr = ALLOCATOR.alloc(layout) as u32; // Use kernel heap
-            ptr + user_stack_size as u32 // Stack grows downwards
-        };
-        // TODO: Map this user stack region in the process's page directory.
-
-        let mut p = Box::new(Self {
-            id,
-            state: ProcessState::Ready,
-            kernel_stack_ptr: kernel_stack_base, // Initial kernel stack top
-            stack: [0; 4096], // Kernel stack (can be optimized later)
-
-            page_directory_phys_addr,
-            user_stack_base,
-            user_eip: entry_point,
-        });
-
-        // Setup initial registers on the kernel stack for the first context switch to user mode.
-        // This frame will be used by IRETD.
-        let regs_ptr = (kernel_stack_base as usize - core::mem::size_of::<SyscallRegisters>()) as *mut SyscallRegisters;
-        
-        unsafe {
-            let regs = &mut *regs_ptr;
-            core::ptr::write(regs, core::mem::zeroed());
-
-            // User mode context:
-            regs.eip = entry_point;
-            regs.cs = 0x1B; // User code segment (DPL 3)
-            regs.ss = 0x23; // User data segment (DPL 3)
-            regs.eflags = 0x202; // IF set, so interrupts are enabled in user mode
-            regs.esp = p.user_stack_base; // Set user stack pointer
-
-            // Kernel mode context for when returning from interrupt/syscall:
-            regs.gs = 0; regs.fs = 0; regs.es = 0; regs.ds = 0; // Initial kernel segments
-            regs.kernel_esp = regs_ptr as u32; // This is the current kernel stack pointer
-            
-            // TODO: Map user stack into the process's page directory.
-        }
-
-        p.kernel_stack_ptr = regs_ptr as u32; // Update the saved kernel stack pointer
-        p
+    
+    /// Create a new thread in this process
+    pub fn create_thread(&mut self, entry: u32, stack_size: usize) -> Thread {
+        let tid = self.threads.len();
+        let thread = Thread::new(self.pid, tid, entry, stack_size);
+        self.threads.push(thread.clone());
+        thread
+    }
+    
+    /// Get the main thread
+    pub fn main_thread(&self) -> Option<&Thread> {
+        self.threads.first()
+    }
+    
+    /// Add a child process
+    pub fn add_child(&mut self, child_pid: usize) {
+        self.children.push(child_pid);
+    }
+    
+    /// Remove a child process
+    pub fn remove_child(&mut self, child_pid: usize) {
+        self.children.retain(|&pid| pid != child_pid);
+    }
+    
+    /// Set process state
+    pub fn set_state(&mut self, state: ProcessState) {
+        self.state = state;
+    }
+    
+    /// Send a signal to this process
+    pub fn send_signal(&mut self, signal: Signal) {
+        self.signals.send(signal);
+    }
+    
+    /// Check for pending signals
+    pub fn check_signals(&mut self) -> Option<Signal> {
+        self.signals.check()
+    }
+    
+    /// Set process group
+    pub fn set_process_group(&mut self, pgid: usize) {
+        self.process_group = pgid;
+    }
+    
+    /// Set session
+    pub fn set_session(&mut self, sid: usize) {
+        self.session = sid;
     }
 }
 
-#[allow(dead_code)]
-pub fn create_user_process(
-    id: usize,
-    entry_point: u32,
-    user_stack_size: usize,
-    kernel_stack_size: usize,
-) -> Box<Process> {
-    // This function should ideally parse an ELF and set up mappings.
-    // For now, it just calls new_user_process.
-    Process::new_user_process(id, entry_point, user_stack_size, kernel_stack_size)
+/// Thread structure
+#[derive(Debug, Clone)]
+pub struct Thread {
+    pub tid: usize,
+    pub pid: usize,
+    pub state: ProcessState,
+    pub stack_ptr: u64,
+    pub stack_size: usize,
+    pub entry_point: u32,
+    pub registers: ThreadRegisters,
+    pub thread_local_storage: *mut u8,
+}
+
+impl Thread {
+    /// Create a new thread
+    pub fn new(pid: usize, tid: usize, entry: u32, stack_size: usize) -> Self {
+        Thread {
+            tid,
+            pid,
+            state: ProcessState::Created,
+            stack_ptr: 0,
+            stack_size,
+            entry_point: entry,
+            registers: ThreadRegisters::new(),
+            thread_local_storage: core::ptr::null_mut(),
+        }
+    }
+    
+    /// Set thread state
+    pub fn set_state(&mut self, state: ProcessState) {
+        self.state = state;
+    }
+}
+
+/// Thread registers
+#[derive(Debug, Clone, Copy)]
+pub struct ThreadRegisters {
+    pub eax: u32,
+    pub ebx: u32,
+    pub ecx: u32,
+    pub edx: u32,
+    pub esi: u32,
+    pub edi: u32,
+    pub ebp: u32,
+    pub esp: u32,
+    pub eip: u32,
+    pub eflags: u32,
+    pub cs: u32,
+    pub ds: u32,
+    pub es: u32,
+    pub fs: u32,
+    pub gs: u32,
+}
+
+impl ThreadRegisters {
+    /// Create new registers with default values
+    pub fn new() -> Self {
+        ThreadRegisters {
+            eax: 0,
+            ebx: 0,
+            ecx: 0,
+            edx: 0,
+            esi: 0,
+            edi: 0,
+            ebp: 0,
+            esp: 0,
+            eip: 0,
+            eflags: 0,
+            cs: 0,
+            ds: 0,
+            es: 0,
+            fs: 0,
+            gs: 0,
+        }
+    }
+}
+
+/// Signal types
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Signal {
+    Sighup = 1,    // Hangup
+    Sigint = 2,    // Interrupt
+    Sigquit = 3,   // Quit
+    Sigill = 4,    // Illegal instruction
+    Sigtrap = 5,   // Trace/breakpoint trap
+    Sigabrt = 6,   // Abort
+    Sigfpe = 8,    // Floating point exception
+    Sigkill = 9,   // Kill
+    Sigsegv = 11,  // Segment violation
+    Sigpipe = 13,  // Broken pipe
+    Sigalrm = 14,  // Alarm clock
+    Sigterm = 15,  // Termination
+    Sigchld = 17,  // Child status change
+    Sigcont = 18,  // Continue
+    Sigstop = 19,  // Stop
+    Sigtstp = 20,  // Keyboard stop
+    Sigttin = 21,  // Background read
+    Sigttou = 22,  // Background write
+}
+
+/// Signal handler
+pub struct SignalHandler {
+    pending: Vec<Signal>,
+    handlers: BTreeMap<Signal, SignalHandlerFunc>,
+}
+
+impl SignalHandler {
+    /// Create a new signal handler
+    pub fn new() -> Self {
+        SignalHandler {
+            pending: Vec::new(),
+            handlers: BTreeMap::new(),
+        }
+    }
+    
+    /// Send a signal
+    pub fn send(&mut self, signal: Signal) {
+        self.pending.push(signal);
+    }
+    
+    /// Check for pending signals
+    pub fn check(&mut self) -> Option<Signal> {
+        self.pending.pop()
+    }
+    
+    /// Set a signal handler
+    pub fn set_handler(&mut self, signal: Signal, handler: SignalHandlerFunc) {
+        self.handlers.insert(signal, handler);
+    }
+    
+    /// Get the handler for a signal
+    pub fn get_handler(&self, signal: Signal) -> Option<SignalHandlerFunc> {
+        self.handlers.get(&signal).copied()
+    }
+}
+
+/// Signal handler function type
+pub type SignalHandlerFunc = fn(pid: usize, signal: Signal);
+
+/// Process manager
+pub struct ProcessManager {
+    pub processes: BTreeMap<usize, Process>,
+    pub current_pid: usize,
+    pub process_groups: BTreeMap<usize, Vec<usize>>, // PGID -> [PIDs]
+    pub sessions: BTreeMap<usize, Vec<usize>>,      // SID -> [PGIDs]
+}
+
+impl ProcessManager {
+    /// Create a new process manager
+    pub fn new() -> Self {
+        ProcessManager {
+            processes: BTreeMap::new(),
+            current_pid: 0,
+            process_groups: BTreeMap::new(),
+            sessions: BTreeMap::new(),
+        }
+    }
+    
+    /// Create a new process
+    pub fn create_process(&mut self, name: &str) -> usize {
+        let parent_pid = self.current_pid;
+        let mut process = Process::new(name, parent_pid);
+        let pid = process.pid;
+        
+        // Add to process groups and sessions
+        self.process_groups.entry(process.process_group)
+            .or_insert_with(Vec::new)
+            .push(pid);
+        self.sessions.entry(process.session)
+            .or_insert_with(Vec::new)
+            .push(process.process_group);
+        
+        // Add to parent's children
+        if let Some(parent) = self.processes.get_mut(&parent_pid) {
+            parent.add_child(pid);
+        }
+        
+        self.processes.insert(pid, process);
+        pid
+    }
+    
+    /// Destroy a process
+    pub fn destroy_process(&mut self, pid: usize) -> Option<Process> {
+        if let Some(mut process) = self.processes.remove(&pid) {
+            // Remove from parent's children
+            if let Some(parent) = self.processes.get_mut(&process.parent_pid) {
+                parent.remove_child(pid);
+            }
+            
+            // Remove from process group
+            if let Some(pg) = self.process_groups.get_mut(&process.process_group) {
+                pg.retain(|&p| p != pid);
+            }
+            
+            // Remove from session if process group is empty
+            if let Some(pg) = self.process_groups.get(&process.process_group) {
+                if pg.is_empty() {
+                    self.process_groups.remove(&process.process_group);
+                    if let Some(s) = self.sessions.get_mut(&process.session) {
+                        s.retain(|&p| p != process.process_group);
+                    }
+                }
+            }
+            
+            // Clean up children (reparent to init)
+            for &child_pid in &process.children {
+                if let Some(child) = self.processes.get_mut(&child_pid) {
+                    child.parent_pid = 1; // Reparent to init
+                }
+            }
+            
+            Some(process)
+        } else {
+            None
+        }
+    }
+    
+    /// Set the current process
+    pub fn set_current(&mut self, pid: usize) {
+        self.current_pid = pid;
+    }
+    
+    /// Get the current process
+    pub fn current(&self) -> Option<&Process> {
+        self.processes.get(&self.current_pid)
+    }
+    
+    /// Get process by ID
+    pub fn get(&self, pid: usize) -> Option<&Process> {
+        self.processes.get(&pid)
+    }
+    
+    /// Get process by ID (mutable)
+    pub fn get_mut(&mut self, pid: usize) -> Option<&mut Process> {
+        self.processes.get_mut(&pid)
+    }
+    
+    /// Send signal to a process
+    pub fn send_signal(&mut self, pid: usize, signal: Signal) {
+        if let Some(process) = self.processes.get_mut(&pid) {
+            process.send_signal(signal);
+        }
+    }
+    
+    /// Send signal to a process group
+    pub fn send_signal_to_group(&mut self, pgid: usize, signal: Signal) {
+        if let Some(pids) = self.process_groups.get(&pgid) {
+            for &pid in pids {
+                self.send_signal(pid, signal);
+            }
+        }
+    }
+    
+    /// Create a new process group
+    pub fn create_process_group(&mut self, leader_pid: usize) -> usize {
+        let pgid = leader_pid;
+        self.process_groups.insert(pgid, vec![leader_pid]);
+        
+        if let Some(process) = self.processes.get_mut(&leader_pid) {
+            process.set_process_group(pgid);
+        }
+        
+        pgid
+    }
+    
+    /// Create a new session
+    pub fn create_session(&mut self, leader_pid: usize) -> usize {
+        let sid = leader_pid;
+        let pgid = self.create_process_group(leader_pid);
+        self.sessions.insert(sid, vec![pgid]);
+        
+        if let Some(process) = self.processes.get_mut(&leader_pid) {
+            process.set_session(sid);
+        }
+        
+        sid
+    }
 }
