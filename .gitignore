@@ -2,3 +2,4 @@ target
 *.iso
 *.elf
 grub.cfg
+Cargo.lock

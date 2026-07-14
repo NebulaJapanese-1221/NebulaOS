@@ -27,11 +27,16 @@ mod syscalls;
 mod panic;
 mod exceptions;
 mod memory; // New module for paging
+
+#[path = "../fs/mod.rs"]
 mod fs;
 
 use allocator::ALLOCATOR; 
 use core::arch::asm;
 use framebuffer::FRAMEBUFFER;
+use alloc::vec::Vec;
+use alloc::format;
+use crate::drivers::rtc;
 
 #[path = "../drivers/vga.rs"]
 mod vga;
@@ -205,22 +210,32 @@ pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
             pit::init(100); // Initialize PIT for 100Hz interrupts
             update_progress(65);
 
-            serial_println!("Initializing PIC and Exceptions...");
-            idt::init_pic();
-            exceptions::init();
-            
             serial_println!("Initializing Window Manager...");
             let mut window_manager = gui::WindowManager::new();
-            window_manager.set_screen_size(fb.width as u32, fb.height as u32);
 
-            // Pass the filesystem to the window manager
-            if let Ok(mut fs) = fs::NebulaFS::new("nebula_pool", 4096, 1024 * 1024) {
+            // Get framebuffer dimensions
+            let (fb_width, fb_height) = {
+                let fb = FRAMEBUFFER.lock();
+                (fb.width as u32, fb.height as u32)
+            };
+    
+            window_manager.set_screen_size(fb_width, fb_height);
+
+            // Initialize and pass the filesystem to the window manager
+            let mut fs = fs::NebulaFS::new("nebula_pool", 4096, 1024 * 1024);
                 if fs.mount().is_ok() {
-                    window_manager.set_filesystem(fs);
-                    serial_println!("Filesystem initialized and passed to window manager");
+                // Test filesystem operations
+                if let Err(e) = test_filesystem(&mut fs) {
+                    serial_println!("Filesystem test failed: {}", e);
+                } else {
+                    serial_println!("Filesystem test passed!");
                 }
+
+                window_manager.set_filesystem(fs);
+                serial_println!("Filesystem initialized and passed to window manager");
             }
             update_progress(75);
+            
             serial_println!("Initializing NebulaFS...");
             let mut fs = fs::NebulaFS::new("nebula_pool", 4096, 1024 * 1024); // 4KB blocks, 4GB max
             if let Err(e) = fs.mount() {
@@ -237,6 +252,10 @@ pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
             }
             update_progress(70);
             
+            serial_println!("Initializing PIC and Exceptions...");
+            idt::init_pic();
+            exceptions::init();
+
             idt::set_gate(32, interrupts::timer_handler_asm as *const () as u32, 0x08, 0x8E); // IRQ 0 -> Vector 32
             idt::set_gate(33, interrupts::keyboard_handler_asm as *const () as u32, 0x08, 0x8E); // IRQ 1 -> Vector 33
             idt::set_gate(44, interrupts::mouse_handler_asm as *const () as u32, 0x08, 0x8E); // IRQ 12 -> Vector 44
@@ -305,10 +324,10 @@ pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
             "push {eip_user}",
             "iretd",
 
-            ss_kern = in(reg) 0x10u32,     
-            esp_kern = in(reg) process.kernel_stack_ptr, 
-            cs_user = in(reg) 0x1Bu32,    
-            eip_user = in(reg) process.user_eip, 
+            ss_kern = in(reg) 0x10u32,
+            esp_kern = in(reg) process.kernel_stack_ptr,
+            cs_user = in(reg) 0x1Bu32,
+            eip_user = in(reg) process.user_eip,
 
             options(noreturn)
         );
@@ -326,7 +345,8 @@ fn test_filesystem(fs: &mut fs::NebulaFS) -> Result<(), &'static str> {
     serial_println!("Wrote {} bytes to file", bytes_written);
 
     // Test reading from the file
-    let mut read_buffer = vec![0; test_data.len()];
+    let mut read_buffer = Vec::with_capacity(test_data.len());
+    unsafe { read_buffer.set_len(test_data.len()); }
     let bytes_read = fs.read(file_inode, 0, &mut read_buffer)?;
     serial_println!("Read {} bytes from file", bytes_read);
 
