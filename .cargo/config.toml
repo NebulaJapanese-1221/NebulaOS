@@ -1,6 +1,6 @@
 [build]
 # Default to our custom x86 target
-target = "nebula.json"
+target = "i686-nebula.json"
 
 [unstable]
 # Automatically build core and alloc for the target, avoiding host std conflicts
