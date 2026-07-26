@@ -1,5 +1,8 @@
 use crate::sync::Spinlock;
-use crate::ps2::{inb, outb, read_config, write_config, write_mouse, flush_buffers, PS2_STATUS_PORT, PS2_DATA_PORT, PS2_COMMAND_PORT};
+#[cfg(target_arch = "x86")]
+use crate::arch::x86::io::{inb, outb, read_config, write_config, write_mouse, flush_buffers, PS2_STATUS_PORT, PS2_DATA_PORT, PS2_COMMAND_PORT};
+#[cfg(target_arch = "x86_64")]
+use crate::arch::x86_64::io::{inb, outb, read_config, write_config, write_mouse, flush_buffers, PS2_STATUS_PORT, PS2_DATA_PORT, PS2_COMMAND_PORT};
 
 pub struct MouseState {
     pub x: i32,

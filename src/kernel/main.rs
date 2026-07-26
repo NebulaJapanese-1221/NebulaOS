@@ -3,6 +3,8 @@
 
 extern crate alloc;
 
+// Multiboot header (Multiboot1 for x86, Multiboot2 for x86_64)
+#[cfg(target_arch = "x86")]
 core::arch::global_asm!(
     ".section .multiboot, \"a\"", 
     ".align 4",
@@ -14,6 +16,21 @@ core::arch::global_asm!(
     ".long 1024",                 
     ".long 768",                  
     ".long 32"                    
+);
+
+// Multiboot2 header for x86_64 (required for GRUB to boot in long mode)
+#[cfg(target_arch = "x86_64")]
+core::arch::global_asm!(
+    ".section .multiboot, \"a\"",
+    ".align 8",
+    ".long 0xE85250D6",           // Multiboot2 magic
+    ".long 0",                     // Architecture: i386 (protected mode)
+    ".long multiboot_end - multiboot_start",
+    ".long -(0xE85250D6 + 0 + (multiboot_end - multiboot_start))", // Checksum
+    "multiboot_start:",
+    ".word 0", ".word 0",         // End tag
+    ".long 8",                     // End tag size
+    "multiboot_end:"
 );
 
 mod sync;
@@ -52,6 +69,10 @@ mod keyboard;
 
 #[path = "../drivers/framebuffer.rs"]
 mod framebuffer;
+
+// Architecture module
+#[path = "../arch/mod.rs"]
+mod arch;
 
 #[path = "../drivers/rtc.rs"]
 mod rtc;
@@ -94,6 +115,8 @@ struct MultibootInfo {
     fb_type: u8,
 }
 
+// Entry point - x86 (32-bit) GRUB Multiboot1 entry
+#[cfg(target_arch = "x86")]
 core::arch::global_asm!(
     ".global _start",
     "_start:",
@@ -103,6 +126,26 @@ core::arch::global_asm!(
     "1: jmp 1b"
 );
 
+// Entry point - x86_64 (64-bit) GRUB Multiboot2 entry
+#[cfg(target_arch = "x86_64")]
+core::arch::global_asm!(
+    ".global _start",
+    "_start:",
+    "mov rsp, offset stack_top",
+    "push 0",                     // Align stack to 16 bytes
+    "mov rdi, rax",               // Magic number
+    "mov rsi, rbx",               // Multiboot info pointer
+    "call kmain",
+    "1: jmp 1b",
+
+    ".section .bss, \"aw\"",
+    ".align 16",
+    "stack_bottom:",
+    ".skip 16384",                 // 16KB kernel stack
+    "stack_top:"
+);
+
+#[cfg(target_arch = "x86")]
 #[no_mangle]
 pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
     // These will survive after initialization (use Option since init happens inside block)
@@ -280,7 +323,7 @@ pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
     {
         let mut sched = scheduler::get_scheduler().lock();
         sched.spawn_user_process(
-            user_program_entry as *const () as u32,
+            user_program_entry as *const () as usize,
             4096 * 4,
             4096,
         );
@@ -391,6 +434,169 @@ pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
         }
 
         // --- 4. Small delay ---
+        for _ in 0..100000 { core::hint::spin_loop(); }
+    }
+}
+
+// x86_64 kernel entry
+#[cfg(target_arch = "x86_64")]
+#[no_mangle]
+pub extern "C" fn kmain(magic: u64, mb_ptr: u64) -> ! {
+    let mut window_manager: gui::WindowManager;
+    let mut start_menu_open: bool = false;
+    let mut last_mouse_l: bool = false;
+    let mut _last_mouse_r: bool = false;
+    let mut login_state: gui::LoginState = gui::LoginState::new();
+
+    {
+        serial::SERIAL_PORT.lock().init();
+        serial_println!("NebulaOS x86_64 v0.0.1 started...");
+
+        serial_println!("Initializing GDT...");
+        unsafe { gdt::init(); }
+
+        serial_println!("Initializing Paging...");
+        unsafe { memory::paging::init_paging(); }
+
+        serial_println!("Initializing Interrupts...");
+        unsafe {
+            idt::init_pic();
+            exceptions::init();
+
+            idt::set_gate(32, interrupts::timer_handler_asm as *const () as u64, 0x08, 0x8E);
+            idt::set_gate(33, interrupts::keyboard_handler_asm as *const () as u64, 0x08, 0x8E);
+            idt::set_gate(44, interrupts::mouse_handler_asm as *const () as u64, 0x08, 0x8E);
+            idt::set_gate(0x80, interrupts::syscall_handler_asm as *const () as u64, 0x08, 0xEE);
+
+            idt::load_idt();
+            asm!("sti");
+        }
+
+        serial_println!("Initializing Heap...");
+        let heap_start = 0x1000000;
+        let heap_size = 0x100000;
+        ALLOCATOR.init(heap_start, heap_size);
+
+        serial_println!("Initializing System Services...");
+        services::init();
+
+        mouse::init_mouse();
+
+        let (width, height) = {
+            let fb = FRAMEBUFFER.lock();
+            (fb.width, fb.height)
+        };
+        {
+            let mut m = mouse::MOUSE_STATE.lock();
+            m.x = (width / 2) as i32;
+            m.y = (height / 2) as i32;
+        }
+
+        serial_println!("Initializing PIT...");
+        pit::init(100);
+
+        serial_println!("Initializing Window Manager...");
+        window_manager = gui::WindowManager::new();
+        let (fb_width, fb_height) = {
+            let fb = FRAMEBUFFER.lock();
+            (fb.width as u32, fb.height as u32)
+        };
+        window_manager.set_screen_size(fb_width, fb_height);
+
+        let mut vfs = fs::vfs::VFS::new();
+        let mut nebula_fs = Box::new(fs::NebulaFS::new("nebula_pool", 4096, 1024 * 1024));
+        if nebula_fs.mount().is_ok() {
+            let _ = vfs.mount(nebula_fs, "/");
+        }
+        window_manager.set_filesystem(vfs);
+    }
+
+    extern "C" fn user_program_entry() -> ! {
+        serial_println!("Entering user mode!");
+        syscalls::syscall_draw_pixel(100, 100, 0x00FF0000);
+        syscalls::syscall_sleep(1000);
+        serial_println!("User process exiting.");
+        syscalls::syscall_exit();
+    }
+
+    {
+        let mut sched = scheduler::get_scheduler().lock();
+        sched.spawn_user_process(
+            user_program_entry as *const () as usize,
+            4096 * 4,
+            4096,
+        );
+    }
+
+    serial_println!("Desktop environment started. Entering main loop...");
+
+    loop {
+        while let Some(key) = keyboard::KEY_BUFFER.lock().pop() {
+            if login_state.logged_in {
+                window_manager.handle_keyboard_input(key);
+            }
+        }
+
+        {
+            let mouse = mouse::MOUSE_STATE.lock();
+            let ml = mouse.left_button;
+            let mr = mouse.right_button;
+            let mx = mouse.x;
+            let my = mouse.y;
+            drop(mouse);
+
+            if !login_state.logged_in {
+                if ml && !last_mouse_l {
+                    login_state.handle_click(mx, my);
+                    if login_state.shutdown_requested { loop { core::hint::spin_loop(); } }
+                    if login_state.restart_requested { loop { core::hint::spin_loop(); } }
+                }
+            } else {
+                if ml != last_mouse_l || ml {
+                    let toggled = window_manager.handle_mouse(mx, my, ml, mr);
+                    if toggled { start_menu_open = !start_menu_open; }
+                }
+                if start_menu_open {
+                    let fb_height = { let fb = FRAMEBUFFER.lock(); fb.height };
+                    gui::start_menu::handle_click(mx, my, fb_height as i32, &mut window_manager, &mut start_menu_open, &mut login_state.logged_in);
+                }
+                if !login_state.logged_in { window_manager.windows.clear(); start_menu_open = false; }
+            }
+            last_mouse_l = ml;
+            _last_mouse_r = mr;
+        }
+
+        {
+            let mut fb = FRAMEBUFFER.lock();
+            if !login_state.logged_in {
+                login_state.draw(&mut fb);
+            } else {
+                fb.draw_rect(0, 0, fb.width, fb.height, 0x00003366);
+                window_manager.draw(&mut fb);
+                let time = rtc::get_time();
+                gui::render_ui(&mut fb, start_menu_open, time.hour, time.minute, time.second, window_manager.windows.as_slice());
+            }
+            {
+                let mouse = mouse::MOUSE_STATE.lock();
+                let cx = mouse.x as usize;
+                let cy = mouse.y as usize;
+                drop(mouse);
+                let bitmap = gui::window_manager::CURSOR_BITMAP;
+                for row in 0..19 {
+                    for col in 0..12 {
+                        if (bitmap[row] & (0x800 >> col)) != 0 {
+                            let px = cx + col;
+                            let py = cy + row;
+                            if px < fb.width && py < fb.height {
+                                fb.draw_pixel(px, py, 0x00FFFFFF);
+                            }
+                        }
+                    }
+                }
+            }
+            fb.present();
+        }
+
         for _ in 0..100000 { core::hint::spin_loop(); }
     }
 }

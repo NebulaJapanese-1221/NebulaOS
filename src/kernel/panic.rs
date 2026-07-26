@@ -24,20 +24,26 @@ fn panic(info: &PanicInfo) -> ! {
 
     // Walk the stack for serial logging
     serial_println!("Stack Trace:");
-    let mut ebp: *const usize;
+    #[cfg(target_arch = "x86")]
+    let mut frame_ptr: *const usize;
+    #[cfg(target_arch = "x86_64")]
+    let mut frame_ptr: *const usize;
     unsafe {
-        asm!("mov {}, ebp", out(reg) ebp);
+        #[cfg(target_arch = "x86")]
+        asm!("mov {}, ebp", out(reg) frame_ptr);
+        #[cfg(target_arch = "x86_64")]
+        asm!("mov {}, rbp", out(reg) frame_ptr);
     }
 
     let mut depth = 0;
-    while !ebp.is_null() && depth < 10 {
+    while !frame_ptr.is_null() && depth < 10 {
         unsafe {
-            let ret_addr = *ebp.offset(1);
-            serial_println!("  [{}] 0x{:08x}", depth, ret_addr);
+            let ret_addr = *frame_ptr.offset(1);
+            serial_println!("  [{}] 0x{:08x}", depth, ret_addr as usize);
             
-            let next_ebp = *ebp as *const usize;
-            if next_ebp <= ebp || (next_ebp as usize) < 0x1000 { break; }
-            ebp = next_ebp;
+            let next = *frame_ptr as *const usize;
+            if next <= frame_ptr || (next as usize) < 0x1000 { break; }
+            frame_ptr = next;
         }
         depth += 1;
     }
@@ -57,18 +63,23 @@ fn panic(info: &PanicInfo) -> ! {
     
     // Display stack trace on screen
     gui::draw_string(&mut fb, 100, 400, "Stack Trace:", 0xFFFFFF);
-    let mut trace_ebp: *const usize;
-    unsafe { asm!("mov {}, ebp", out(reg) trace_ebp); }
+    let mut trace_fp: *const usize;
+    unsafe {
+        #[cfg(target_arch = "x86")]
+        asm!("mov {}, ebp", out(reg) trace_fp);
+        #[cfg(target_arch = "x86_64")]
+        asm!("mov {}, rbp", out(reg) trace_fp);
+    }
     
     for i in 0..8 {
         unsafe {
-            if trace_ebp.is_null() { break; }
-            let ret_addr = *trace_ebp.offset(1);
+            if trace_fp.is_null() { break; }
+            let ret_addr = *trace_fp.offset(1);
             draw_hex(&mut fb, 120, 420 + (i * 15), ret_addr as u32, 0xDDDDDD);
             
-            let next_ebp = *trace_ebp as *const usize;
-            if next_ebp <= trace_ebp || (next_ebp as usize) < 0x1000 { break; }
-            trace_ebp = next_ebp;
+            let next_fp = *trace_fp as *const usize;
+            if next_fp <= trace_fp || (next_fp as usize) < 0x1000 { break; }
+            trace_fp = next_fp;
         }
     }
     

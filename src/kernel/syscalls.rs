@@ -19,6 +19,12 @@ const SYS_POWER_SET_CPU_FREQ: u32 = 61;
 const SYS_POWER_GET_BATTERY: u32 = 62;
 const SYS_POWER_GET_THERMAL: u32 = 63;
 
+#[cfg(target_arch = "x86")]
+pub type Register = u32;
+#[cfg(target_arch = "x86_64")]
+pub type Register = u64;
+
+#[cfg(target_arch = "x86")]
 #[repr(C, packed)]
 #[derive(Copy, Clone)]
 pub struct SyscallRegisters {
@@ -26,8 +32,22 @@ pub struct SyscallRegisters {
     pub edi: u32, pub esi: u32, pub ebp: u32, pub kernel_esp: u32, 
     pub ebx: u32, pub edx: u32, pub ecx: u32, pub eax: u32,
     pub eip: u32, pub cs: u32, pub eflags: u32,
-    pub esp: u32, // User-mode stack pointer
-    pub ss: u32,  // User-mode segment selector
+    pub esp: u32,
+    pub ss: u32,
+}
+
+#[cfg(target_arch = "x86_64")]
+#[repr(C, packed)]
+#[derive(Copy, Clone)]
+pub struct SyscallRegisters {
+    pub gs: u64, pub fs: u64, pub es: u64, pub ds: u64,
+    pub r15: u64, pub r14: u64, pub r13: u64, pub r12: u64,
+    pub r11: u64, pub r10: u64, pub r9: u64, pub r8: u64,
+    pub rdi: u64, pub rsi: u64, pub rbp: u64, pub rbx: u64,
+    pub rdx: u64, pub rcx: u64, pub rax: u64,
+    pub rip: u64, pub cs: u64, pub rflags: u64,
+    pub rsp: u64,
+    pub ss: u64,
 }
 
 impl SyscallRegisters {
@@ -36,12 +56,15 @@ impl SyscallRegisters {
     }
 
     #[allow(dead_code)]
+    #[cfg(target_arch = "x86")]
     pub fn get_user_esp(&self) -> u32 {
-        if self.is_user() {
-            self.esp 
-        } else {
-            self.kernel_esp 
-        }
+        if self.is_user() { self.esp } else { self.kernel_esp }
+    }
+
+    #[allow(dead_code)]
+    #[cfg(target_arch = "x86_64")]
+    pub fn get_user_esp(&self) -> u64 {
+        if self.is_user() { self.rsp } else { 0 }
     }
 }
 

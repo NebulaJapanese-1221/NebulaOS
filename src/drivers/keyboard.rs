@@ -1,4 +1,7 @@
-use crate::ps2::{inb, outb};
+#[cfg(target_arch = "x86")]
+use crate::arch::x86::io::{inb, outb};
+#[cfg(target_arch = "x86_64")]
+use crate::arch::x86_64::io::{inb, outb};
 use crate::sync::Spinlock;
 
 const BUFFER_SIZE: usize = 128;

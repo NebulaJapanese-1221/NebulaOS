@@ -22,7 +22,7 @@ impl Scheduler {
     }
 
     /// Spawn a new kernel task
-    pub fn spawn_kernel_task(&mut self, entry_point: u32) -> usize {
+    pub fn spawn_kernel_task(&mut self, entry_point: usize) -> usize {
         let pid = self.processes.len() + 1;
         let mut process = Process::new_kernel_task(pid as usize, entry_point);
 
@@ -36,7 +36,7 @@ impl Scheduler {
     /// Spawn a new user process
     pub fn spawn_user_process(
         &mut self,
-        entry_point: u32,
+        entry_point: usize,
         user_stack_size: usize,
         kernel_stack_size: usize,
     ) -> usize {
@@ -58,7 +58,7 @@ impl Scheduler {
     pub fn create_thread(
         &mut self,
         pid: usize,
-        entry: u32,
+        entry: usize,
         stack_size: usize,
     ) -> Option<usize> {
         if let Some(process) = self.processes.iter_mut().find(|p| p.pid == pid) {

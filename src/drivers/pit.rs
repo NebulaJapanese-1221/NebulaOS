@@ -1,4 +1,7 @@
-use crate::ps2::outb;
+#[cfg(target_arch = "x86")]
+use crate::arch::x86::io::outb;
+#[cfg(target_arch = "x86_64")]
+use crate::arch::x86_64::io::outb;
 
 /// Initialize the PIT to a specific frequency (Hz)
 pub fn init(hz: u32) {

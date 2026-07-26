@@ -1,3 +1,9 @@
+/* 
+ * Kernel linker script - supports both x86 (32-bit) and x86_64 (64-bit)
+ * x86: kernel loaded at 1MB, Multiboot1
+ * x86_64: kernel loaded at 1MB, Multiboot2
+ */
+
 ENTRY(_start)
 
 SECTIONS {
@@ -16,3 +22,4 @@ SECTIONS {
 
     /DISCARD/ : { *(.eh_frame) *(.note .note.*) }
 }
+

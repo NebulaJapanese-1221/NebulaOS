@@ -27,12 +27,18 @@ impl<T> Spinlock<T> {
     }
 
     pub fn lock(&self) -> SpinlockGuard<'_, T> {
-        // Save current EFLAGS and disable interrupts
+        // Save current EFLAGS/RFLAGS and disable interrupts
+        #[cfg(target_arch = "x86")]
         let eflags: u32;
+        #[cfg(target_arch = "x86_64")]
+        let eflags: u64;
         unsafe {
+            #[cfg(target_arch = "x86")]
             asm!("pushfd", "pop {0}", "cli", out(reg) eflags);
+            #[cfg(target_arch = "x86_64")]
+            asm!("pushfq", "pop {0}", "cli", out(reg) eflags);
         }
-        // Bit 9 of EFLAGS is the Interrupt Flag (IF)
+        // Bit 9 of RFLAGS/EFLAGS is the Interrupt Flag (IF)
         let interrupts_enabled = (eflags & 0x200) != 0;
 
         // Loop until the lock is acquired

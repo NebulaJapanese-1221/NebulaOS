@@ -28,10 +28,10 @@ pub struct Process {
     pub pid: usize,
     pub parent_pid: usize,
     pub state: ProcessState,
-    pub kernel_stack_ptr: u32,
-    pub user_stack_ptr: u32,
-    pub page_directory_phys_addr: u32,
-    pub user_eip: u32,
+    pub kernel_stack_ptr: usize,
+    pub user_stack_ptr: usize,
+    pub page_directory_phys_addr: usize,
+    pub user_eip: usize,
     pub name: String,
     pub threads: Vec<Thread>,
     pub children: Vec<usize>,
@@ -65,7 +65,7 @@ impl Process {
     }
     
     /// Create a new kernel task
-    pub fn new_kernel_task(pid: usize, entry_point: u32) -> Self {
+    pub fn new_kernel_task(pid: usize, entry_point: usize) -> Self {
         Process {
             pid,
             parent_pid: 0,
@@ -85,7 +85,7 @@ impl Process {
     }
     
     /// Create a new user process
-    pub fn new_user_process(pid: usize, entry_point: u32, _user_stack_size: usize, _kernel_stack_size: usize) -> Self {
+    pub fn new_user_process(pid: usize, entry_point: usize, _user_stack_size: usize, _kernel_stack_size: usize) -> Self {
         Process {
             pid,
             parent_pid: 0,
@@ -105,7 +105,7 @@ impl Process {
     }
     
     /// Create a new thread in this process
-    pub fn create_thread(&mut self, entry: u32, stack_size: usize) -> Thread {
+    pub fn create_thread(&mut self, entry: usize, stack_size: usize) -> Thread {
         let tid = self.threads.len();
         let thread = Thread::new(self.pid, tid, entry, stack_size);
         self.threads.push(thread.clone());
@@ -161,7 +161,7 @@ pub struct Thread {
     pub state: ProcessState,
     pub stack_ptr: u64,
     pub stack_size: usize,
-    pub entry_point: u32,
+    pub entry_point: usize,
     pub registers: ThreadRegisters,
     pub thread_local_storage: *mut u8,
 }
@@ -173,7 +173,7 @@ unsafe impl Sync for Thread {}
 
 impl Thread {
     /// Create a new thread
-    pub fn new(pid: usize, tid: usize, entry: u32, stack_size: usize) -> Self {
+    pub fn new(pid: usize, tid: usize, entry: usize, stack_size: usize) -> Self {
         Thread {
             tid,
             pid,

@@ -1,3 +1,8 @@
+/* 
+ * Bootloader linker script (x86 only - bootloader is always 16/32-bit)
+ * BIOS loads the bootloader at 0x7C00
+ */
+
 ENTRY(_start)
 
 SECTIONS {
@@ -16,3 +21,4 @@ SECTIONS {
 
     /DISCARD/ : { *(.eh_frame) *(.note .note.*) }
 }
+
