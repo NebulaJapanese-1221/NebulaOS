@@ -1,0 +1,6 @@
+target
+*.iso
+*.elf
+grub.cfg
+Cargo.lock
+TODO.md
