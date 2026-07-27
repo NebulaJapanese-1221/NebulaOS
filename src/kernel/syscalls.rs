@@ -108,7 +108,7 @@ pub fn syscall_handler_rust(regs_ptr: &mut SyscallRegisters) -> u32 {
 
                  let new_pid = {
                     let mut sched = crate::scheduler::get_scheduler().lock();
-                    sched.spawn_user_process(entry_point, user_stack_size, user_kernel_stack_size)
+                    sched.spawn_user_process(entry_point as usize, user_stack_size, user_kernel_stack_size)
                  };
                  serial_println!("Spawned new user process with PID: {}", new_pid);
             }

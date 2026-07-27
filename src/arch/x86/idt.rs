@@ -51,7 +51,7 @@ pub unsafe fn load_idt() {
 
 pub unsafe fn init_pic() {
     // Remap PIC: IRQs 0-15 to Interrupts 32-47
-    use crate::arch::x86::io::{outb, inb};
+    use crate::arch::x86::io::outb;
 
     outb(0x20, 0x11); // Initialize Master
     outb(0xA0, 0x11); // Initialize Slave

@@ -39,6 +39,12 @@ impl PageEntry {
     pub fn clear_flags(&mut self, flags: u64) {
         self.entry &= !flags;
     }
+
+    /// Check if this entry maps a large page (2 MB in PD, 1 GB in PDPT).
+    /// The PS (Page Size) bit is bit 7.
+    pub fn is_large_page(&self) -> bool {
+        self.entry & (1 << 7) != 0
+    }
 }
 
 const PAGE_TABLE_SIZE: usize = 512; // 512 entries per table
@@ -147,13 +153,102 @@ pub fn create_user_page_directory() -> u64 {
     get_kernel_pml4_phys_addr()
 }
 
-/// Map a virtual page to a physical page
-pub fn map_page(virt: u64, phys: u64, flags: u64) {
-    // TODO: implement page table mapping for x86_64
+/// Map the 4 KB virtual page `virt` to physical page `phys` with the
+/// given `flags` (at least `PAGE_PRESENT`).  Intermediate tables are
+/// allocated on the fly if they are missing.
+///
+/// # Safety
+///
+/// The caller must ensure the page tables are writable and that
+/// `virt` is not already mapped in an incompatible way.
+pub unsafe fn map_page(virt: u64, phys: u64, flags: u64) {
+    let pml4_idx = ((virt >> 39) & 0x1FF) as usize;
+    let pdpt_idx = ((virt >> 30) & 0x1FF) as usize;
+    let pd_idx   = ((virt >> 21) & 0x1FF) as usize;
+    let pt_idx   = ((virt >> 12) & 0x1FF) as usize;
+
+    let pml4 = &raw mut KERNEL_PML4;
+    let pml4e = &mut (*pml4).entries[pml4_idx];
+    if !pml4e.is_present() {
+        let table = alloc_page_table_x86_64();
+        *pml4e = PageEntry::new(table, PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
+    }
+
+    let pdpt = &mut *(pml4e.get_physical_addr() as *mut [PageEntry; PAGE_TABLE_SIZE]);
+    let pdpte = &mut pdpt[pdpt_idx];
+    if !pdpte.is_present() {
+        let table = alloc_page_table_x86_64();
+        *pdpte = PageEntry::new(table, PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
+    }
+
+    let pd = &mut *(pdpte.get_physical_addr() as *mut [PageEntry; PAGE_TABLE_SIZE]);
+    let pde = &mut pd[pd_idx];
+    if !pde.is_present() {
+        let table = alloc_page_table_x86_64();
+        *pde = PageEntry::new(table, PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
+    }
+
+    let pt = &mut *(pde.get_physical_addr() as *mut [PageEntry; PAGE_TABLE_SIZE]);
+    pt[pt_idx] = PageEntry::new(phys, flags);
+
+    // Flush the TLB for this virtual address.
+    asm!("invlpg [{}]", in(reg) virt, options(nostack, preserves_flags));
 }
 
-/// Unmap a virtual page
-pub fn unmap_page(virt: u64) {
-    // TODO: implement page unmapping
+/// Simple temporary page-table allocator (identity mapped).
+static mut NEXT_PT_X86_64: u64 = 0x300000; // 3 MB – after the x86 temporary region
+const PT_ALLOC_STEP: u64 = 0x1000;          // 4 KB
+
+unsafe fn alloc_page_table_x86_64() -> u64 {
+    let addr = NEXT_PT_X86_64;
+    NEXT_PT_X86_64 += PT_ALLOC_STEP;
+    core::ptr::write_bytes(addr as *mut u8, 0, PT_ALLOC_STEP as usize);
+    addr
+}
+
+/// Unmap the 4 KB virtual page `virt`, clearing its page-table entry
+/// and flushing the TLB.
+///
+/// # Safety
+///
+/// The caller must ensure no dangling references remain.
+pub unsafe fn unmap_page(virt: u64) {
+    let pml4_idx = ((virt >> 39) & 0x1FF) as usize;
+    let pdpt_idx = ((virt >> 30) & 0x1FF) as usize;
+    let pd_idx   = ((virt >> 21) & 0x1FF) as usize;
+    let pt_idx   = ((virt >> 12) & 0x1FF) as usize;
+
+    // Walk PML4
+    let pml4e = KERNEL_PML4.entries[pml4_idx];
+    if !pml4e.is_present() {
+        return; // nothing mapped
+    }
+
+    // Walk PDPT
+    let pdpt = &*(pml4e.get_physical_addr() as *const [PageEntry; PAGE_TABLE_SIZE]);
+    let pdpte = pdpt[pdpt_idx];
+    if !pdpte.is_present() {
+        return;
+    }
+
+    // Walk PD
+    let pd = &*(pdpte.get_physical_addr() as *const [PageEntry; PAGE_TABLE_SIZE]);
+    let pde = pd[pd_idx];
+    if !pde.is_present() {
+        return;
+    }
+
+    // If this is a 2 MB or 1 GB page, we cannot unmap a single 4 KB part.
+    // For now we simply skip large pages.
+    if pde.is_large_page() {
+        return;
+    }
+
+    // Walk PT and clear the entry
+    let pt = &mut *(pde.get_physical_addr() as *mut [PageEntry; PAGE_TABLE_SIZE]);
+    pt[pt_idx] = PageEntry { entry: 0 };
+
+    // Flush the TLB for this virtual address
+    asm!("invlpg [{}]", in(reg) virt, options(nostack, preserves_flags));
 }
 
