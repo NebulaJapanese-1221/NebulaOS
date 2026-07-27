@@ -1,6 +1,6 @@
 # NebulaOS
 
-A hobbyist 32-bit operating system written in Rust for the i686 architecture.
+A hobbyist operating system written in rust for the x86 and x86_64 architectures.
 
 ### Credits for NebulaFS
 
