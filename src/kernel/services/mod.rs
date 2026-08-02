@@ -4,6 +4,7 @@
 pub mod network;  // Networking service
 pub mod security; // Security service
 pub mod power;    // Power management service
+pub mod loader;   // Application loader service
 
 use crate::sync::Spinlock;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -29,6 +30,7 @@ impl ServicesManager {
         network::init();
         security::init();
         power::init();
+        loader::init();
         
         self.initialized = true;
     }

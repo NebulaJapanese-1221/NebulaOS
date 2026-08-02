@@ -22,7 +22,7 @@ pub struct IdtPtr {
 }
 
 impl IdtEntry {
-    pub fn missing() -> Self {
+    pub const fn missing() -> Self {
         IdtEntry {
             offset_low: 0,
             selector: 0,

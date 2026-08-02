@@ -185,4 +185,18 @@ impl BlockDeviceManager {
     pub fn device_count(&self) -> usize {
         self.devices.len()
     }
+    
+    /// Probe for SD card and register it if found
+    pub fn probe_sd_card(&mut self) -> bool {
+        if let Some(sd_card) = crate::sd_card::probe_sd_card() {
+            let info = sd_card.get_info();
+            self.register_device(sd_card);
+            crate::serial_println!("BlockDeviceManager: SD card registered ({} blocks, {} bytes/block)",
+                info.total_blocks, info.block_size);
+            true
+        } else {
+            crate::serial_println!("BlockDeviceManager: No SD card found");
+            false
+        }
+    }
 }

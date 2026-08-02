@@ -6,3 +6,4 @@ pub mod file_manager;
 pub mod web_browser;
 pub mod image_viewer;
 pub mod system_monitor;
+pub mod app_loader;

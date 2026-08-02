@@ -45,6 +45,7 @@ mod panic;
 mod exceptions;
 mod memory;
 mod services;
+mod elf_loader;
 
 #[path = "../fs/mod.rs"]
 mod fs;
@@ -245,6 +246,10 @@ pub extern "C" fn kmain(magic: u32, mb_ptr: u32) -> ! {
             serial_println!("Initializing System Services...");
             services::init();
             update_progress(60);
+
+            serial_println!("Initializing App Loader...");
+            services::loader::init();
+            update_progress(62);
 
             mouse::init_mouse();
 
@@ -571,10 +576,13 @@ pub extern "C" fn kmain(magic: u64, mb_ptr: u64) -> ! {
             if !login_state.logged_in {
                 login_state.draw(&mut fb);
             } else {
-                fb.draw_rect(0, 0, fb.width, fb.height, 0x00003366);
+                let fb_width = fb.width;
+                let fb_height = fb.height;
+                fb.draw_rect(0, 0, fb_width, fb_height, 0x00003366);
                 window_manager.draw(&mut fb);
                 let time = rtc::get_time();
-                gui::render_ui(&mut fb, start_menu_open, time.hour, time.minute, time.second, window_manager.windows.as_slice());
+                let windows = window_manager.windows.as_slice();
+                gui::render_ui(&mut fb, start_menu_open, time.hour, time.minute, time.second, windows);
             }
             {
                 let mouse = mouse::MOUSE_STATE.lock();

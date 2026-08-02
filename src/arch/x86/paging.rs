@@ -75,8 +75,9 @@ impl PageEntry {
 /// Kernel page directory (1024 entries, 4 KB-aligned). Only ever touched
 /// from init code while interrupts are disabled.
 #[repr(C, align(4096))]
-static mut KERNEL_PAGE_DIRECTORY: [PageEntry; PD_ENTRIES] =
-    [PageEntry { entry: 0 }; PD_ENTRIES];
+struct PageDirectory([PageEntry; PD_ENTRIES]);
+
+static mut KERNEL_PAGE_DIRECTORY: PageDirectory = PageDirectory([PageEntry { entry: 0 }; PD_ENTRIES]);
 
 // ── Helper – get a free 4 KB page for a new page table ───────────
 // Temporary hack: grab memory from high memory (above the kernel heap)
@@ -108,17 +109,17 @@ pub unsafe fn init_paging() {
     // ── Kernel identity map (0 – 4 MB) ──────────────────────────
     let kernel_vaddr = 0x00000000;
     let pde_idx = (kernel_vaddr >> 22) as usize; // bits 31:22
-    KERNEL_PAGE_DIRECTORY[pde_idx] =
+    KERNEL_PAGE_DIRECTORY.0[pde_idx] =
         PageEntry::new(0x00000000, flags | PAGE_SIZE_4MB);
 
     // ── Framebuffer identity map (0xFD00_0000 – 4 MB) ───────────
-    let fb_vaddr = 0xFD000000;
+    let fb_vaddr = 0xFD000000u32;
     let pde_idx = (fb_vaddr >> 22) as usize;
-    KERNEL_PAGE_DIRECTORY[pde_idx] =
-        PageEntry::new(0xFD000000, flags | PAGE_SIZE_4MB);
+    KERNEL_PAGE_DIRECTORY.0[pde_idx] =
+        PageEntry::new(0xFD000000u32, flags | PAGE_SIZE_4MB);
 
     // ── Load page directory ─────────────────────────────────────
-    let pd_phys = &raw const KERNEL_PAGE_DIRECTORY as *const _ as u32;
+    let pd_phys = unsafe { &raw const KERNEL_PAGE_DIRECTORY.0 as *const _ as u32 };
     asm!("mov cr3, {}", in(reg) pd_phys);
 
     // ── Enable paging: PG (bit 31) and PE (bit 0) ───────────────
@@ -131,7 +132,7 @@ pub unsafe fn init_paging() {
 
 /// Physical address of the kernel page directory.
 pub fn get_kernel_page_directory_phys_addr() -> u32 {
-    (&raw const KERNEL_PAGE_DIRECTORY as *const _ as u32)
+    unsafe { &raw const KERNEL_PAGE_DIRECTORY.0 as *const _ as u32 }
 }
 
 /// Create a user page directory (currently just returns the kernel PD).
@@ -151,7 +152,7 @@ pub unsafe fn map_page(virt: u32, phys: u32, flags: u32) {
     let pd_idx = (virt >> 22) as usize;          // bits 31:22
     let pt_idx = ((virt >> 12) & 0x3FF) as usize; // bits 21:12
 
-    let pd = &raw mut KERNEL_PAGE_DIRECTORY;
+    let pd = &raw mut KERNEL_PAGE_DIRECTORY.0;
     let pde = &mut (*pd)[pd_idx];
 
     if !pde.is_present() || pde.is_4mb_page() {
@@ -179,7 +180,7 @@ pub unsafe fn unmap_page(virt: u32) {
     let pd_idx = (virt >> 22) as usize;
     let pt_idx = ((virt >> 12) & 0x3FF) as usize;
 
-    let pd = &raw mut KERNEL_PAGE_DIRECTORY;
+    let pd = &raw mut KERNEL_PAGE_DIRECTORY.0;
     let pde = &(*pd)[pd_idx];
 
     if !pde.is_present() || pde.is_4mb_page() {

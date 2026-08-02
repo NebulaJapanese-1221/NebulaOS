@@ -1,5 +1,6 @@
 use crate::framebuffer::Framebuffer;
 use crate::gui::{draw_string, Window, WindowManager, AppType, TITLE_BAR_HEIGHT};
+use alloc::string::ToString;
 
 // Constants for layout and appearance
 const START_MENU_WIDTH: u32 = 250;
@@ -76,7 +77,7 @@ pub fn handle_click(mx: i32, my: i32, height: i32, wm: &mut WindowManager, start
     // Calculator entry
     if mx >= item_area_x_start && mx <= item_area_x_end &&
        my >= current_item_y && my <= current_item_y + MENU_ITEM_HEIGHT as i32 {
-        wm.windows.push(Window::new("Calculator", 300, 200, 220, 300, AppType::Calculator));
+        wm.windows.push(Window::new("Calculator", 300, 200, 220, 300, AppType::BuiltIn { app_id: 3, name: "Calculator".to_string() }));
         opened_app = true;
     }
         current_item_y += (MENU_ITEM_HEIGHT + MENU_ITEM_PADDING) as i32;
@@ -84,7 +85,7 @@ pub fn handle_click(mx: i32, my: i32, height: i32, wm: &mut WindowManager, start
     // Text Editor entry
     if mx >= item_area_x_start && mx <= item_area_x_end &&
        my >= current_item_y && my <= current_item_y + MENU_ITEM_HEIGHT as i32 {
-        wm.windows.push(Window::new("Text Editor", 350, 250, 400, 300, AppType::TextEditor));
+        wm.windows.push(Window::new("Text Editor", 350, 250, 400, 300, AppType::BuiltIn { app_id: 4, name: "Text Editor".to_string() }));
         opened_app = true;
     }
         current_item_y += (MENU_ITEM_HEIGHT + MENU_ITEM_PADDING) as i32;
@@ -92,7 +93,7 @@ pub fn handle_click(mx: i32, my: i32, height: i32, wm: &mut WindowManager, start
     // Terminal entry
     if mx >= item_area_x_start && mx <= item_area_x_end &&
        my >= current_item_y && my <= current_item_y + MENU_ITEM_HEIGHT as i32 {
-        wm.windows.push(Window::new("Terminal", 400, 300, 600, 400, AppType::Terminal));
+        wm.windows.push(Window::new("Terminal", 400, 300, 600, 400, AppType::BuiltIn { app_id: 2, name: "Terminal".to_string() }));
         opened_app = true;
     }
         current_item_y += (MENU_ITEM_HEIGHT + MENU_ITEM_PADDING) as i32;
@@ -100,7 +101,7 @@ pub fn handle_click(mx: i32, my: i32, height: i32, wm: &mut WindowManager, start
     // System Settings entry
     if mx >= item_area_x_start && mx <= item_area_x_end &&
        my >= current_item_y && my <= current_item_y + MENU_ITEM_HEIGHT as i32 {
-        wm.windows.push(Window::new("System Settings", 350, 250, 500, 400, AppType::SystemSettings));
+        wm.windows.push(Window::new("System Settings", 350, 250, 500, 400, AppType::BuiltIn { app_id: 8, name: "System Settings".to_string() }));
         opened_app = true;
     }
         current_item_y += (MENU_ITEM_HEIGHT + MENU_ITEM_PADDING) as i32;
@@ -108,7 +109,7 @@ pub fn handle_click(mx: i32, my: i32, height: i32, wm: &mut WindowManager, start
     // System Monitor entry
     if mx >= item_area_x_start && mx <= item_area_x_end &&
        my >= current_item_y && my <= current_item_y + MENU_ITEM_HEIGHT as i32 {
-        wm.windows.push(Window::new("System Monitor", 350, 250, 500, 400, AppType::SystemMonitor));
+        wm.windows.push(Window::new("System Monitor", 350, 250, 500, 400, AppType::BuiltIn { app_id: 7, name: "System Monitor".to_string() }));
         opened_app = true;
     }
         current_item_y += (MENU_ITEM_HEIGHT + MENU_ITEM_PADDING) as i32;

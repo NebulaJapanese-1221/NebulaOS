@@ -1,6 +1,10 @@
 use crate::framebuffer::{Framebuffer, Rect};
 use super::{draw_string, TITLE_BAR_HEIGHT, TASKBAR_HEIGHT};
+use crate::services::loader;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use alloc::boxed::Box;
+use alloc::format;
 
 pub const CURSOR_BITMAP: [u16; 19] = [
     0b110000000000, 0b111000000000, 0b111100000000, 0b111110000000,
@@ -10,77 +14,171 @@ pub const CURSOR_BITMAP: [u16; 19] = [
     0b000000011100, 0b000000011100, 0b000000000000,
 ];
 
-#[derive(Copy, Clone, PartialEq)]
+/// Dynamic app types - apps are now loaded from the AppLoaderService
+#[derive(Debug, Clone, PartialEq)]
 pub enum AppType {
     None,
-    Calculator,
-    Terminal,
-    TextEditor,
-    FileManager,
-    WebBrowser,
-    ImageViewer,
-    SystemMonitor,
-    SystemSettings,
+    BuiltIn {
+        app_id: u32,
+        name: String,
+    },
+    AppLoader,
 }
 
+/// AppData now uses dynamic dispatch through the loader service
 pub enum AppData {
     None,
-    Calculator(crate::apps::calculator::CalculatorState),
-    Terminal(crate::apps::terminal::TerminalState),
-    TextEditor(crate::apps::text_editor::TextEditorState),
-    FileManager(crate::apps::file_manager::FileManagerState),
-    WebBrowser(crate::apps::web_browser::WebBrowserState),
-    ImageViewer(crate::apps::image_viewer::ImageViewerState),
-    SystemMonitor(crate::apps::system_monitor::SystemMonitorState),
-    SystemSettings(crate::apps::system_settings::SystemSettingsState),
+    BuiltIn {
+        app_id: u32,
+        name: String,
+        state: Box<dyn AppStateHandler>,
+    },
+    AppLoader(crate::apps::app_loader::AppLoaderState),
+}
+
+/// Trait that built-in apps must implement for dynamic dispatch
+pub trait AppStateHandler {
+    fn draw(&mut self, fb: &mut Framebuffer, bounds: Rect, is_focused: bool);
+    fn handle_keyboard_input(&mut self, c: char);
+    fn handle_click(&mut self, bounds: Rect, mx: i32, my: i32);
+    fn should_close(&self) -> bool { false }
+    fn get_title(&self) -> &str { "" }
+}
+
+// Implement AppStateHandler for each built-in app
+
+impl AppStateHandler for crate::apps::calculator::CalculatorState {
+    fn draw(&mut self, fb: &mut Framebuffer, bounds: Rect, _is_focused: bool) {
+        crate::apps::calculator::CalculatorApp::draw(fb, bounds, self);
+    }
+    fn handle_keyboard_input(&mut self, c: char) {
+        crate::apps::calculator::CalculatorApp::handle_keyboard_input(self, c);
+    }
+    fn handle_click(&mut self, bounds: Rect, mx: i32, my: i32) {
+        crate::apps::calculator::CalculatorApp::handle_click(self, bounds, mx, my);
+    }
+}
+
+impl AppStateHandler for crate::apps::terminal::TerminalState {
+    fn draw(&mut self, fb: &mut Framebuffer, bounds: Rect, _is_focused: bool) {
+        crate::apps::terminal::TerminalApp::draw(fb, bounds, self);
+    }
+    fn handle_keyboard_input(&mut self, c: char) {
+        crate::apps::terminal::TerminalApp::handle_keypress(self, c);
+    }
+    fn handle_click(&mut self, bounds: Rect, mx: i32, my: i32) {
+        crate::apps::terminal::TerminalApp::handle_click(self, bounds, mx, my);
+    }
+    fn should_close(&self) -> bool { self.should_close }
+}
+
+impl AppStateHandler for crate::apps::text_editor::TextEditorState {
+    fn draw(&mut self, fb: &mut Framebuffer, bounds: Rect, is_focused: bool) {
+        crate::apps::text_editor::TextEditorApp::draw(fb, bounds, self, is_focused);
+    }
+    fn handle_keyboard_input(&mut self, c: char) {
+        crate::apps::text_editor::TextEditorApp::handle_keyboard_input(self, c);
+    }
+    fn handle_click(&mut self, bounds: Rect, mx: i32, my: i32) {
+        crate::apps::text_editor::TextEditorApp::handle_click(self, bounds, mx, my);
+    }
+}
+
+impl AppStateHandler for crate::apps::file_manager::FileManagerState {
+    fn draw(&mut self, fb: &mut Framebuffer, bounds: Rect, _is_focused: bool) {
+        crate::apps::file_manager::FileManagerApp::draw(fb, bounds, self);
+    }
+    fn handle_keyboard_input(&mut self, c: char) {
+        crate::apps::file_manager::FileManagerApp::handle_keyboard_input(self, c);
+    }
+    fn handle_click(&mut self, bounds: Rect, mx: i32, my: i32) {
+        crate::apps::file_manager::FileManagerApp::handle_click(self, bounds, mx, my);
+    }
+}
+
+impl AppStateHandler for crate::apps::web_browser::WebBrowserState {
+    fn draw(&mut self, fb: &mut Framebuffer, bounds: Rect, _is_focused: bool) {
+        crate::apps::web_browser::WebBrowserApp::draw(fb, bounds, self);
+    }
+    fn handle_keyboard_input(&mut self, c: char) {
+        crate::apps::web_browser::WebBrowserApp::handle_keyboard_input(self, c);
+    }
+    fn handle_click(&mut self, bounds: Rect, mx: i32, my: i32) {
+        crate::apps::web_browser::WebBrowserApp::handle_click(self, bounds, mx, my);
+    }
+}
+
+impl AppStateHandler for crate::apps::image_viewer::ImageViewerState {
+    fn draw(&mut self, fb: &mut Framebuffer, bounds: Rect, _is_focused: bool) {
+        crate::apps::image_viewer::ImageViewerApp::draw(fb, bounds, self);
+    }
+    fn handle_keyboard_input(&mut self, c: char) {
+        crate::apps::image_viewer::ImageViewerApp::handle_keyboard_input(self, c);
+    }
+    fn handle_click(&mut self, bounds: Rect, mx: i32, my: i32) {
+        crate::apps::image_viewer::ImageViewerApp::handle_click(self, bounds, mx, my);
+    }
+}
+
+impl AppStateHandler for crate::apps::system_monitor::SystemMonitorState {
+    fn draw(&mut self, fb: &mut Framebuffer, bounds: Rect, _is_focused: bool) {
+        crate::apps::system_monitor::SystemMonitorApp::draw(fb, bounds, self);
+    }
+    fn handle_keyboard_input(&mut self, c: char) {
+        crate::apps::system_monitor::SystemMonitorApp::handle_keyboard_input(self, c);
+    }
+    fn handle_click(&mut self, bounds: Rect, mx: i32, my: i32) {
+        crate::apps::system_monitor::SystemMonitorApp::handle_click(self, bounds, mx, my);
+    }
+}
+
+impl AppStateHandler for crate::apps::system_settings::SystemSettingsState {
+    fn draw(&mut self, fb: &mut Framebuffer, bounds: Rect, _is_focused: bool) {
+        crate::apps::system_settings::SystemSettingsApp::draw(fb, bounds, self);
+    }
+    fn handle_keyboard_input(&mut self, c: char) {
+        crate::apps::system_settings::SystemSettingsApp::handle_keyboard_input(self, c);
+    }
+    fn handle_click(&mut self, bounds: Rect, mx: i32, my: i32) {
+        crate::apps::system_settings::SystemSettingsApp::handle_click(self, bounds, mx, my);
+    }
 }
 
 impl AppData {
     pub fn draw(&mut self, fb: &mut Framebuffer, bounds: Rect, is_focused: bool) {
         match self {
-            AppData::Calculator(state) => crate::apps::calculator::CalculatorApp::draw(fb, bounds, state),
-            AppData::Terminal(state) => crate::apps::terminal::TerminalApp::draw(fb, bounds, state),
-            AppData::TextEditor(state) => crate::apps::text_editor::TextEditorApp::draw(fb, bounds, state, is_focused),
-            AppData::FileManager(state) => crate::apps::file_manager::FileManagerApp::draw(fb, bounds, state),
-            AppData::WebBrowser(state) => crate::apps::web_browser::WebBrowserApp::draw(fb, bounds, state),
-            AppData::ImageViewer(state) => crate::apps::image_viewer::ImageViewerApp::draw(fb, bounds, state),
-            AppData::SystemMonitor(state) => crate::apps::system_monitor::SystemMonitorApp::draw(fb, bounds, state),
-            AppData::SystemSettings(state) => crate::apps::system_settings::SystemSettingsApp::draw(fb, bounds, state),
+            AppData::BuiltIn { state, .. } => state.draw(fb, bounds, is_focused),
+            AppData::AppLoader(state) => crate::apps::app_loader::AppLoaderApp::draw(fb, bounds, state),
             AppData::None => {}
         }
     }
 
     pub fn handle_keyboard_input(&mut self, c: char) {
         match self {
-            AppData::TextEditor(state) => crate::apps::text_editor::TextEditorApp::handle_keyboard_input(state, c),
-            AppData::Calculator(state) => crate::apps::calculator::CalculatorApp::handle_keyboard_input(state, c),
-            AppData::Terminal(state) => crate::apps::terminal::TerminalApp::handle_keypress(state, c),
-            AppData::FileManager(state) => crate::apps::file_manager::FileManagerApp::handle_keyboard_input(state, c),
-            AppData::WebBrowser(state) => crate::apps::web_browser::WebBrowserApp::handle_keyboard_input(state, c),
-            AppData::ImageViewer(state) => crate::apps::image_viewer::ImageViewerApp::handle_keyboard_input(state, c),
-            AppData::SystemMonitor(state) => crate::apps::system_monitor::SystemMonitorApp::handle_keyboard_input(state, c),
-            AppData::SystemSettings(state) => crate::apps::system_settings::SystemSettingsApp::handle_keyboard_input(state, c),
+            AppData::BuiltIn { state, .. } => state.handle_keyboard_input(c),
+            AppData::AppLoader(state) => crate::apps::app_loader::AppLoaderApp::handle_keyboard_input(state, c),
             AppData::None => {}
         }
     }
 
     pub fn handle_click(&mut self, bounds: Rect, mx: i32, my: i32) {
         match self {
-            AppData::Calculator(state) => crate::apps::calculator::CalculatorApp::handle_click(state, bounds, mx, my),
-            AppData::Terminal(state) => crate::apps::terminal::TerminalApp::handle_click(state, bounds, mx, my),
-            AppData::TextEditor(state) => crate::apps::text_editor::TextEditorApp::handle_click(state, bounds, mx, my),
-            AppData::FileManager(state) => crate::apps::file_manager::FileManagerApp::handle_click(state, bounds, mx, my),
-            AppData::WebBrowser(state) => crate::apps::web_browser::WebBrowserApp::handle_click(state, bounds, mx, my),
-            AppData::ImageViewer(state) => crate::apps::image_viewer::ImageViewerApp::handle_click(state, bounds, mx, my),
-            AppData::SystemMonitor(state) => crate::apps::system_monitor::SystemMonitorApp::handle_click(state, bounds, mx, my),
-            AppData::SystemSettings(state) => crate::apps::system_settings::SystemSettingsApp::handle_click(state, bounds, mx, my),
+            AppData::BuiltIn { state, .. } => state.handle_click(bounds, mx, my),
+            AppData::AppLoader(state) => crate::apps::app_loader::AppLoaderApp::handle_click(state, bounds, mx, my),
             AppData::None => {}
+        }
+    }
+
+    pub fn should_close(&self) -> bool {
+        match self {
+            AppData::BuiltIn { state, .. } => state.should_close(),
+            _ => false,
         }
     }
 }
 
 pub struct Window {
-    pub title: &'static str,
+    pub title: String,
     pub bounds: Rect,
     pub app_type: AppType,
     pub data: AppData,
@@ -90,26 +188,81 @@ pub struct Window {
 }
 
 impl Window {
-    pub fn new(title: &'static str, x: u32, y: u32, width: u32, height: u32, app_type: AppType) -> Self {
-        let data = match app_type {
-            AppType::Calculator => AppData::Calculator(crate::apps::calculator::CalculatorState::new()),
-            AppType::TextEditor => AppData::TextEditor(crate::apps::text_editor::TextEditorState::new()),
-            AppType::Terminal => AppData::Terminal(crate::apps::terminal::TerminalState::new()),
-            AppType::FileManager => AppData::FileManager(crate::apps::file_manager::FileManagerState::new()),
-            AppType::WebBrowser => AppData::WebBrowser(crate::apps::web_browser::WebBrowserState::new()),
-            AppType::ImageViewer => AppData::ImageViewer(crate::apps::image_viewer::ImageViewerState::new()),
-            AppType::SystemMonitor => AppData::SystemMonitor(crate::apps::system_monitor::SystemMonitorState::new()),
-            AppType::SystemSettings => AppData::SystemSettings(crate::apps::system_settings::SystemSettingsState::new()),
-            _ => AppData::None,
+    pub fn new(title: &str, x: u32, y: u32, width: u32, height: u32, app_type: AppType) -> Self {
+        let data = match &app_type {
+            AppType::BuiltIn { app_id, name } => {
+                Self::create_app_data(*app_id, name)
+            }
+            AppType::AppLoader => {
+                AppData::AppLoader(crate::apps::app_loader::AppLoaderState::new())
+            }
+            AppType::None => AppData::None,
         };
+
         Self {
-            title,
+            title: title.to_string(),
             bounds: Rect { x, y, width, height },
             app_type,
             data,
             is_maximized: false,
             old_bounds: Rect { x, y, width, height },
             is_minimized: false,
+        }
+    }
+
+    fn create_app_data(app_id: u32, name: &str) -> AppData {
+        match name {
+            "Calculator" => AppData::BuiltIn {
+                app_id,
+                name: name.to_string(),
+                state: Box::new(crate::apps::calculator::CalculatorState::new()),
+            },
+            "Terminal" => {
+                let mut state = crate::apps::terminal::TerminalState::new();
+                state.set_filesystem(crate::fs::NebulaFS::new("nebula_pool", 4096, 1024 * 1024));
+                AppData::BuiltIn {
+                    app_id,
+                    name: name.to_string(),
+                    state: Box::new(state),
+                }
+            }
+            "Text Editor" => AppData::BuiltIn {
+                app_id,
+                name: name.to_string(),
+                state: Box::new(crate::apps::text_editor::TextEditorState::new()),
+            },
+            "File Manager" => {
+                let mut state = crate::apps::file_manager::FileManagerState::new();
+                state.set_filesystem(crate::fs::NebulaFS::new("nebula_pool", 4096, 1024 * 1024));
+                state.refresh_files();
+                AppData::BuiltIn {
+                    app_id,
+                    name: name.to_string(),
+                    state: Box::new(state),
+                }
+            }
+            "Web Browser" => AppData::BuiltIn {
+                app_id,
+                name: name.to_string(),
+                state: Box::new(crate::apps::web_browser::WebBrowserState::new()),
+            },
+            "Image Viewer" => AppData::BuiltIn {
+                app_id,
+                name: name.to_string(),
+                state: Box::new(crate::apps::image_viewer::ImageViewerState::new()),
+            },
+            "System Monitor" => AppData::BuiltIn {
+                app_id,
+                name: name.to_string(),
+                state: Box::new(crate::apps::system_monitor::SystemMonitorState::new()),
+            },
+            "System Settings" => AppData::BuiltIn {
+                app_id,
+                name: name.to_string(),
+                state: Box::new(crate::apps::system_settings::SystemSettingsState::new()),
+            },
+            "App Loader" => AppData::AppLoader(crate::apps::app_loader::AppLoaderState::new()),
+            _ => AppData::None,
         }
     }
 }
@@ -168,37 +321,42 @@ impl WindowManager {
 
                 if rel_x >= 0 && rel_x < 150 && rel_y >= 0 && rel_y < 100 {
                     let item = rel_y / 20;
-                    match item {
-                        0 => {
-                            self.windows.push(Window::new("Calculator", mx as u32, my as u32, 220, 300, AppType::Calculator));
-                        }
-                        1 => {
-                            self.windows.push(Window::new("Text Editor", mx as u32, my as u32, 400, 300, AppType::TextEditor));
-                        }
-                        2 => {
-                            self.windows.push(Window::new("Terminal", mx as u32, my as u32, 400, 300, AppType::Terminal));
-                        }
-                        3 => {
-                            self.windows.push(Window::new("Web Browser", mx as u32, my as u32, 600, 400, AppType::WebBrowser));
-                        }
-                        4 => {
-                            self.windows.push(Window::new("Image Viewer", mx as u32, my as u32, 500, 400, AppType::ImageViewer));
-                        }
-                        5 => {
-                            self.windows.push(Window::new("System Monitor", mx as u32, my as u32, 500, 400, AppType::SystemMonitor));
-                        }
-                        6 => {
-                            let mut fm = Window::new("File Manager", mx as u32, my as u32, 500, 400, AppType::FileManager);
-                            if let AppData::FileManager(ref mut state) = fm.data {
-                                if let Some(_vfs) = &self.vfs {
-                                    state.set_filesystem(crate::fs::NebulaFS::new("nebula_pool", 4096, 1024 * 1024));
-                                }
-                                state.refresh_files();
+                    
+                    // Get apps from loader service for dynamic menu
+                    let apps_list = {
+                        let ls = loader::get_loader_service().lock();
+                        ls.list_apps()
+                    };
+
+                    if (item as usize) < apps_list.len() {
+                        let app = &apps_list[item as usize];
+                        self.windows.push(Window::new(
+                            app.name.as_str(),
+                            mx as u32,
+                            my as u32,
+                            500,
+                            400,
+                            AppType::BuiltIn {
+                                app_id: app.app_id,
+                                name: app.name.clone(),
+                            },
+                        ));
+                    } else {
+                        match item {
+                            9 => {
+                                // App Loader
+                                self.windows.push(Window::new(
+                                    "App Loader",
+                                    mx as u32,
+                                    my as u32,
+                                    600,
+                                    450,
+                                    AppType::AppLoader,
+                                ));
                             }
-                            self.windows.push(fm);
-                        }
-                        _ => {
-                            self.windows.clear();
+                            _ => {
+                                self.windows.clear();
+                            }
                         }
                     }
                     self.context_menu = None;
@@ -279,7 +437,6 @@ impl WindowManager {
                     self.windows.remove(idx);
                 } else {
                     let win = self.windows.remove(idx);
-                    // Handle maximize
                     if max_clicked {
                         let (ow, oh) = if win.is_maximized {
                             (win.old_bounds.width, win.old_bounds.height)
@@ -329,12 +486,10 @@ impl WindowManager {
         if let Some(win) = self.windows.iter_mut().rev().find(|w| !w.is_minimized) {
             win.data.handle_keyboard_input(c);
 
-            if let AppData::Terminal(state) = &win.data {
-                if state.should_close {
-                    if let Some(idx) = self.windows.iter().rev().position(|w| !w.is_minimized) {
-                        let idx = self.windows.len() - 1 - idx;
-                        self.windows.remove(idx);
-                    }
+            if win.data.should_close() {
+                if let Some(idx) = self.windows.iter().rev().position(|w| !w.is_minimized) {
+                    let idx = self.windows.len() - 1 - idx;
+                    self.windows.remove(idx);
                 }
             }
         }
@@ -349,25 +504,34 @@ impl WindowManager {
             
             fb.draw_rect(window.bounds.x as usize, window.bounds.y as usize, window.bounds.width as usize, TITLE_BAR_HEIGHT as usize, 0x000078D7);
             
-            draw_string(fb, window.bounds.x as usize + 5, window.bounds.y as usize + 8, window.title, 0xFFFFFF);
+            draw_string(fb, window.bounds.x as usize + 5, window.bounds.y as usize + 8, window.title.as_str(), 0xFFFFFF);
 
             let is_focused = i == window_count - 1;
             window.data.draw(fb, window.bounds, is_focused);
         }
 
         if let Some((cx, cy)) = self.context_menu {
-            fb.draw_rect(cx as usize, cy as usize, 150, 100, 0x00E0E0E0);
-            fb.draw_rect(cx as usize, cy as usize, 150, 1, 0x00000000);
-            fb.draw_rect(cx as usize, cy as usize + 99, 150, 1, 0x00000000);
-            
-            draw_string(fb, cx as usize + 10, cy as usize + 5,  "New Calculator", 0x000000);
-            draw_string(fb, cx as usize + 10, cy as usize + 25, "New Text Editor", 0x000000);
-            draw_string(fb, cx as usize + 10, cy as usize + 45, "New Terminal", 0x000000);
-            draw_string(fb, cx as usize + 10, cy as usize + 65, "New Web Browser", 0x000000);
-            draw_string(fb, cx as usize + 10, cy as usize + 85, "New Image Viewer", 0x000000);
-            draw_string(fb, cx as usize + 10, cy as usize + 105, "New System Monitor", 0x000000);
-            draw_string(fb, cx as usize + 10, cy as usize + 125, "New File Manager", 0x000000);
-            draw_string(fb, cx as usize + 10, cy as usize + 145, "Close All", 0x000000);
+            let apps = {
+                let loader_service = loader::get_loader_service().lock();
+                let apps_list = loader_service.list_apps();
+                let menu_h = (apps_list.len() + 2) * 20;
+                drop(loader_service);
+
+                fb.draw_rect(cx as usize, cy as usize, 150, menu_h, 0x00E0E0E0);
+                fb.draw_rect(cx as usize, cy as usize, 150, 1, 0x00000000);
+                fb.draw_rect(cx as usize, cy as usize + menu_h - 1, 150, 1, 0x00000000);
+
+                apps_list
+            };
+
+            for (i, app) in apps.iter().enumerate() {
+                let label = format!("New {}", app.name);
+                draw_string(fb, cx as usize + 10, cy as usize + 5 + (i * 20), label.as_str(), 0x000000);
+            }
+
+            // Draw App Loader and Close All
+            draw_string(fb, cx as usize + 10, cy as usize + 5 + (apps.len() * 20), "New App Loader", 0x000000);
+            draw_string(fb, cx as usize + 10, cy as usize + 5 + ((apps.len() + 1) * 20), "Close All", 0x000000);
         }
     }
 }

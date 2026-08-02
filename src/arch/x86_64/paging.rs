@@ -64,7 +64,6 @@ impl PageMapLevel4 {
 }
 
 /// Static PML4 table for the kernel, must be page-aligned
-#[repr(C, align(4096))]
 static mut KERNEL_PML4: PageMapLevel4 = PageMapLevel4::new();
 
 /// Initialize 4-level paging for x86_64

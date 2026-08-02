@@ -143,7 +143,7 @@ pub fn render_ui(fb: &mut Framebuffer, start_menu_open: bool, h: u8, m: u8, s: u
     for window in windows {
         if window.is_minimized {
             fb.draw_rect(item_x, ty + 5, 110, 30, 0x00444444); // Button background
-            draw_string(fb, item_x + 5, ty + 16, window.title, 0xFFFFFF);
+            draw_string(fb, item_x + 5, ty + 16, window.title.as_str(), 0xFFFFFF);
             item_x += 115;
         }
     }
