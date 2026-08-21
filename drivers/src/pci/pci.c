@@ -247,7 +247,7 @@ bool pci_enumerate_bus(void) {
     pci_device_count = 0;
     vga_puts("PCI: Enumerating bus...\n");
 
-    for (uint8_t bus = 0; bus < PCI_MAX_BUSES; bus++) {
+    for (uint16_t bus = 0; bus < PCI_MAX_BUSES; bus++) {
         for (uint8_t device = 0; device < PCI_MAX_DEVICES; device++) {
             if (!pci_device_exists(bus, device, 0)) {
                 continue;

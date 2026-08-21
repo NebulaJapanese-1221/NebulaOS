@@ -91,13 +91,13 @@ bool pic_is_pending(uint8_t irq);
 #define SERIAL_IRQ_COM4 3
 
 // Enable serial IRQ in PIC
-static inline void pic_enable_serial_irq(uint8_t com_port) {
+static inline void pic_enable_serial_irq(uint16_t com_port) {
     uint8_t irq;
-    switch (com_port) {
-        case 0x3F8: irq = SERIAL_IRQ_COM1; break;
-        case 0x2F8: irq = SERIAL_IRQ_COM2; break;
-        case 0x3E8: irq = SERIAL_IRQ_COM3; break;
-        case 0x2E8: irq = SERIAL_IRQ_COM4; break;
+    switch ((int)com_port) {
+        case (int)0x3F8: irq = SERIAL_IRQ_COM1; break;
+        case (int)0x2F8: irq = SERIAL_IRQ_COM2; break;
+        case (int)0x3E8: irq = SERIAL_IRQ_COM3; break;
+        case (int)0x2E8: irq = SERIAL_IRQ_COM4; break;
         default: return;
     }
     pic_enable_irq(irq);
