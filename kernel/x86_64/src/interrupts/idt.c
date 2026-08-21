@@ -98,7 +98,7 @@ void idt_set_gate(uint8_t num, uint32_t base, uint16_t sel, uint8_t flags) {
     idt[num].ist = 0;
     idt[num].flags = flags;
     idt[num].base_mid = (uint16_t)((base >> 16) & 0xFFFF);
-    idt[num].base_high = (uint32_t)(base >> 32);
+    idt[num].base_high = (uint32_t)((uint64_t)base >> 32);
     idt[num].reserved = 0;
 }
 

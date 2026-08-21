@@ -21,9 +21,10 @@
 
 // Physical memory constants
 #define PHYSICAL_MEMORY_START 0x100000  // 1MB - start of available physical memory
-#define PHYSICAL_MEMORY_END   0xFFFFFFFF // 4GB - end of 32-bit address space
 #ifdef NEBULAOS_ARCH_X86_64
 #define PHYSICAL_MEMORY_END   0x00007FFFFFFFFFFF // 128TB for 48-bit addressing
+#else
+#define PHYSICAL_MEMORY_END   0xFFFFFFFF // 4GB - end of 32-bit address space
 #endif
 
 // Memory types

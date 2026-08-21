@@ -7,6 +7,7 @@
 #include "../include/vbe.h"
 #include "../../kernel/common/include/nebula.h"
 #include "../../kernel/common/include/stdint.h"
+#include "../../lib/include/string.h"
 
 // -----------------------------------------------------------------------------
 // Get VBE controller information

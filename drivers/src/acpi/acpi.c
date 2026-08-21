@@ -95,7 +95,7 @@ bool acpi_init(void) {
     // Check if we have XSDT (ACPI 2.0+)
     if (rsdp->revision >= 2 && ((rsdp_desc_t*)rsdp)->xsdt_address != 0) {
         rsdp_desc_t* rsdp_desc = (rsdp_desc_t*)rsdp;
-        acpi_state.xsdt = (xsdt_t*)(uintptr_t)rsdp_desc->xsdt_address;
+        acpi_state.xsdt = (xsdt_t*)(size_t)rsdp_desc->xsdt_address;
 
         if (acpi_verify_sdt((char*)acpi_state.xsdt, acpi_state.xsdt->length)) {
             vga_puts("ACPI: XSDT found\n");
@@ -107,7 +107,7 @@ bool acpi_init(void) {
 
     // Fall back to RSDT
     if (!acpi_state.xsdt) {
-        acpi_state.rsdt = (rsdt_t*)(uintptr_t)rsdp->rsdt_address;
+        acpi_state.rsdt = (rsdt_t*)(size_t)rsdp->rsdt_address;
 
         if (acpi_verify_sdt((char*)acpi_state.rsdt, acpi_state.rsdt->length)) {
             vga_puts("ACPI: RSDT found\n");
@@ -162,7 +162,7 @@ void acpi_enumerate_tables(void) {
     if (acpi_state.xsdt) {
         entry_count = (acpi_state.xsdt->length - sizeof(xsdt_t)) / 8;
         for (uint32_t i = 0; i < entry_count && i < 32; i++) {
-        uintptr_t ptr = (uintptr_t)acpi_state.xsdt->entries[i];
+        size_t ptr = (size_t)acpi_state.xsdt->entries[i];
         char* sig = (char*)ptr;
         uint32_t len = *(uint32_t*)(ptr + 4);
 
@@ -176,14 +176,14 @@ void acpi_enumerate_tables(void) {
     } else if (acpi_state.rsdt) {
         entry_count = (acpi_state.rsdt->length - sizeof(rsdt_t)) / 4;
         for (uint32_t i = 0; i < entry_count && i < 32; i++) {
-            uint32_t ptr = acpi_state.rsdt->entries[i];
-            char* sig = (char*)(uint64_t)ptr;
-            uint32_t len = *(uint32_t*)(uint64_t)(ptr + 4);
+            size_t ptr = (size_t)acpi_state.rsdt->entries[i];
+            char* sig = (char*)ptr;
+            uint32_t len = *(uint32_t*)(ptr + 4);
 
             if (acpi_verify_sdt(sig, len)) {
                 memcpy(acpi_state.tables[i].signature, sig, 4);
                 acpi_state.tables[i].length = len;
-                acpi_state.tables[i].ptr = (void*)(uint64_t)ptr;
+                acpi_state.tables[i].ptr = (void*)ptr;
                 acpi_state.table_count++;
             }
         }
@@ -221,7 +221,7 @@ void acpi_parse_madt(void) {
     uint32_t end = madt->length;
 
     while (offset < end) {
-        madt_entry_header_t* entry = (madt_entry_header_t*)((uint64_t)madt + offset);
+        madt_entry_header_t* entry = (madt_entry_header_t*)((size_t)madt + offset);
 
         if (entry->length == 0) {
             break;

@@ -8,6 +8,7 @@
 #include "../../kernel/common/include/nebula.h"
 #include "../../kernel/common/include/stdint.h"
 #include "../../kernel/common/include/vga.h"
+#include "../../lib/include/string.h"
 
 // -----------------------------------------------------------------------------
 // VESA state
@@ -99,7 +100,7 @@ bool vesa_set_mode(uint16_t mode) {
     vesa_state.height = mode_info.y_resolution;
     vesa_state.bpp = mode_info.bits_per_pixel;
     vesa_state.stride = mode_info.bytes_per_scanline;
-    vesa_state.framebuffer = (void*)(uint64_t)mode_info.phys_base_ptr;
+    vesa_state.framebuffer = (void*)(size_t)mode_info.phys_base_ptr;
     vesa_state.framebuffer_size = vesa_state.stride * vesa_state.height;
     vesa_state.lfb_enabled = (mode_info.mode_attributes & VBE_MODE_ATTR_LINEAR) != 0;
     vesa_state.current_mode = mode;
@@ -130,7 +131,7 @@ bool vesa_find_mode(uint32_t width, uint32_t height, uint32_t bpp, uint16_t* mod
         return false;
     }
 
-    uint32_t* mode_list = (uint32_t*)(uint64_t)vesa_state.vbe_info->video_modes;
+    uint32_t* mode_list = (uint32_t*)(size_t)vesa_state.vbe_info->video_modes;
 
     if (!mode_list) {
         return false;

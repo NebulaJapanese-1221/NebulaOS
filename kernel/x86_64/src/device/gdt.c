@@ -5,6 +5,7 @@
 
 #include "../../../common/include/gdt.h"
 #include "../../../common/include/nebula.h"
+#include <string.h>
 
 // GDT table (6 entries: null, kernel code, kernel data, user code, user data, TSS)
 static gdt_entry_t gdt[6];

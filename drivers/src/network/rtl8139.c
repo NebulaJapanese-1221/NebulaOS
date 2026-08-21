@@ -8,6 +8,7 @@
 #include "../../kernel/common/include/nebula.h"
 #include "../../kernel/common/include/stdint.h"
 #include "../../kernel/common/include/vga.h"
+#include "../../lib/include/string.h"
 
 // -----------------------------------------------------------------------------
 // I/O functions
