@@ -1,0 +1,242 @@
+// NebulaOS x86 Kernel Entry
+// ===========================
+//
+// C entry point for x86 kernel
+// Called from entry.asm after bootloader sets up protected mode
+
+#include "../common/include/nebula.h"
+#include "../common/include/stdint.h"
+#include "../common/include/vga.h"
+#include "../common/include/memory.h"
+#include "../common/include/gdt.h"
+#include "../common/include/idt.h"
+#include "../common/include/isr.h"
+#include "../common/include/shell.h"
+
+// Driver includes
+#include "../../drivers/include/keyboard.h"
+#include "../../drivers/include/mouse.h"
+#include "../../drivers/include/pit.h"
+#include "../../drivers/include/pic.h"
+
+// Forward declarations
+void kernel_early_init(void);
+void kernel_init(void);
+void kernel_main_loop(void);
+
+// Driver initializers
+void init_keyboard(void);
+void init_mouse(void);
+
+// External assembly functions
+extern void init_gdt(void);
+extern void init_idt(void);
+
+// -----------------------------------------------------------------------------
+// Kernel main entry point
+// Parameters from multiboot (if used):
+//   magic: Multiboot magic number
+//   info:  Pointer to multiboot info structure
+// -----------------------------------------------------------------------------
+void kernel_main(uint32_t magic, uint32_t info) {
+    (void)magic;  // Unused for now
+    (void)info;   // Unused for now
+    
+    // Early initialization (before memory is available)
+    kernel_early_init();
+    
+    // Main kernel initialization
+    kernel_init();
+    
+    // Enter main loop
+    kernel_main_loop();
+}
+
+// -----------------------------------------------------------------------------
+// Early initialization
+// Sets up basic CPU state before memory management is available
+// -----------------------------------------------------------------------------
+void kernel_early_init(void) {
+    // Initialize GDT
+    init_gdt();
+    
+    // Initialize IDT
+    init_idt();
+    
+    // Initialize PIC (Programmable Interrupt Controller)
+    pic_init(0x20, 0x28);
+    
+    // Initialize PIT (Programmable Interval Timer)
+    pit_init(1000);  // 1000 Hz timer
+    
+    // Initialize basic paging (identity mapping for now)
+    // This will be enhanced with proper memory management
+    // For now, we rely on the bootloader's paging setup
+    
+    // Initialize VGA text mode for early output
+    vga_init();
+    vga_set_color(VGA_COLOR_WHITE);
+    vga_set_bg_color(VGA_COLOR_BLUE);
+    vga_clear();
+    
+    // Print early boot message
+    vga_puts("NebulaOS x86 Kernel Booting...\n");
+    vga_puts("Initializing hardware...\n");
+}
+
+// -----------------------------------------------------------------------------
+// Main kernel initialization
+// -----------------------------------------------------------------------------
+void kernel_init(void) {
+    // Initialize console
+    vga_puts("Initializing memory management...\n");
+    
+    // Initialize memory management
+    memory_init();
+    vga_puts("  Memory: ");
+    
+    size_t total = memory_get_total();
+    size_t free = memory_get_free();
+    char buf[32];
+    
+    // Simple itoa for display
+    int len = 0;
+    if (total >= 1024 * 1024) {
+        len = total / (1024 * 1024);
+        buf[0] = '0' + len;
+        buf[1] = 'M';
+        buf[2] = 'B';
+        buf[3] = 0;
+    } else {
+        len = total / 1024;
+        buf[0] = '0' + len / 100;
+        buf[1] = '0' + (len / 10) % 10;
+        buf[2] = '0' + len % 10;
+        buf[3] = 'K';
+        buf[4] = 'B';
+        buf[5] = 0;
+    }
+    vga_puts(buf);
+    vga_puts(" total, ");
+    
+    if (free >= 1024 * 1024) {
+        len = free / (1024 * 1024);
+        buf[0] = '0' + len;
+        buf[1] = 'M';
+        buf[2] = 'B';
+        buf[3] = 0;
+    } else {
+        len = free / 1024;
+        buf[0] = '0' + len / 100;
+        buf[1] = '0' + (len / 10) % 10;
+        buf[2] = '0' + len % 10;
+        buf[3] = 'K';
+        buf[4] = 'B';
+        buf[5] = 0;
+    }
+    vga_puts(buf);
+    vga_puts(" free\n");
+    
+    // Initialize keyboard
+    vga_puts("Initializing keyboard...\n");
+    init_keyboard();
+    vga_puts("  Keyboard: Ready\n");
+    
+    // Initialize mouse
+    vga_puts("Initializing mouse...\n");
+    init_mouse();
+    vga_puts("  Mouse: Ready\n");
+    
+    // Initialize process management
+    // process_init();
+    
+    // Initialize filesystem
+    // fs_init();
+    
+    // Initialize devices
+    // device_init();
+    
+    // Initialize GUI
+    vga_puts("Initializing GUI...\n");
+    // For now, we'll use VGA text mode
+    // In a real implementation, we'd switch to graphics mode
+    
+    // Try to initialize GUI in text mode
+    // For now, just print a message
+    vga_puts("  GUI: Text mode ready\n");
+    
+    // Print welcome message
+    vga_puts("\n");
+    vga_puts("NebulaOS x86 Kernel Initialized\n");
+    vga_puts("Version: " NEBULAOS_VERSION "\n");
+    
+    // Initialize and start the shell
+    shell_init();
+}
+
+// -----------------------------------------------------------------------------
+// Main kernel loop
+// -----------------------------------------------------------------------------
+void kernel_main_loop(void) {
+    // Enable interrupts
+    __asm__ __volatile__("sti");
+    
+    // Main loop
+    while (1) {
+        // Halt the CPU until next interrupt
+        __asm__ __volatile__("hlt");
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Panic function - stop the kernel on unrecoverable error
+// -----------------------------------------------------------------------------
+void NORETURN kernel_panic(const char* message) {
+    // Disable interrupts
+    __asm__ __volatile__("cli");
+    
+    // Print panic message
+    vga_set_color(VGA_COLOR_RED);
+    vga_set_bg_color(VGA_COLOR_BLACK);
+    vga_puts("\n\nKERNEL PANIC: ");
+    vga_puts(message);
+    vga_puts("\n\nSystem halted.");
+    
+    // Halt
+    while (1) {
+        __asm__ __volatile__("hlt");
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Assert function
+// -----------------------------------------------------------------------------
+void kernel_assert(const char* file, int line, const char* condition) {
+    // In a real implementation, this would print the assertion failure
+    // and call kernel_panic
+    char buf[64];
+    vga_set_color(VGA_COLOR_YELLOW);
+    vga_puts("\nASSERTION FAILED: ");
+    vga_puts(condition);
+    vga_puts(" at ");
+    vga_puts(file);
+    vga_puts(":");
+    
+    // Simple itoa for line number
+    int l = line;
+    int i = 0;
+    if (l >= 100) {
+        buf[i++] = '0' + l / 100;
+        l %= 100;
+    }
+    if (l >= 10) {
+        buf[i++] = '0' + l / 10;
+        l %= 10;
+    }
+    buf[i++] = '0' + l;
+    buf[i] = 0;
+    vga_puts(buf);
+    vga_puts("\n");
+    
+    kernel_panic("Assertion failed");
+}

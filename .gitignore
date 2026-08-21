@@ -1,0 +1,39 @@
+# NebulaOS Git Ignore
+# ==================
+
+# Build output
+build/
+*.elf
+*.bin
+*.img
+*.iso
+
+# Object files
+*.o
+*.obj
+
+# Compiler generated files
+*.d
+*.dep
+*.map
+
+# IDE/Editor files
+.idea/
+.vs/
+*.swp
+*.swo
+*~
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
+
+# QEMU files
+*.qcow2
