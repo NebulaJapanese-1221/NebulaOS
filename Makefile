@@ -109,7 +109,13 @@ DRIVER_SOURCES := \
     drivers/src/keyboard/keyboard.c \
     drivers/src/mouse/mouse.c \
     drivers/src/pit.c \
-    drivers/src/pic.c
+    drivers/src/pic.c \
+    drivers/src/pci/pci.c \
+    drivers/src/acpi/acpi.c \
+    drivers/src/serial/serial.c \
+    drivers/src/vesa/vesa.c \
+    drivers/src/vesa/vbe.c \
+    drivers/src/network/rtl8139.c
 
 # Library sources (shared)
 LIB_SOURCES := \
