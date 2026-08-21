@@ -7,6 +7,7 @@
 #include "../../kernel/common/include/nebula.h"
 #include "../../kernel/common/include/stdint.h"
 #include "../../kernel/common/include/vga.h"
+#include "../../lib/include/string.h"
 
 // -----------------------------------------------------------------------------
 // ACPI state
@@ -94,7 +95,7 @@ bool acpi_init(void) {
     // Check if we have XSDT (ACPI 2.0+)
     if (rsdp->revision >= 2 && ((rsdp_desc_t*)rsdp)->xsdt_address != 0) {
         rsdp_desc_t* rsdp_desc = (rsdp_desc_t*)rsdp;
-        acpi_state.xsdt = (xsdt_t*)(uint64_t)rsdp_desc->xsdt_address;
+        acpi_state.xsdt = (xsdt_t*)(uintptr_t)rsdp_desc->xsdt_address;
 
         if (acpi_verify_sdt((char*)acpi_state.xsdt, acpi_state.xsdt->length)) {
             vga_puts("ACPI: XSDT found\n");
@@ -106,7 +107,7 @@ bool acpi_init(void) {
 
     // Fall back to RSDT
     if (!acpi_state.xsdt) {
-        acpi_state.rsdt = (rsdt_t*)(uint64_t)rsdp->rsdt_address;
+        acpi_state.rsdt = (rsdt_t*)(uintptr_t)rsdp->rsdt_address;
 
         if (acpi_verify_sdt((char*)acpi_state.rsdt, acpi_state.rsdt->length)) {
             vga_puts("ACPI: RSDT found\n");
@@ -161,9 +162,9 @@ void acpi_enumerate_tables(void) {
     if (acpi_state.xsdt) {
         entry_count = (acpi_state.xsdt->length - sizeof(xsdt_t)) / 8;
         for (uint32_t i = 0; i < entry_count && i < 32; i++) {
-            uint64_t ptr = acpi_state.xsdt->entries[i];
-            char* sig = (char*)(uint64_t)(ptr);
-            uint32_t len = *(uint32_t*)(uint64_t)(ptr + 4);
+        uintptr_t ptr = (uintptr_t)acpi_state.xsdt->entries[i];
+        char* sig = (char*)ptr;
+        uint32_t len = *(uint32_t*)(ptr + 4);
 
             if (acpi_verify_sdt(sig, len)) {
                 memcpy(acpi_state.tables[i].signature, sig, 4);
