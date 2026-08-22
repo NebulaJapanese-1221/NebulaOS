@@ -22,8 +22,8 @@ sudo apt-get install -y \
     g++-multilib \
     nasm \
     xorriso \
-    qemu-system-x86 \
-    qemu-system-x86_64 \
+    qemu-system-i386 \
+    qemu-system-x86-64 \
     build-essential \
     git
 ```
@@ -38,8 +38,8 @@ sudo dnf install -y \
     glibc-devel.i686 \
     nasm \
     xorriso \
-    qemu-system-x86 \
-    qemu-system-x86_64 \
+    qemu-system-i386 \
+    qemu-system-x86-64 \
     make \
     git
 ```

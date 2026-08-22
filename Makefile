@@ -50,7 +50,11 @@ LD := $(CROSS_PREFIX)ld
 OBJCOPY := $(CROSS_PREFIX)objcopy
 OBJDUMP := $(CROSS_PREFIX)objdump
 GENISOIMAGE := xorriso -as mkisofs
-QEMU := qemu-system-$(ARCH)
+ifeq ($(ARCH),x86)
+    QEMU := qemu-system-i386
+else
+    QEMU := qemu-system-x86_64
+endif
 
 # libgcc provides 64-bit division helpers (__udivdi3, __umoddi3, etc.)
 LIBGCC := $(shell $(CC) -print-libgcc-file-name)

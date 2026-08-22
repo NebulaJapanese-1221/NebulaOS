@@ -53,5 +53,9 @@ void process_destroy(uint32_t pid);
 process_t* process_get_current(void);
 void process_set_current(uint32_t pid);
 void process_context_switch(cpu_context_t* regs);
+uint32_t process_get_count(void);
+process_state_t process_get_state(uint32_t index);
+uint32_t process_get_pid(uint32_t index);
+void* process_get_entry_point(uint32_t index);
 
 #endif

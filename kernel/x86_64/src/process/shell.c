@@ -10,6 +10,11 @@
 #include "../../lib/include/string.h"
 #include "../../drivers/include/keyboard.h"
 #include "../../common/include/memory.h"
+#include "../../common/include/process.h"
+#include "../../common/include/scheduler.h"
+#include "../../common/include/syscall.h"
+#include "../../common/include/fs.h"
+#include "../../common/include/elf.h"
 
 // I/O functions
 static inline uint8_t inb(uint16_t port) {
@@ -211,6 +216,251 @@ static void cmd_version(int argc, char** argv) {
 }
 
 // -----------------------------------------------------------------------------
+// Helper functions
+// -----------------------------------------------------------------------------
+
+static void itoa(int value, char* str) {
+    int i = 0;
+    int is_negative = 0;
+    
+    if (value == 0) {
+        str[i++] = '0';
+        str[i] = 0;
+        return;
+    }
+    
+    if (value < 0) {
+        is_negative = 1;
+        value = -value;
+    }
+    
+    while (value > 0) {
+        str[i++] = '0' + (value % 10);
+        value /= 10;
+    }
+    
+    if (is_negative) {
+        str[i++] = '-';
+    }
+    
+    str[i] = 0;
+    
+    for (int j = 0; j < i / 2; j++) {
+        char tmp = str[j];
+        str[j] = str[i - 1 - j];
+        str[i - 1 - j] = tmp;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// ls command
+// -----------------------------------------------------------------------------
+
+static void cmd_ls(int argc, char** argv) {
+    (void)argc; (void)argv;
+    
+    fs_dir_t dir;
+    if (fs_list("/", &dir) != FS_SUCCESS) {
+        vga_puts("Failed to list directory\n");
+        return;
+    }
+    
+    for (uint32_t i = 0; i < dir.count; i++) {
+        vga_puts(dir.entries[i].name);
+        if (dir.entries[i].type == FS_TYPE_DIR) {
+            vga_puts("/");
+        }
+        vga_puts("  ");
+        
+        char size_str[16];
+        itoa(dir.entries[i].size, size_str);
+        vga_puts(size_str);
+        vga_puts(" bytes\n");
+    }
+    
+    free(dir.entries);
+}
+
+// -----------------------------------------------------------------------------
+// cat command
+// -----------------------------------------------------------------------------
+
+static void cmd_cat(int argc, char** argv) {
+    if (argc < 2) {
+        vga_puts("Usage: cat <filename>\n");
+        return;
+    }
+    
+    fs_file_t file;
+    if (fs_open(argv[1], &file, FS_FLAG_READ) != FS_SUCCESS) {
+        vga_puts("Failed to open file: ");
+        vga_puts(argv[1]);
+        vga_puts("\n");
+        return;
+    }
+    
+    char buf[256];
+    uint32_t total = 0;
+    while (total < file.size) {
+        int bytes = fs_read(&file, buf, sizeof(buf) - 1);
+        if (bytes <= 0) break;
+        buf[bytes] = 0;
+        vga_puts(buf);
+        total += bytes;
+    }
+    
+    fs_close(&file);
+}
+
+// -----------------------------------------------------------------------------
+// ps command
+// -----------------------------------------------------------------------------
+
+static void cmd_ps(int argc, char** argv) {
+    (void)argc; (void)argv;
+    
+    vga_puts("PID  STATE     ENTRY\n");
+    
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        process_state_t state = process_get_state(i);
+        if (state == PROC_ZOMBIE) continue;
+        
+        uint32_t pid = process_get_pid(i);
+        char pid_str[16];
+        itoa(pid, pid_str);
+        vga_puts(pid_str);
+        vga_puts("  ");
+        
+        switch (state) {
+            case PROC_READY: vga_puts("READY   "); break;
+            case PROC_RUNNING: vga_puts("RUNNING "); break;
+            case PROC_BLOCKED: vga_puts("BLOCKED "); break;
+            case PROC_ZOMBIE: vga_puts("ZOMBIE  "); break;
+            default: vga_puts("UNKNOWN "); break;
+        }
+        
+        void* entry = process_get_entry_point(i);
+        char entry_str[16];
+        itoa((int)entry, entry_str);
+        vga_puts(entry_str);
+        vga_puts("\n");
+    }
+}
+
+// -----------------------------------------------------------------------------
+// exec command
+// -----------------------------------------------------------------------------
+
+static void cmd_exec(int argc, char** argv) {
+    if (argc < 2) {
+        vga_puts("Usage: exec <filename>\n");
+        return;
+    }
+    
+    fs_file_t file;
+    if (fs_open(argv[1], &file, FS_FLAG_READ) != FS_SUCCESS) {
+        vga_puts("Failed to open file: ");
+        vga_puts(argv[1]);
+        vga_puts("\n");
+        return;
+    }
+    
+    if (file.size == 0 || file.size > 65536) {
+        vga_puts("Invalid file size\n");
+        fs_close(&file);
+        return;
+    }
+    
+    char* buf = malloc(file.size);
+    if (!buf) {
+        vga_puts("Failed to allocate memory\n");
+        fs_close(&file);
+        return;
+    }
+    
+    int bytes = fs_read(&file, buf, file.size);
+    fs_close(&file);
+    
+    if (bytes <= 0) {
+        vga_puts("Failed to read file\n");
+        free(buf);
+        return;
+    }
+    
+    void* entry_point = NULL;
+    if (elf_load(buf, &entry_point) != 0) {
+        vga_puts("Failed to load ELF: ");
+        vga_puts(argv[1]);
+        vga_puts("\n");
+        free(buf);
+        return;
+    }
+    
+    int pid = process_create(entry_point, 8192);
+    if (pid < 0) {
+        vga_puts("Failed to create process\n");
+        free(buf);
+        return;
+    }
+    
+    char pid_str[16];
+    itoa(pid, pid_str);
+    vga_puts("Created process PID: ");
+    vga_puts(pid_str);
+    vga_puts("\n");
+    
+    free(buf);
+}
+
+// -----------------------------------------------------------------------------
+// kill command
+// -----------------------------------------------------------------------------
+
+static void cmd_kill(int argc, char** argv) {
+    if (argc < 2) {
+        vga_puts("Usage: kill <pid>\n");
+        return;
+    }
+    
+    int pid = 0;
+    for (int i = 0; argv[1][i]; i++) {
+        if (argv[1][i] >= '0' && argv[1][i] <= '9') {
+            pid = pid * 10 + (argv[1][i] - '0');
+        }
+    }
+    
+    if (pid <= 0) {
+        vga_puts("Invalid PID\n");
+        return;
+    }
+    
+    process_destroy(pid);
+    scheduler_remove(pid);
+    
+    vga_puts("Killed process ");
+    vga_puts(argv[1]);
+    vga_puts("\n");
+}
+
+// -----------------------------------------------------------------------------
+// touch command (stub)
+// -----------------------------------------------------------------------------
+
+static void cmd_touch(int argc, char** argv) {
+    (void)argc; (void)argv;
+    vga_puts("touch: not implemented\n");
+}
+
+// -----------------------------------------------------------------------------
+// mkdir command (stub)
+// -----------------------------------------------------------------------------
+
+static void cmd_mkdir(int argc, char** argv) {
+    (void)argc; (void)argv;
+    vga_puts("mkdir: not implemented\n");
+}
+
+// -----------------------------------------------------------------------------
 // Command table
 // -----------------------------------------------------------------------------
 
@@ -222,6 +472,15 @@ static shell_command_t commands[] = {
     {"echo", "Echo arguments", cmd_echo},
     {"color", "Change text color", cmd_color},
     {"version", "Show kernel version", cmd_version},
+    {"ls", "List directory contents", cmd_ls},
+    {"dir", "List directory contents", cmd_ls},
+    {"cat", "Display file contents", cmd_cat},
+    {"ps", "List processes", cmd_ps},
+    {"exec", "Execute ELF binary", cmd_exec},
+    {"run", "Execute ELF binary", cmd_exec},
+    {"kill", "Terminate process", cmd_kill},
+    {"touch", "Create empty file (stub)", cmd_touch},
+    {"mkdir", "Create directory (stub)", cmd_mkdir},
     {NULL, NULL, NULL}
 };
 
@@ -349,7 +608,9 @@ void shell_init(void) {
     command_history_pos = 0;
 
     keyboard_set_handler(shell_keyboard_callback);
-
+    
+    fs_mount();
+    
     vga_puts("NebulaOS Shell\n");
     vga_puts("Type 'help' for available commands\n");
     vga_puts(SHELL_PROMPT);
