@@ -8,6 +8,7 @@
 #include "../../common/include/stdint.h"
 #include "../../lib/include/string.h"
 #include "../../kernel/common/include/idt.h"
+#include "../../kernel/common/include/memory.h"
 
 static process_t process_table[MAX_PROCESSES];
 static uint32_t next_pid = 1;
@@ -41,7 +42,7 @@ int process_create(void* entry, uint32_t stack_size) {
             proc->stack_size = ALIGN_UP(stack_size, 16);
             proc->stack_base = (uint64_t)malloc(proc->stack_size) + proc->stack_size;
             
-            memset(&proc->context, 0, sizeof(registers_t));
+            memset(&proc->context, 0, sizeof(cpu_context_t));
             proc->context.rip = (uint64_t)entry;
             proc->context.rsp = proc->stack_base;
             proc->context.cs = 0x08;
@@ -99,11 +100,11 @@ void process_set_current(uint32_t pid) {
     }
 }
 
-void process_context_switch(registers_t* regs) {
+void process_context_switch(cpu_context_t* regs) {
     if (!current_process) return;
     
     current_process->state = PROC_READY;
-    memcpy(&current_process->context, regs, sizeof(registers_t));
+    memcpy(&current_process->context, regs, sizeof(cpu_context_t));
 }
 
 process_t* process_next(void) {

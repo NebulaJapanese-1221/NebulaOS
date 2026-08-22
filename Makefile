@@ -52,6 +52,9 @@ OBJDUMP := $(CROSS_PREFIX)objdump
 GENISOIMAGE := xorriso -as mkisofs
 QEMU := qemu-system-$(ARCH)
 
+# libgcc provides 64-bit division helpers (__udivdi3, __umoddi3, etc.)
+LIBGCC := $(shell $(CC) -print-libgcc-file-name)
+
 # Compiler flags
 CFLAGS := -ffreestanding -nostdlib -nodefaultlibs -fno-builtin -fno-stack-protector -Wall -Wextra
 CXXFLAGS := -ffreestanding -nostdlib -nodefaultlibs -fno-builtin -fno-stack-protector -Wall -Wextra -fno-exceptions -fno-rtti
@@ -146,8 +149,6 @@ LIB_SOURCES := \
 
 CXX_LIB_SOURCES := \
     lib/src/cxx/runtime.cpp \
-    lib/src/cxx/new.cpp \
-    lib/src/cxx/delete.cpp \
     lib/src/cxx/exception.cpp \
     lib/src/cxx/typeinfo.cpp
 
@@ -233,7 +234,7 @@ $(OBJ_DIR)/$(ARCH)/%.o: %.cpp | $(OBJ_DIR)/$(ARCH)
 # -----------------------------------------------------------------------------
 
 $(KERNEL_ELF): $(ALL_OBJECTS) $(LINK_SCRIPT) | $(OBJ_DIR)/$(ARCH)
-	$(LD) $(LDFLAGS) -T $(LINK_SCRIPT) -o $@ $(ALL_OBJECTS)
+	$(LD) $(LDFLAGS) -T $(LINK_SCRIPT) -o $@ $(ALL_OBJECTS) $(LIBGCC)
 
 $(KERNEL_BIN): $(KERNEL_ELF) | $(OBJ_DIR)/$(ARCH)
 	$(OBJCOPY) -O binary $< $@

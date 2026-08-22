@@ -10,6 +10,7 @@
 #include "../../drivers/include/serial.h"
 #include "../../drivers/include/pic.h"
 #include "../../kernel/common/include/process.h"
+#include "../../common/include/scheduler.h"
 #include "../../lib/include/string.h"
 
 static bool syscall_initialized = false;

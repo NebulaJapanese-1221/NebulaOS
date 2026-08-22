@@ -5,6 +5,7 @@
 ; Arguments: eax=num, ebx=arg1, ecx=arg2, edx=arg3
 
 bits 32
+extern syscall_dispatch
 global syscall_entry
 syscall_entry:
     pusha

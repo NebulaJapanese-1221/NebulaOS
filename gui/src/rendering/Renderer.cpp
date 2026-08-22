@@ -1,6 +1,8 @@
 #include "../include/Color.h"
 #include "Renderer.h"
 
+static int iabs(int v) { return v < 0 ? -v : v; }
+
 Renderer::Renderer() : m_fb(nullptr), m_width(0), m_height(0), m_pitch(0), m_valid(false) {}
 
 Renderer::~Renderer() {}
@@ -22,7 +24,7 @@ void Renderer::drawPixel(int x, int y, uint32_t color) {
 void Renderer::drawLine(int x0, int y0, int x1, int y1, uint32_t color) {
     int dx = x1 - x0;
     int dy = y1 - y0;
-    int steps = (abs(dx) > abs(dy)) ? abs(dx) : abs(dy);
+    int steps = (iabs(dx) > iabs(dy)) ? iabs(dx) : iabs(dy);
     float xInc = (float)dx / (float)steps;
     float yInc = (float)dy / (float)steps;
     float x = (float)x0;

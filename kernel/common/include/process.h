@@ -13,7 +13,7 @@ typedef enum {
     PROC_ZOMBIE = 3
 } process_state_t;
 
-typedef struct registers {
+typedef struct cpu_context {
     uint64_t r15;
     uint64_t r14;
     uint64_t r13;
@@ -34,12 +34,12 @@ typedef struct registers {
     uint64_t rflags;
     uint64_t rsp;
     uint64_t ss;
-} registers_t;
+} cpu_context_t;
 
 typedef struct process {
     uint32_t pid;
     process_state_t state;
-    registers_t context;
+    cpu_context_t context;
     uint64_t stack_base;
     uint32_t stack_size;
     void* entry_point;
@@ -52,6 +52,6 @@ int process_create(void* entry, uint32_t stack_size);
 void process_destroy(uint32_t pid);
 process_t* process_get_current(void);
 void process_set_current(uint32_t pid);
-void process_context_switch(registers_t* regs);
+void process_context_switch(cpu_context_t* regs);
 
 #endif

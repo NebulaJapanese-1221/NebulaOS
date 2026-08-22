@@ -1,7 +1,7 @@
 #ifndef NEBULAOS_STDLIB_H
 #define NEBULAOS_STDLIB_H
 
-#include "../common/include/stdint.h"
+#include "stdint.h"
 
 int atoi(const char* str);
 long atol(const char* str);

@@ -1,7 +1,7 @@
 #include "FileManager.h"
 #include "../../../kernel/common/include/fs.h"
 
-FileManager::FileManager(int x, int y, int w, int h) : Window(x, y, w, h), m_files(nullptr), m_file_count(0), m_selected(-1) {
+FileManager::FileManager(int x, int y, int w, int h) : Widget(x, y, w, h), m_files(nullptr), m_file_count(0), m_selected(-1) {
     listFiles();
 }
 

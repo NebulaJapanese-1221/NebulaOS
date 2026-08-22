@@ -22,6 +22,7 @@
 #include "../../drivers/include/pci.h"
 #include "../../drivers/include/acpi.h"
 #include "../../drivers/include/storage.h"
+#include "../../drivers/include/vesa.h"
 
 // Kernel subsystem includes
 #include "../../kernel/common/include/process.h"
@@ -180,7 +181,7 @@ void kernel_init(void) {
     acpi_init();
     
     // Initialize serial
-    serial_init();
+    serial_init(SERIAL_COM1_PORT, 115200);
     vga_puts("  Serial: Ready\n");
     
     // Initialize storage

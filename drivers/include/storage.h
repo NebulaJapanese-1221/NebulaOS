@@ -1,7 +1,7 @@
 #ifndef NEBULAOS_STORAGE_H
 #define NEBULAOS_STORAGE_H
 
-#include "../common/include/stdint.h"
+#include "../../kernel/common/include/stdint.h"
 
 #define ATA_PRIMARY 0x1F0
 #define ATA_SECONDARY 0x170

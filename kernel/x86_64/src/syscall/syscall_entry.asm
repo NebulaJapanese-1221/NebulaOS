@@ -5,6 +5,7 @@
 ; User convention: rax=num, rbx=arg1, rcx=arg2, rdx=arg3, rsi=arg4, rdi=arg5
 
 bits 64
+extern syscall_dispatch
 global syscall_entry
 syscall_entry:
     push rbp

@@ -3,6 +3,7 @@
 //
 // Stubs for exception handling
 
+#include <cstddef>
 extern "C" void __cxa_throw(void*, void*, void (*)(void*)) {
     for (;;);
 }

@@ -538,11 +538,7 @@ void page_fault_handler(registers_t* regs) {
     
     // Check error code
     uint32_t error = regs->err_code;
-    bool present = !(error & PF_PRESENT);
-    bool write = error & PF_WRITE;
-    bool user = error & PF_USER;
-    bool reserved = error & PF_RESERVED;
-    bool instruction = error & PF_INSTRUCTION;
+    (void)error;
     
     // For now, just panic
     // In a real implementation, we'd handle page faults by:
@@ -573,7 +569,7 @@ static uint8_t* buddy_pool = BUDDY_POOL_START;
 static size_t buddy_pages = BUDDY_TOTAL_PAGES;
 static bool buddy_initialized = false;
 
-static void buddy_init(void) {
+static void memory_init_buddy(void) {
     for (int i = 0; i < BUDDY_MAX_ORDER; i++) {
         buddy_free_lists[i] = NULL;
     }
@@ -768,23 +764,19 @@ static void slab_free(void* ptr) {
     if (!ptr || !slab_initialized) return;
     
     uint8_t* obj = (uint8_t*)ptr;
-    uint32_t obj_size = 0;
     slab_header_t* slab = NULL;
     kmem_cache_t* cache = NULL;
-    
+
     for (int i = 0; i < SLAB_NUM_CACHES; i++) {
-        uint8_t* slab_start = (uint8_t*)buddy_pool;
         for (slab = slab_caches[i].partial_list; slab; slab = slab->next) {
             if (obj >= (uint8_t*)slab && obj < (uint8_t*)slab + PAGE_SIZE) {
                 cache = &slab_caches[i];
-                obj_size = cache->object_size;
                 goto found;
             }
         }
         for (slab = slab_caches[i].full_list; slab; slab = slab->next) {
             if (obj >= (uint8_t*)slab && obj < (uint8_t*)slab + PAGE_SIZE) {
                 cache = &slab_caches[i];
-                obj_size = cache->object_size;
                 goto found;
             }
         }

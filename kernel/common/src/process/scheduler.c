@@ -70,5 +70,6 @@ void scheduler_tick(void) {
     
     current_scheduled_pid = scheduler_queue[queue_head];
     process_set_current(current_scheduled_pid);
-    current_process->state = PROC_RUNNING;
+    process_t* cur = process_get_current();
+    if (cur) cur->state = PROC_RUNNING;
 }

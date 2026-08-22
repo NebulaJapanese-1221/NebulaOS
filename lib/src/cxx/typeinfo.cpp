@@ -3,6 +3,7 @@
 //
 // Minimal RTTI support
 
+#include <cstddef>
 namespace std {
     class type_info {
     public:

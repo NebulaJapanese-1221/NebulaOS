@@ -1,7 +1,8 @@
 #ifndef NEBULAOS_STDIO_H
 #define NEBULAOS_STDIO_H
 
-#include "../common/include/stdint.h"
+#include "stdint.h"
+#include <stdarg.h>
 
 typedef int FILE;
 
@@ -14,7 +15,7 @@ typedef int FILE;
 int printf(const char* format, ...);
 int snprintf(char* buffer, size_t size, const char* format, ...);
 int sprintf(char* buffer, const char* format, ...);
-int vsnprintf(char* buffer, size_t size, const char* format, void* args);
+int vsnprintf(char* buffer, size_t size, const char* format, va_list args);
 
 int putchar(int c);
 int puts(const char* str);

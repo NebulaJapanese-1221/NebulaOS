@@ -7,8 +7,6 @@
 #include "../../lib/include/string.h"
 #include "../../kernel/common/include/nebula.h"
 
-static unsigned int seed = 1;
-
 int atoi(const char* str) {
     return (int)strtol(str, NULL, 10);
 }
@@ -79,23 +77,6 @@ unsigned long strtoul(const char* str, char** endptr, int base) {
     
     if (endptr) *endptr = (char*)p;
     return result;
-}
-
-int abs(int x) {
-    return x < 0 ? -x : x;
-}
-
-long labs(long x) {
-    return x < 0 ? -x : x;
-}
-
-void srand(unsigned int s) {
-    seed = s;
-}
-
-int rand(void) {
-    seed = seed * 1103515245 + 12345;
-    return (int)(seed / 65536) % 32768;
 }
 
 void qsort(void* base, size_t nmemb, size_t size, int (*compar)(const void*, const void*)) {

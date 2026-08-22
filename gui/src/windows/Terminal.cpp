@@ -1,6 +1,6 @@
 #include "Terminal.h"
 
-Terminal::Terminal(int x, int y, int w, int h) : Window(x, y, w, h), m_rows(0), m_cols(0), m_cursor_x(0), m_cursor_y(0), m_buffer_size(0) {
+Terminal::Terminal(int x, int y, int w, int h) : Widget(x, y, w, h), m_rows(0), m_cols(0), m_cursor_x(0), m_cursor_y(0), m_buffer_size(0) {
     m_cols = (w - 4) / 8;
     m_rows = (h - 24) / 8;
     m_buffer_size = m_cols * m_rows;

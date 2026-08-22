@@ -49,57 +49,9 @@ static void put_dec(uint64_t value) {
     put_string(&buf[i]);
 }
 
-int vsnprintf(char* buffer, size_t size, const char* format, void* args) {
-    (void)args;
-    size_t written = 0;
-    
-    while (*format && written < size - 1) {
-        if (*format == '%') {
-            format++;
-            if (!*format) break;
-            
-            switch (*format) {
-                case 'd':
-                case 'u':
-                    put_dec(0);
-                    break;
-                case 'x':
-                case 'X':
-                    put_hex(0, 8);
-                    break;
-                case 's':
-                    put_string("");
-                    break;
-                case 'c':
-                    put_char(' ');
-                    break;
-                case '%':
-                    put_char('%');
-                    written++;
-                    break;
-                default:
-                    put_char(*format);
-                    written++;
-                    break;
-            }
-        } else {
-            put_char(*format);
-            written++;
-        }
-        format++;
-    }
-    
-    buffer[written] = 0;
-    return (int)written;
-}
-
 int printf(const char* format, ...) {
     char buf[1024];
     return vsnprintf(buf, sizeof(buf), format, NULL);
-}
-
-int snprintf(char* buffer, size_t size, const char* format, ...) {
-    return vsnprintf(buffer, size, format, NULL);
 }
 
 int sprintf(char* buffer, const char* format, ...) {

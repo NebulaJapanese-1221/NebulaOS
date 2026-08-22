@@ -1,5 +1,5 @@
 #include "FontRenderer.h"
-#include "../../fonts/Font8x8.h"
+#include "../fonts/Font8x8.h"
 
 FontRenderer::FontRenderer(Renderer* renderer) : m_renderer(renderer) {}
 

@@ -1,10 +1,19 @@
 #ifndef GUI_WIDGET_H
 #define GUI_WIDGET_H
 
-#include "../include/Control.h"
+#include "Control.h"
 #include <stdint.h>
 
-class Widget : public Control {
+// Free functions used by widget paint routines.
+void drawPixel(int x, int y, uint32_t color);
+void drawRect(int x, int y, int w, int h, uint32_t color);
+void fillRect(int x, int y, int w, int h, uint32_t color);
+void drawChar(int x, int y, char c, uint32_t color);
+
+// Set the global framebuffer the widgets draw into (rgbx 32-bit).
+void gui_set_framebuffer(void* fb, int width, int height, int pitch);
+
+class Widget : public NebulaOS::GUI::Control {
 public:
     Widget(int x, int y, int w, int h);
     virtual ~Widget();

@@ -1,9 +1,9 @@
 #ifndef GUI_FILEMANAGER_H
 #define GUI_FILEMANAGER_H
 
-#include "../include/Window.h"
+#include "../widgets/Widget.h"
 
-class FileManager : public Window {
+class FileManager : public Widget {
 public:
     FileManager(int x, int y, int w, int h);
     ~FileManager();

@@ -1,9 +1,9 @@
 #ifndef GUI_TERMINAL_H
 #define GUI_TERMINAL_H
 
-#include "../include/Window.h"
+#include "../widgets/Widget.h"
 
-class Terminal : public Window {
+class Terminal : public Widget {
 public:
     Terminal(int x, int y, int w, int h);
     ~Terminal();
