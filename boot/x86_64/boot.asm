@@ -13,33 +13,45 @@ bits 16
 ; Boot sector entry point
 ; -----------------------------------------------------------------------------
 start:
-    ; Disable interrupts
     cli
     
-    ; Save boot drive number (DL = boot drive)
     mov [boot_drive], dl
     
-    ; Set up segment registers
     xor ax, ax
     mov ds, ax
     mov es, ax
     mov ss, ax
-    mov sp, 0x7C00  ; Stack grows downward from 0x7C00
+    mov sp, 0x7C00
     
-    ; Enable interrupts (temporarily)
     sti
     
-    ; Print welcome message
     mov si, welcome_msg
     call print_string
     
-    ; For now, skip CPUID and long mode checks to fit in boot sector
-    ; These would be done in stage 2
+    call check_cpuid
+    cmp eax, 1
+    jne no_cpuid
     
-    ; Switch to 32-bit protected mode first (required for long mode setup)
-    ; This call won't work until we have a stage 2 loader
-    ; jmp to a simple halt for now
-    jmp $
+    call check_long_mode
+    cmp eax, 1
+    jne no_long_mode
+    
+    call switch_to_pm
+    
+no_cpuid:
+    mov si, no_cpuid_msg
+    call print_string
+    jmp halt
+
+no_long_mode:
+    mov si, no_long_mode_msg
+    call print_string
+    jmp halt
+
+halt:
+    cli
+    hlt
+    jmp halt
 
 ; -----------------------------------------------------------------------------
 ; Boot signature
@@ -52,7 +64,6 @@ times 510 - ($ - $$) db 0
 ; Stage 2 would start here (loaded at different address)
 ; -----------------------------------------------------------------------------
 
-; Include functions for stage 2
 %include "boot/x86_64/print.asm"
 %include "boot/x86_64/pm_switch.asm"
 %include "boot/x86_64/cpuid.asm"

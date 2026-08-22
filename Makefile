@@ -60,7 +60,7 @@ CFLAGS := -ffreestanding -nostdlib -nodefaultlibs -fno-builtin -fno-stack-protec
 CXXFLAGS := -ffreestanding -nostdlib -nodefaultlibs -fno-builtin -fno-stack-protector -Wall -Wextra -fno-exceptions -fno-rtti
 
 # Include paths
-INCLUDES := -Ikernel/common/include -Ikernel/$(ARCH)/include -Igui/include -Ilib/include -Idrivers/include
+INCLUDES := -Ikernel/common/include -Ikernel/$(ARCH)/include -Igui/include -Ilib/include -Idrivers/include -Ikernel/$(ARCH)/src/device
 
 # Source files
 # Bootloader
@@ -88,6 +88,13 @@ ifeq ($(ARCH),x86)
 KERNEL_SOURCES += kernel/$(ARCH)/src/process/shell.c
 endif
 
+# x86-only real-mode BIOS interface (VBE INT 0x10 trampoline)
+ifeq ($(ARCH),x86)
+KERNEL_SOURCES += \
+    kernel/x86/src/device/realmode.c \
+    kernel/x86/src/device/rm_trampoline.asm
+endif
+
 # x86_64-specific memory, stubs, and shell
 ifeq ($(ARCH),x86_64)
 KERNEL_SOURCES += \
@@ -112,6 +119,7 @@ GUI_SOURCES := \
     gui/src/Panel.cpp \
     gui/src/Font.cpp \
     gui/src/GUI.cpp \
+    gui/src/GuiBridge.cpp \
     gui/src/fonts/Font8x8.cpp \
     gui/src/rendering/Renderer.cpp \
     gui/src/rendering/FontRenderer.cpp \

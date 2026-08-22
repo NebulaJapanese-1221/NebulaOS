@@ -257,12 +257,17 @@ void BuiltinFont::DrawText(GraphicsContext& gc, const char* text, int32_t x, int
 // TrueTypeFont implementation (stub)
 // -----------------------------------------------------------------------------
 
-TrueTypeFont::TrueTypeFont() : Font("TrueType", 12, FontStyle::FONT_NORMAL) {
-    // TrueType font - not implemented in this basic version
+TrueTypeFont::TrueTypeFont() : BuiltinFont() {
+    name[0] = '\0';
 }
 
-TrueTypeFont::TrueTypeFont(const char* name, uint32_t size, FontStyle style) : Font(name, size, style) {
-    // TrueType font - not implemented in this basic version
+TrueTypeFont::TrueTypeFont(const char* name, uint32_t size, FontStyle style) : BuiltinFont(size, style) {
+    if (name) {
+        strncpy(this->name, name, sizeof(this->name) - 1);
+        this->name[sizeof(this->name) - 1] = '\0';
+    } else {
+        this->name[0] = '\0';
+    }
 }
 
 } // namespace GUI

@@ -65,6 +65,12 @@ public:
     size_t GetMaxLength() const { return maxLength; }
     void SetMaxLength(size_t max);
     
+    // Clipboard
+    static void SetClipboard(const char* text);
+    static const char* GetClipboard();
+    static bool HasClipboard();
+    static void ClearClipboard();
+    
     // Painting
     virtual void Paint(GraphicsContext& gc) ;
     virtual void PaintBackground(GraphicsContext& gc) ;

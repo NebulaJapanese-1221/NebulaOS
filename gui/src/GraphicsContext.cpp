@@ -6,6 +6,7 @@
 #include "../include/GraphicsContext.h"
 #include "../include/GuiTypes.h"
 #include "../include/Font.h"
+#include "fonts/Font8x8.h"
 #include "../../lib/include/string.h"
 #include "../../kernel/common/include/nebula.h"
 
@@ -300,9 +301,15 @@ void GraphicsContext::FillEllipse(const Rectangle& bounds, const Color& color) {
 // -----------------------------------------------------------------------------
 
 void GraphicsContext::DrawCharacter(char c, int32_t x, int32_t y, const Color& color, const Font* font) {
-    // For now, just draw a placeholder rectangle
-    // In a real implementation, this would render the character from a font
-    FillRect(x, y, 8, 16, color);
+    if (c < 32) c = '?';
+    const uint8_t* data = Font8x8::getCharData(c);
+    for (int row = 0; row < 8; row++) {
+        for (int col = 0; col < 8; col++) {
+            if (data[row] & (1 << (7 - col))) {
+                SetPixelInternal(x + col, y + row, color);
+            }
+        }
+    }
 }
 
 void GraphicsContext::DrawText(const char* text, int32_t x, int32_t y, const Color& color, const Font* font) {
@@ -312,12 +319,14 @@ void GraphicsContext::DrawText(const char* text, int32_t x, int32_t y, const Col
     int32_t currY = y;
     
     while (*text) {
-        DrawCharacter(*text++, currX, currY, color, font);
-        currX += 8; // Fixed width for now
         if (*text == '\n') {
             currX = x;
-            currY += 16;
+            currY += 8;
+        } else {
+            DrawCharacter(*text, currX, currY, color, font);
+            currX += 8;
         }
+        text++;
     }
 }
 

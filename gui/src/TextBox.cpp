@@ -13,6 +13,9 @@
 namespace NebulaOS {
 namespace GUI {
 
+static char textbox_clipboard[1024];
+static size_t textbox_clipboard_len = 0;
+
 // -----------------------------------------------------------------------------
 // Constructor
 // -----------------------------------------------------------------------------
@@ -318,6 +321,34 @@ void TextBox::SetMaxLength(size_t max) {
 }
 
 // -----------------------------------------------------------------------------
+// Clipboard
+// -----------------------------------------------------------------------------
+
+void TextBox::SetClipboard(const char* text) {
+    if (!text) return;
+    size_t len = strlen(text);
+    if (len >= sizeof(textbox_clipboard)) {
+        len = sizeof(textbox_clipboard) - 1;
+    }
+    memcpy(textbox_clipboard, text, len);
+    textbox_clipboard[len] = '\0';
+    textbox_clipboard_len = len;
+}
+
+const char* TextBox::GetClipboard() {
+    return textbox_clipboard;
+}
+
+bool TextBox::HasClipboard() {
+    return textbox_clipboard_len > 0;
+}
+
+void TextBox::ClearClipboard() {
+    textbox_clipboard[0] = '\0';
+    textbox_clipboard_len = 0;
+}
+
+// -----------------------------------------------------------------------------
 // Painting
 // -----------------------------------------------------------------------------
 
@@ -565,20 +596,25 @@ void TextBox::OnKeyDown(KeyCode key, ModifierKey modifiers) {
         
         case KeyCode::KEY_C:
             if (modifiers & MOD_CTRL && HasSelection()) {
-                // Copy to clipboard (not implemented)
+                size_t start, end;
+                GetSelection(start, end);
+                SetClipboard(text + start);
             }
             break;
         
         case KeyCode::KEY_X:
             if (modifiers & MOD_CTRL && HasSelection()) {
-                // Cut to clipboard (not implemented)
+                size_t start, end;
+                GetSelection(start, end);
+                SetClipboard(text + start);
                 DeleteSelection();
             }
             break;
         
         case KeyCode::KEY_V:
-            if (modifiers & MOD_CTRL) {
-                // Paste from clipboard (not implemented)
+            if (modifiers & MOD_CTRL && HasClipboard()) {
+                DeleteSelection();
+                InsertText(cursorPosition, GetClipboard());
             }
             break;
         

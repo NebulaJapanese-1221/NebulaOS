@@ -135,7 +135,7 @@ typedef struct PACKED {
     uint64_t address;
 } madt_local_apic_addr_t;
 
-// FADT (Fixed ACPI Description Table) - stub
+// FADT (Fixed ACPI Description Table)
 typedef struct PACKED {
     char     signature[4];
     uint32_t length;
@@ -146,18 +146,24 @@ typedef struct PACKED {
     uint32_t oem_revision;
     uint32_t creator_id;
     uint32_t creator_revision;
-    uint32_t sdt_address;
-    uint8_t  pm_timer_block;
-    uint8_t  pm_event_block;
-    uint8_t  pm_control_block;
-    uint8_t  pm_timer_width;
+
+    // ACPI 1.0 fields
+    uint32_t rsdt_address;
+
+    // ACPI 2.0+ fields
+    uint32_t length_hi;           // Must be zero for ACPI 1.0
+    uint64_t xsdt_address;
+    uint8_t  extended_checksum;
     uint8_t  reserved[3];
-    uint8_t  pm1a_control_block[4];
-    uint8_t  pm1b_control_block[4];
-    uint8_t  pm2_control_block[4];
-    uint8_t  pm_timer_block_ptr[4];
-    uint8_t  gpe0_block[4];
-    uint8_t  gpe1_block[4];
+
+    // Power management
+    uint32_t pm_timer_block;
+    uint32_t pm_event_block;
+    uint32_t pm_control_block;
+    uint32_t pm2_control_block;
+    uint32_t pm_timer_block_ptr;
+    uint32_t gpe0_block;
+    uint32_t gpe1_block;
     uint8_t  pm1_event_length;
     uint8_t  pm1_control_length;
     uint8_t  pm2_control_length;
@@ -170,15 +176,18 @@ typedef struct PACKED {
     uint16_t c3_latency;
     uint16_t cache_size;
     uint16_t cache_flush_stall;
-    uint8_t  reserved2[4];
-    uint8_t  power_button;
-    uint8_t  sleep_button;
-    uint8_t  reserved3[2];
-    uint8_t  debug_port;
-    uint8_t  reserved4;
-    uint16_t hv_vendor_id;
-    uint8_t  hv_major;
-    uint8_t  hv_minor;
+    uint8_t  duty_offset;
+    uint8_t  duty_width;
+    uint8_t  day_alarm;
+    uint8_t  month_alarm;
+    uint8_t  century;
+    uint16_t iapc_boot_arch;
+    uint8_t  reserved2;
+    uint32_t flags;
+    uint32_t reset_reg;
+    uint8_t  reset_value;
+    uint16_t arm_boot_arch;
+    uint8_t  fadt_version;
 } fadt_t;
 
 // ACPI table structure

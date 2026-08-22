@@ -103,8 +103,8 @@ public:
     void DrawText(GraphicsContext& gc, const char* text, int32_t x, int32_t y, const Color& color) const override;
 };
 
-// TrueType font (not implemented in this basic version)
-class TrueTypeFont : public Font {
+// TrueType font (uses builtin bitmap fallback until TrueType parser is implemented)
+class TrueTypeFont : public BuiltinFont {
 public:
     TrueTypeFont();
     TrueTypeFont(const char* name, uint32_t size, FontStyle style = FontStyle::FONT_NORMAL);

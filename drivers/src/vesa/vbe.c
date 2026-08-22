@@ -1,12 +1,35 @@
 // NebulaOS - VBE BIOS Interface
 // ==============================
 //
-// VBE 2.0+ BIOS interface via INT 0x10
+// VBE 2.0+ BIOS interface. On x86 the kernel runs in protected mode, so
+// real INT 0x10 calls are performed through the real-mode BIOS interface
+// (kernel/x86/src/device/realmode.*). When that interface is unavailable
+// (e.g. x86_64, or early boot) a static fallback is used.
 
 #include "../include/vesa.h"
 #include "../include/vbe.h"
 #include "../../kernel/common/include/nebula.h"
 #include "../../kernel/common/include/stdint.h"
+
+#ifdef NEBULAOS_ARCH_X86
+#include "../../kernel/x86/src/device/realmode.h"
+#endif
+
+// -----------------------------------------------------------------------------
+// Supported mode list (static fallback only)
+// -----------------------------------------------------------------------------
+
+static const uint16_t vbe_supported_modes[] = {
+    0x0118,
+    0x011A,
+    0x014C,
+    0xFFFF
+};
+
+// When false, vbe_set_mode only records the requested mode and does not
+// actually switch the display. The GUI enables this once it is ready to
+// take over the framebuffer (see VESA framebuffer rendering task).
+static bool rm_mode_switch_enabled = false;
 
 // -----------------------------------------------------------------------------
 // Manual memory helpers
@@ -27,8 +50,18 @@ static void memset8(void* dst, uint8_t value, uint32_t count) {
     }
 }
 
+// Convert a VBE 32-bit segmented pointer (offset:segment) to a flat
+// identity-mapped address usable by the kernel.
+#ifdef NEBULAOS_ARCH_X86
+static uint32_t rm_flat_ptr(uint32_t seg_off) {
+    uint16_t off = (uint16_t)(seg_off & 0xFFFF);
+    uint16_t seg = (uint16_t)(seg_off >> 16);
+    return ((uint32_t)seg << 4) + off;
+}
+#endif
+
 // -----------------------------------------------------------------------------
-// Get VBE controller information
+// Get VBE controller information (real INT 0x10, AX=0x4F00)
 // -----------------------------------------------------------------------------
 
 bool vbe_get_info(vbe_info_block_t* info) {
@@ -36,25 +69,40 @@ bool vbe_get_info(vbe_info_block_t* info) {
         return false;
     }
 
-    // Set up VBE signature
+#ifdef NEBULAOS_ARCH_X86
+    if (realmode_available()) {
+        void* buf = realmode_vbe_info_buffer();
+        rm_regs_t regs;
+        memset8(&regs, 0, sizeof(regs));
+        regs.eax = 0x4F00;
+        regs.es = (uint16_t)(((uint32_t)buf) >> 4);
+        regs.edi = (uint32_t)buf & 0xF;
+
+        if (realmode_call(0x10, &regs) && (regs.eax & 0xFF) == 0x4F) {
+            memcpy8(info, buf, sizeof(*info));
+            info->video_modes = rm_flat_ptr(info->video_modes);
+            return true;
+        }
+    }
+#endif
+
+    // Static fallback
     memcpy8(info->signature, "VESA", 4);
     info->version = 0x0300;
     info->oem_string = 0;
     info->capabilities = VBE_CAPABILITY_LFB;
-    info->video_modes = 0xFFFF;
+    info->video_modes = (uint32_t)vbe_supported_modes;
     info->total_memory = 0;
     info->oem_software_rev = 0;
     info->oem_vendor_name = 0;
     info->oem_product_name = 0;
     info->oem_product_rev = 0;
 
-    // In a real implementation, this would call INT 0x10, AX=0x4F00
-    // For now, return a stub that indicates VBE 3.0 is available
     return true;
 }
 
 // -----------------------------------------------------------------------------
-// Get VBE mode information
+// Get VBE mode information (real INT 0x10, AX=0x4F01)
 // -----------------------------------------------------------------------------
 
 bool vbe_get_mode_info(uint16_t mode, vbe_mode_info_t* info) {
@@ -62,11 +110,27 @@ bool vbe_get_mode_info(uint16_t mode, vbe_mode_info_t* info) {
         return false;
     }
 
+#ifdef NEBULAOS_ARCH_X86
+    if (realmode_available()) {
+        void* buf = realmode_vbe_mode_buffer();
+        rm_regs_t regs;
+        memset8(&regs, 0, sizeof(regs));
+        regs.eax = 0x4F01;
+        regs.ecx = mode;
+        regs.es = (uint16_t)(((uint32_t)buf) >> 4);
+        regs.edi = (uint32_t)buf & 0xF;
+
+        if (realmode_call(0x10, &regs) && (regs.eax & 0xFF) == 0x4F) {
+            memcpy8(info, buf, sizeof(*info));
+            return true;
+        }
+    }
+#endif
+
+    // Static fallback
     memset8(info, 0, sizeof(*info));
 
-    // In a real implementation, this would call INT 0x10, AX=0x4F01
-    // For now, return stub 1024x768x32 mode info
-    if (mode == 0x118 || mode == 0x11A || mode == 0x14C) {
+    if (mode == 0x0118 || mode == 0x011A || mode == 0x014C) {
         info->mode_attributes = VBE_MODE_ATTR_SUPPORTED | VBE_MODE_ATTR_LINEAR | VBE_MODE_ATTR_EXT_INFO;
         info->x_resolution = 1024;
         info->y_resolution = 768;
@@ -96,15 +160,43 @@ bool vbe_get_mode_info(uint16_t mode, vbe_mode_info_t* info) {
 }
 
 // -----------------------------------------------------------------------------
-// Set VBE video mode
+// Set VBE video mode (real INT 0x10, AX=0x4F02)
 // -----------------------------------------------------------------------------
 
-bool vbe_set_mode(uint16_t mode) {
-    (void)mode;
+static uint16_t vbe_current_mode = 0x0118;
 
-    // In a real implementation, this would call INT 0x10, AX=0x4F02
-    // For now, return success as a stub
+bool vbe_set_mode(uint16_t mode) {
+    vbe_mode_info_t minfo;
+    if (!vbe_get_mode_info(mode, &minfo)) {
+        return false;
+    }
+
+#ifdef NEBULAOS_ARCH_X86
+    if (realmode_available() && rm_mode_switch_enabled) {
+        rm_regs_t regs;
+        memset8(&regs, 0, sizeof(regs));
+        regs.eax = 0x4F02;
+        regs.ebx = mode | 0x4000;   // linear framebuffer
+        regs.es = 0;
+        regs.edi = 0;               // use default CRTC
+        if (!(realmode_call(0x10, &regs) && (regs.eax & 0xFF) == 0x4F)) {
+            return false;
+        }
+    }
+#endif
+
+    vbe_current_mode = mode;
     return true;
+}
+
+// Enable the real display mode switch (used by the GUI).
+void vbe_set_real_mode_switch(bool enable) {
+    rm_mode_switch_enabled = enable;
+}
+
+// True once the real display mode switch has been enabled.
+bool vbe_real_mode_switch_active(void) {
+    return rm_mode_switch_enabled;
 }
 
 // -----------------------------------------------------------------------------
@@ -112,8 +204,7 @@ bool vbe_set_mode(uint16_t mode) {
 // -----------------------------------------------------------------------------
 
 uint16_t vbe_get_mode(void) {
-    // In a real implementation, this would call INT 0x10, AX=0x4F03
-    return 0x0118;  // Stub: return 1024x768x32
+    return vbe_current_mode;
 }
 
 // -----------------------------------------------------------------------------

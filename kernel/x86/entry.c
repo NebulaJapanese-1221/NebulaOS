@@ -23,12 +23,20 @@
 #include "../../drivers/include/acpi.h"
 #include "../../drivers/include/storage.h"
 #include "../../drivers/include/vesa.h"
+#include "../../drivers/include/vbe.h"
+
+// Real-mode BIOS interface (x86 only)
+#include "realmode.h"
 
 // Kernel subsystem includes
 #include "../../kernel/common/include/process.h"
 #include "../../kernel/common/include/scheduler.h"
 #include "../../kernel/common/include/syscall.h"
 #include "../../kernel/common/include/fs.h"
+
+// GUI <-> kernel bridge
+extern int nebula_gui_enter_graphics(void);
+extern void nebula_gui_run(void);
 
 // Forward declarations
 void kernel_early_init(void);
@@ -105,6 +113,22 @@ void kernel_init(void) {
     // Initialize memory management
     memory_init();
     vga_puts("  Memory: ");
+
+    // Initialize the real-mode BIOS interface (VBE INT 0x10 trampoline).
+    // Must run after paging is enabled (low memory is identity-mapped).
+    if (realmode_init()) {
+        vga_puts("  Real-mode BIOS interface: Ready\n");
+        vbe_info_block_t vinfo;
+        if (vbe_get_info(&vinfo)) {
+            vga_puts("  VBE: version ");
+            vga_putchar('0' + ((vinfo.version >> 8) & 0xF));
+            vga_putchar('.');
+            vga_putchar('0' + (vinfo.version & 0xF));
+            vga_puts("\n");
+        }
+    } else {
+        vga_puts("  Real-mode BIOS interface: Unavailable (static VBE data)\n");
+    }
     
     size_t total = memory_get_total();
     size_t free = memory_get_free();
@@ -195,7 +219,13 @@ void kernel_init(void) {
     
     // Initialize GUI
     vga_puts("Initializing GUI...\n");
-    vga_puts("  GUI: Text mode ready\n");
+    vga_puts("  Switching to real VBE graphics mode...\n");
+    if (nebula_gui_enter_graphics()) {
+        // Graphics mode is now active and the desktop is drawn to the real
+        // linear framebuffer. Run the GUI message loop (does not return).
+        nebula_gui_run();
+    }
+    vga_puts("  GUI: text mode (graphics unavailable)\n");
     
     // Create a test process
     process_create((void*)0x100000, 4096);

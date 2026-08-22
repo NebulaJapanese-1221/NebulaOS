@@ -522,15 +522,15 @@ void WindowManager::ProcessTimers() {
 // -----------------------------------------------------------------------------
 
 void WindowManager::RunMessageLoop() {
-    // In a real implementation, this would process messages from a queue
-    // For now, this is a placeholder
+    for (;;) {
+        ProcessTimers();
+        ProcessMessage();
+        asm volatile ("hlt");
+    }
 }
 
 bool WindowManager::ProcessMessage() {
-    // Process timers and update
     ProcessTimers();
-    
-    // In a real implementation, this would process a message from the queue
     return false;
 }
 

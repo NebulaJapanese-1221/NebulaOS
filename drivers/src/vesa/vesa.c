@@ -8,6 +8,7 @@
 #include "../../kernel/common/include/nebula.h"
 #include "../../kernel/common/include/stdint.h"
 #include "../../kernel/common/include/vga.h"
+#include "../../kernel/common/include/memory.h"
 
 // -----------------------------------------------------------------------------
 // VESA state
@@ -125,6 +126,22 @@ bool vesa_set_mode(uint16_t mode) {
     vesa_state.framebuffer_size = vesa_state.stride * vesa_state.height;
     vesa_state.lfb_enabled = (mode_info.mode_attributes & VBE_MODE_ATTR_LINEAR) != 0;
     vesa_state.current_mode = mode;
+
+    // When the real display switch was performed, phys_base_ptr is a real
+    // physical address that is not yet mapped into the kernel address space.
+    // Identity-map it (VA == PA) so the GUI can draw to the framebuffer.
+#ifdef NEBULAOS_ARCH_X86
+    if (vbe_real_mode_switch_active() && mode_info.phys_base_ptr >= 0x100000) {
+        uint32_t pa = mode_info.phys_base_ptr;
+        uint32_t size = vesa_state.framebuffer_size;
+        uint32_t pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+        for (uint32_t i = 0; i < pages; i++) {
+            memory_map_page(pa + i * PAGE_SIZE, pa + i * PAGE_SIZE,
+                            PAGE_PRESENT | PAGE_WRITABLE | PAGE_CACHEDIS);
+        }
+        vesa_state.framebuffer = (void*)(size_t)pa;
+    }
+#endif
 
     memcpy8(vesa_state.mode_info, &mode_info, sizeof(mode_info));
 

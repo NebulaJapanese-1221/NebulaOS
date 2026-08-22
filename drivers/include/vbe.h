@@ -16,6 +16,8 @@
 #define VBE_RETURN_INVALID     0x03
 
 // VBE BIOS calls
+void vbe_set_real_mode_switch(bool enable);
+bool vbe_real_mode_switch_active(void);
 bool vbe_get_info(vbe_info_block_t* info);
 bool vbe_get_mode_info(uint16_t mode, vbe_mode_info_t* info);
 bool vbe_set_mode(uint16_t mode);
