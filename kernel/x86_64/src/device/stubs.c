@@ -15,6 +15,9 @@
 void gdt64_init(void);
 void idt64_init(void);
 
+// Driver initializers
+void init_keyboard(void);
+
 // -----------------------------------------------------------------------------
 // Initialize GDT for 64-bit
 // -----------------------------------------------------------------------------

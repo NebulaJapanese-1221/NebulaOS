@@ -68,7 +68,7 @@ bool acpi_init(void) {
     uint16_t ebda_segment = *((uint16_t*)0x040E);
     uint32_t ebda_address = (uint32_t)ebda_segment * 16;
 
-    rsdp_t* rsdp = acpi_find_rsdp((uint8_t*)ebda_address, 1024);
+    rsdp_t* rsdp = acpi_find_rsdp((uint8_t*)(size_t)ebda_address, 1024);
     if (!rsdp) {
         // Search BIOS memory 0xE0000-0xFFFFF
         rsdp = acpi_find_rsdp((uint8_t*)0xE0000, 0x20000);

@@ -554,47 +554,326 @@ void page_fault_handler(registers_t* regs) {
 }
 
 // -----------------------------------------------------------------------------
-// Heap Management (Simple Bump Allocator for now)
+// Buddy System Allocator
 // -----------------------------------------------------------------------------
 
-// Heap configuration
-static uint8_t* heap_current = (uint8_t*)HEAP_START;
-static uint8_t* heap_end_ptr = (uint8_t*)HEAP_END;
+#define BUDDY_MAX_ORDER 20
+#define BUDDY_POOL_START ((uint8_t*)HEAP_START)
+#define BUDDY_POOL_SIZE (64 * 1024 * 1024)
+#define BUDDY_POOL_END (BUDDY_POOL_START + BUDDY_POOL_SIZE)
+#define BUDDY_TOTAL_PAGES (BUDDY_POOL_SIZE / PAGE_SIZE)
 
-// Initialize heap
-void memory_init_heap(void) {
-    // For now, just zero out the heap area
-    // In a real implementation, we'd set up proper heap structures
-    heap_current = (uint8_t*)HEAP_START;
-    heap_end_ptr = (uint8_t*)HEAP_END;
+typedef struct buddy_block {
+    uint32_t order;
+    struct buddy_block* next;
+} buddy_block_t;
+
+static buddy_block_t* buddy_free_lists[BUDDY_MAX_ORDER];
+static uint8_t* buddy_pool = BUDDY_POOL_START;
+static size_t buddy_pages = BUDDY_TOTAL_PAGES;
+static bool buddy_initialized = false;
+
+static void buddy_init(void) {
+    for (int i = 0; i < BUDDY_MAX_ORDER; i++) {
+        buddy_free_lists[i] = NULL;
+    }
+    
+    size_t max_order = 0;
+    size_t pages = buddy_pages;
+    while (pages > 1 && max_order < BUDDY_MAX_ORDER - 1) {
+        pages >>= 1;
+        max_order++;
+    }
+    
+    buddy_block_t* block = (buddy_block_t*)buddy_pool;
+    block->order = (uint32_t)max_order;
+    block->next = NULL;
+    buddy_free_lists[max_order] = block;
+    buddy_initialized = true;
 }
 
-// Allocate memory from heap (simple bump allocator)
+static void* buddy_alloc(size_t pages) {
+    if (!buddy_initialized || pages == 0) return NULL;
+    
+    size_t order = 0;
+    size_t p = pages;
+    while (p > 1 && order < BUDDY_MAX_ORDER - 1) {
+        p >>= 1;
+        order++;
+    }
+    
+    for (size_t o = order; o < BUDDY_MAX_ORDER; o++) {
+        if (buddy_free_lists[o]) {
+            buddy_block_t* block = buddy_free_lists[o];
+            buddy_free_lists[o] = block->next;
+            
+            while (o > order) {
+                o--;
+                size_t buddy_idx = ((uint8_t*)block - buddy_pool) / PAGE_SIZE;
+                size_t split_buddy_idx = buddy_idx + (1 << o);
+                buddy_block_t* split_buddy = (buddy_block_t*)(buddy_pool + split_buddy_idx * PAGE_SIZE);
+                split_buddy->order = (uint32_t)o;
+                split_buddy->next = buddy_free_lists[o];
+                buddy_free_lists[o] = split_buddy;
+            }
+            
+            return (uint8_t*)block + sizeof(buddy_block_t);
+        }
+    }
+    
+    return NULL;
+}
+
+static void buddy_free(void* ptr, size_t pages) {
+    if (!ptr || !buddy_initialized) return;
+    
+    size_t order = 0;
+    size_t p = pages;
+    while (p > 1 && order < BUDDY_MAX_ORDER - 1) {
+        p >>= 1;
+        order++;
+    }
+    
+    uint8_t* addr = (uint8_t*)ptr - sizeof(buddy_block_t);
+    size_t page_idx = (addr - buddy_pool) / PAGE_SIZE;
+    buddy_block_t* block = (buddy_block_t*)addr;
+    block->order = (uint32_t)order;
+    block->next = NULL;
+    
+    while (order < BUDDY_MAX_ORDER - 1) {
+        size_t buddy_idx = page_idx ^ (1 << order);
+        if (buddy_idx >= buddy_pages) break;
+        
+        buddy_block_t* buddy = (buddy_block_t*)(buddy_pool + buddy_idx * PAGE_SIZE);
+        buddy_block_t* prev = NULL;
+        buddy_block_t* curr = buddy_free_lists[order];
+        
+        bool found = false;
+        while (curr) {
+            if (curr == buddy) {
+                if (prev) prev->next = curr->next;
+                else buddy_free_lists[order] = curr->next;
+                found = true;
+                break;
+            }
+            prev = curr;
+            curr = curr->next;
+        }
+        
+        if (!found) break;
+        
+        page_idx = page_idx & ~(1 << order);
+        order++;
+        block = (buddy_block_t*)(buddy_pool + page_idx * PAGE_SIZE);
+    }
+    
+    block->next = buddy_free_lists[order];
+    buddy_free_lists[order] = block;
+}
+
+// -----------------------------------------------------------------------------
+// Slab Allocator
+// -----------------------------------------------------------------------------
+
+#define SLAB_NUM_CACHES 7
+#define SLAB_SIZES {64, 128, 256, 512, 1024, 2048, 4096}
+
+typedef struct slab_header {
+    struct slab_header* next;
+    uint32_t free_count;
+    uint32_t object_size;
+    uint8_t* free_list;
+} slab_header_t;
+
+typedef struct kmem_cache {
+    uint32_t object_size;
+    uint32_t objects_per_slab;
+    slab_header_t* partial_list;
+    slab_header_t* full_list;
+} kmem_cache_t;
+
+static kmem_cache_t slab_caches[SLAB_NUM_CACHES];
+static bool slab_initialized = false;
+
+static void slab_init(void) {
+    static const uint32_t sizes[SLAB_NUM_CACHES] = SLAB_SIZES;
+    for (int i = 0; i < SLAB_NUM_CACHES; i++) {
+        slab_caches[i].object_size = sizes[i];
+        slab_caches[i].objects_per_slab = PAGE_SIZE / sizes[i];
+        slab_caches[i].partial_list = NULL;
+        slab_caches[i].full_list = NULL;
+    }
+    slab_initialized = true;
+}
+
+static slab_header_t* slab_create(uint32_t cache_idx) {
+    uint32_t obj_size = slab_caches[cache_idx].object_size;
+    uint32_t objects = slab_caches[cache_idx].objects_per_slab;
+    
+    void* page = buddy_alloc(1);
+    if (!page) return NULL;
+    
+    slab_header_t* slab = (slab_header_t*)page;
+    slab->next = NULL;
+    slab->free_count = objects;
+    slab->object_size = obj_size;
+    
+    uint8_t* data = (uint8_t*)page + sizeof(slab_header_t);
+    slab->free_list = data;
+    
+    for (uint32_t i = 0; i < objects - 1; i++) {
+        uint8_t* obj = data + i * obj_size;
+        *(uint8_t**)(obj) = obj + obj_size;
+    }
+    *(uint8_t**)(data + (objects - 1) * obj_size) = NULL;
+    
+    return slab;
+}
+
+static void* slab_alloc(kmem_cache_t* cache) {
+    if (cache->partial_list) {
+        slab_header_t* slab = cache->partial_list;
+        uint8_t* obj = slab->free_list;
+        slab->free_list = *(uint8_t**)obj;
+        slab->free_count--;
+        
+        if (slab->free_count == 0) {
+            cache->partial_list = slab->next;
+            slab->next = cache->full_list;
+            cache->full_list = slab;
+        }
+        
+        return obj;
+    }
+    
+    slab_header_t* slab = slab_create((uint32_t)(cache - slab_caches));
+    if (!slab) return NULL;
+    
+    uint8_t* obj = slab->free_list;
+    slab->free_list = *(uint8_t**)(obj);
+    slab->free_count--;
+    
+    if (slab->free_count == 0) {
+        slab->next = cache->full_list;
+        cache->full_list = slab;
+    } else {
+        slab->next = cache->partial_list;
+        cache->partial_list = slab;
+    }
+    
+    return obj;
+}
+
+static void slab_free(void* ptr) {
+    if (!ptr || !slab_initialized) return;
+    
+    uint8_t* obj = (uint8_t*)ptr;
+    uint32_t obj_size = 0;
+    slab_header_t* slab = NULL;
+    kmem_cache_t* cache = NULL;
+    
+    for (int i = 0; i < SLAB_NUM_CACHES; i++) {
+        uint8_t* slab_start = (uint8_t*)buddy_pool;
+        for (slab = slab_caches[i].partial_list; slab; slab = slab->next) {
+            if (obj >= (uint8_t*)slab && obj < (uint8_t*)slab + PAGE_SIZE) {
+                cache = &slab_caches[i];
+                obj_size = cache->object_size;
+                goto found;
+            }
+        }
+        for (slab = slab_caches[i].full_list; slab; slab = slab->next) {
+            if (obj >= (uint8_t*)slab && obj < (uint8_t*)slab + PAGE_SIZE) {
+                cache = &slab_caches[i];
+                obj_size = cache->object_size;
+                goto found;
+            }
+        }
+    }
+    
+    if (!cache) return;
+    
+found:
+    slab->free_list = obj;
+    *(uint8_t**)obj = slab->free_list;
+    slab->free_count++;
+    
+    if (slab->free_count == cache->objects_per_slab) {
+        if (cache->full_list == slab) {
+            cache->full_list = slab->next;
+        } else {
+            slab_header_t* prev = cache->partial_list;
+            while (prev && prev->next != slab) prev = prev->next;
+            if (prev) prev->next = slab->next;
+        }
+        buddy_free(slab, 1);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Heap Management
+// -----------------------------------------------------------------------------
+
+void memory_init_heap(void) {
+    memory_init_buddy();
+    slab_init();
+}
+
 void* malloc(size_t size) {
     if (!size) return NULL;
     
-    // Align size to 8 bytes
-    size = ALIGN_UP(size, 8);
-    
-    // Check if we have enough space
-    if (heap_current + size > heap_end_ptr) {
-        return NULL;  // Out of memory
+    if (buddy_initialized && size >= 4096) {
+        size = ALIGN_UP(size, PAGE_SIZE);
+        size_t pages = size / PAGE_SIZE;
+        return buddy_alloc(pages);
     }
     
-    void* ptr = heap_current;
-    heap_current += size;
+    if (slab_initialized) {
+        for (int i = 0; i < SLAB_NUM_CACHES; i++) {
+            if (size <= slab_caches[i].object_size) {
+                return slab_alloc(&slab_caches[i]);
+            }
+        }
+    }
     
-    return ptr;
+    size = ALIGN_UP(size, PAGE_SIZE);
+    size_t pages = size / PAGE_SIZE;
+    return buddy_alloc(pages);
 }
 
-// Free memory (stub for now)
 void free(void* ptr) {
-    (void)ptr;
-    // In a real implementation, this would free the memory
-    // For bump allocator, we can't free individual allocations
+    if (!ptr) return;
+    
+    if (slab_initialized) {
+        uint8_t* obj = (uint8_t*)ptr;
+        for (int i = 0; i < SLAB_NUM_CACHES; i++) {
+            slab_header_t* slab;
+            for (slab = slab_caches[i].partial_list; slab; slab = slab->next) {
+                if (obj >= (uint8_t*)slab && obj < (uint8_t*)slab + PAGE_SIZE) {
+                    slab_free(ptr);
+                    return;
+                }
+            }
+            for (slab = slab_caches[i].full_list; slab; slab = slab->next) {
+                if (obj >= (uint8_t*)slab && obj < (uint8_t*)slab + PAGE_SIZE) {
+                    slab_free(ptr);
+                    return;
+                }
+            }
+        }
+    }
+    
+    uint8_t* addr = (uint8_t*)ptr;
+    if (addr >= BUDDY_POOL_START && addr < BUDDY_POOL_END) {
+        size_t page_idx = (addr - buddy_pool) / PAGE_SIZE;
+        for (size_t order = 0; order < BUDDY_MAX_ORDER; order++) {
+            if ((page_idx & ((1 << order) - 1)) == 0) {
+                buddy_free(ptr, 1 << order);
+                return;
+            }
+        }
+    }
 }
 
-// Allocate and zero memory
 void* calloc(size_t num, size_t size) {
     size_t total = num * size;
     void* ptr = malloc(total);
@@ -604,17 +883,12 @@ void* calloc(size_t num, size_t size) {
     return ptr;
 }
 
-// Reallocate memory
 void* realloc(void* ptr, size_t size) {
-    if (!ptr) {
-        return malloc(size);
-    }
+    if (!ptr) return malloc(size);
+    if (!size) { free(ptr); return NULL; }
     
-    // In a real implementation, we'd check the old size and copy data
-    // For now, just allocate new and copy what we can
     void* new_ptr = malloc(size);
     if (new_ptr && ptr) {
-        // Copy up to the new size
         memcpy(new_ptr, ptr, size);
     }
     return new_ptr;
@@ -627,13 +901,11 @@ void* realloc(void* ptr, size_t size) {
 void memory_init(void) {
     memory_init_physical();
 #ifdef NEBULAOS_ARCH_X86_64
-    // 64-bit paging is initialized in paging.c
     init_paging64();
 #else
     memory_init_paging();
 #endif
     memory_init_heap();
     
-    // Register page fault handler (IRQ 14)
     register_interrupt_handler(14, page_fault_handler);
 }

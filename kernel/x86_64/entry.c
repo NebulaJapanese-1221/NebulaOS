@@ -17,6 +17,16 @@
 #include "../../drivers/include/keyboard.h"
 #include "../../drivers/include/pit.h"
 #include "../../drivers/include/pic.h"
+#include "../../drivers/include/serial.h"
+#include "../../drivers/include/pci.h"
+#include "../../drivers/include/acpi.h"
+#include "../../drivers/include/storage.h"
+
+// Kernel subsystem includes
+#include "../../kernel/common/include/process.h"
+#include "../../kernel/common/include/scheduler.h"
+#include "../../kernel/common/include/syscall.h"
+#include "../../kernel/common/include/fs.h"
 
 // Forward declarations
 void kernel_early_init(void);
@@ -138,6 +148,38 @@ void kernel_init(void) {
     vga_puts("Initializing keyboard...\n");
     init_keyboard();
     vga_puts("  Keyboard: Ready\n");
+
+    // Initialize process management
+    process_init();
+    vga_puts("  Processes: Ready\n");
+
+    // Initialize scheduler
+    scheduler_init();
+    vga_puts("  Scheduler: Ready\n");
+
+    // Initialize syscalls
+    syscall_init();
+    vga_puts("  Syscalls: Ready\n");
+
+    // Initialize filesystem
+    fs_init();
+    vga_puts("  Filesystem: Ready\n");
+
+    // Initialize PCI
+    pci_init();
+
+    // Initialize ACPI
+    acpi_init();
+
+    // Initialize serial
+    serial_init();
+    vga_puts("  Serial: Ready\n");
+
+    // Initialize storage
+    ata_init();
+
+    // Initialize VESA
+    vesa_init();
 
     // Print welcome message
     vga_puts("\n");

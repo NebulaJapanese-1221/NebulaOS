@@ -8,7 +8,6 @@
 #include "../../kernel/common/include/nebula.h"
 #include "../../kernel/common/include/stdint.h"
 #include "../../kernel/common/include/vga.h"
-#include "../../lib/include/string.h"
 
 // -----------------------------------------------------------------------------
 // VESA state
@@ -19,15 +18,37 @@ static vbe_info_block_t vbe_info_storage;
 static vbe_mode_info_t vbe_mode_info_storage;
 
 // -----------------------------------------------------------------------------
-// VBE BIOS call helper
+// Simple helper to print hex digit
 // -----------------------------------------------------------------------------
 
-static bool vbe_bios_call(uint16_t function, uint16_t* ax, uint16_t* bx, uint16_t* cx, uint16_t* dx) {
-    (void)ax;
-    (void)bx;
-    (void)cx;
-    (void)dx;
-    return false;
+static void vga_put_hex_digit(uint8_t digit) {
+    char c = (digit < 10) ? ('0' + digit) : ('A' + digit - 10);
+    vga_putchar(c);
+}
+
+static void vga_put_hex(uint32_t value, uint8_t digits) {
+    for (int i = digits - 1; i >= 0; i--) {
+        vga_put_hex_digit((value >> (i * 4)) & 0xF);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Manual copy and zero helpers
+// -----------------------------------------------------------------------------
+
+static void memcpy8(void* dst, const void* src, uint32_t count) {
+    uint8_t* d = (uint8_t*)dst;
+    const uint8_t* s = (const uint8_t*)src;
+    for (uint32_t i = 0; i < count; i++) {
+        d[i] = s[i];
+    }
+}
+
+static void memset8(void* dst, uint8_t value, uint32_t count) {
+    uint8_t* d = (uint8_t*)dst;
+    for (uint32_t i = 0; i < count; i++) {
+        d[i] = value;
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -35,9 +56,9 @@ static bool vbe_bios_call(uint16_t function, uint16_t* ax, uint16_t* bx, uint16_
 // -----------------------------------------------------------------------------
 
 bool vesa_init(void) {
-    memset(&vesa_state, 0, sizeof(vesa_state));
-    memset(&vbe_info_storage, 0, sizeof(vbe_info_storage));
-    memset(&vbe_mode_info_storage, 0, sizeof(vbe_mode_info_storage));
+    memset8(&vesa_state, 0, sizeof(vesa_state));
+    memset8(&vbe_info_storage, 0, sizeof(vbe_info_storage));
+    memset8(&vbe_mode_info_storage, 0, sizeof(vbe_mode_info_storage));
 
     vesa_state.vbe_info = &vbe_info_storage;
     vesa_state.mode_info = &vbe_mode_info_storage;
@@ -50,11 +71,11 @@ bool vesa_init(void) {
         return false;
     }
 
-    char buf[128];
-    snprintf(buf, sizeof(buf), "VESA: VBE Version %d.%d\n",
-        (vesa_state.vbe_info->version >> 8) & 0xFF,
-        vesa_state.vbe_info->version & 0xFF);
-    vga_puts(buf);
+    vga_puts("VESA: VBE Version ");
+    vga_put_hex((vesa_state.vbe_info->version >> 8) & 0xFF, 1);
+    vga_putchar('.');
+    vga_put_hex(vesa_state.vbe_info->version & 0xFF, 1);
+    vga_puts("\n");
 
     // Find 1024x768x32 mode
     uint16_t mode = 0;
@@ -63,9 +84,9 @@ bool vesa_init(void) {
         return false;
     }
 
-    snprintf(buf, sizeof(buf), "VESA: Found mode 0x%04X (%dx%dx%d)\n",
-        mode, 1024, 768, 32);
-    vga_puts(buf);
+    vga_puts("VESA: Found mode 0x");
+    vga_put_hex(mode, 4);
+    vga_puts(" (1024x768x32)\n");
 
     // Set video mode
     if (!vesa_set_mode(mode)) {
@@ -105,7 +126,7 @@ bool vesa_set_mode(uint16_t mode) {
     vesa_state.lfb_enabled = (mode_info.mode_attributes & VBE_MODE_ATTR_LINEAR) != 0;
     vesa_state.current_mode = mode;
 
-    memcpy(vesa_state.mode_info, &mode_info, sizeof(mode_info));
+    memcpy8(vesa_state.mode_info, &mode_info, sizeof(mode_info));
 
     return true;
 }

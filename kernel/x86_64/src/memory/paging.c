@@ -63,15 +63,15 @@ void init_paging64(void) {
     pdp[0].frame = (uint64_t)pd >> PAGE_SHIFT;
 
     for (int i = 0; i < 512; i++) {
+        page_entry_t* current_pt = (page_entry_t*)((uint64_t)pt + i * PAGE_SIZE);
         pd[i].present = 1;
         pd[i].writable = 1;
-        pd[i].frame = (uint64_t)(pt + i) >> PAGE_SHIFT;
+        pd[i].frame = (uint64_t)current_pt >> PAGE_SHIFT;
 
         for (int j = 0; j < 512; j++) {
-            pt[j].present = 1;
-            pt[j].writable = 1;
-            pt[j].frame = (phys >> PAGE_SHIFT);
-            pt += 512;
+            current_pt[j].present = 1;
+            current_pt[j].writable = 1;
+            current_pt[j].frame = (phys >> PAGE_SHIFT);
             phys += PAGE_SIZE;
         }
     }

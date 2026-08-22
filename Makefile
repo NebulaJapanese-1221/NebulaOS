@@ -49,7 +49,7 @@ AS := nasm
 LD := $(CROSS_PREFIX)ld
 OBJCOPY := $(CROSS_PREFIX)objcopy
 OBJDUMP := $(CROSS_PREFIX)objdump
-GENISOIMAGE := genisoimage
+GENISOIMAGE := xorriso -as mkisofs
 QEMU := qemu-system-$(ARCH)
 
 # Compiler flags
@@ -69,9 +69,15 @@ KERNEL_SOURCES := \
     kernel/$(ARCH)/start.asm \
     kernel/common/src/vga.c \
     kernel/common/src/memory/memory.c \
+    kernel/common/src/fs/fat32.c \
+    kernel/common/src/process/elf.c \
+    kernel/common/src/process/process.c \
+    kernel/common/src/process/scheduler.c \
+    kernel/common/src/syscall/syscall.c \
     kernel/$(ARCH)/src/device/gdt.c \
     kernel/$(ARCH)/src/interrupts/idt.c \
     kernel/$(ARCH)/src/interrupts/isr.asm \
+    kernel/$(ARCH)/src/syscall/syscall_entry.asm \
     kernel/$(ARCH)/entry.c
 
 # x86-specific shell (text-mode only)
@@ -102,7 +108,17 @@ GUI_SOURCES := \
     gui/src/TextBox.cpp \
     gui/src/Panel.cpp \
     gui/src/Font.cpp \
-    gui/src/GUI.cpp
+    gui/src/GUI.cpp \
+    gui/src/fonts/Font8x8.cpp \
+    gui/src/rendering/Renderer.cpp \
+    gui/src/rendering/FontRenderer.cpp \
+    gui/src/widgets/Widget.cpp \
+    gui/src/widgets/Checkbox.cpp \
+    gui/src/widgets/RadioButton.cpp \
+    gui/src/widgets/ProgressBar.cpp \
+    gui/src/widgets/MenuBar.cpp \
+    gui/src/windows/FileManager.cpp \
+    gui/src/windows/Terminal.cpp
 
 # Driver sources (shared)
 DRIVER_SOURCES := \
@@ -115,16 +131,25 @@ DRIVER_SOURCES := \
     drivers/src/serial/serial.c \
     drivers/src/vesa/vesa.c \
     drivers/src/vesa/vbe.c \
-    drivers/src/network/rtl8139.c
+    drivers/src/network/rtl8139.c \
+    drivers/src/storage/ata.c
 
 # Library sources (shared)
 LIB_SOURCES := \
     lib/src/string/string.c \
     lib/src/math/math.c \
-    lib/src/time/time.c
+    lib/src/time/time.c \
+    lib/src/stdio/printf.c \
+    lib/src/stdio/scanf.c \
+    lib/src/stdlib/stdlib.c \
+    lib/src/ctype/ctype.c
 
 CXX_LIB_SOURCES := \
-    lib/src/cxx/runtime.cpp
+    lib/src/cxx/runtime.cpp \
+    lib/src/cxx/new.cpp \
+    lib/src/cxx/delete.cpp \
+    lib/src/cxx/exception.cpp \
+    lib/src/cxx/typeinfo.cpp
 
 # Target files
 BOOT_OBJECTS := $(OBJ_DIR)/$(ARCH)/boot_$(ARCH).o
@@ -223,7 +248,7 @@ $(GRUB_CFG): | $(ISO_DIR)
 	echo 'set default=0' >> $@; \
 	echo '' >> $@; \
 	echo 'menuentry "NebulaOS $(ARCH)" {' >> $@; \
-	echo '    multiboot /boot/nebulaos_$(ARCH).bin' >> $@; \
+	echo '    linux /boot/nebulaos_$(ARCH).bin' >> $@; \
 	echo '    boot' >> $@; \
 	echo '}' >> $@
 
@@ -231,10 +256,14 @@ $(ISO_DIR)/boot/nebulaos_$(ARCH).bin: $(KERNEL_BIN) | $(ISO_DIR)
 	mkdir -p $(ISO_DIR)/boot
 	cp $< $@
 
-$(ISO_IMAGE): $(ISO_DIR)/boot/nebulaos_$(ARCH).bin $(GRUB_CFG) | $(ISO_DIR)
-	mkdir -p $(ISO_DIR)/boot/grub
-	cp $(GRUB_CFG) $(ISO_DIR)/boot/grub/
-	$(GENISOIMAGE) -R -b boot/grub/i386-pc/eltorito_boot.img -c boot/grub/boot.cat -no-emul-boot -boot-load-size 4 -boot-info-table -o $@ $(ISO_DIR)
+GRUB_CORE_IMG := $(ISO_DIR)/boot/grub/i386-pc/core.img
+
+$(GRUB_CORE_IMG): $(GRUB_CFG) | $(ISO_DIR)
+	mkdir -p $(dir $@)
+	grub-mkimage -O i386-pc-pxe -o $@ -p /boot/grub -d /usr/lib/grub/i386-pc normal configfile linux
+
+$(ISO_IMAGE): $(ISO_DIR)/boot/nebulaos_$(ARCH).bin $(GRUB_CORE_IMG) | $(ISO_DIR)
+	$(GENISOIMAGE) -R -b boot/grub/i386-pc/core.img -c boot/grub/boot.cat -no-emul-boot -boot-load-size 4 -boot-info-table -o $@ $(ISO_DIR)
 
 iso: $(ISO_IMAGE)
 

@@ -7,7 +7,25 @@
 #include "../include/vbe.h"
 #include "../../kernel/common/include/nebula.h"
 #include "../../kernel/common/include/stdint.h"
-#include "../../lib/include/string.h"
+
+// -----------------------------------------------------------------------------
+// Manual memory helpers
+// -----------------------------------------------------------------------------
+
+static void memcpy8(void* dst, const void* src, uint32_t count) {
+    uint8_t* d = (uint8_t*)dst;
+    const uint8_t* s = (const uint8_t*)src;
+    for (uint32_t i = 0; i < count; i++) {
+        d[i] = s[i];
+    }
+}
+
+static void memset8(void* dst, uint8_t value, uint32_t count) {
+    uint8_t* d = (uint8_t*)dst;
+    for (uint32_t i = 0; i < count; i++) {
+        d[i] = value;
+    }
+}
 
 // -----------------------------------------------------------------------------
 // Get VBE controller information
@@ -19,7 +37,7 @@ bool vbe_get_info(vbe_info_block_t* info) {
     }
 
     // Set up VBE signature
-    memcpy(info->signature, "VESA", 4);
+    memcpy8(info->signature, "VESA", 4);
     info->version = 0x0300;
     info->oem_string = 0;
     info->capabilities = VBE_CAPABILITY_LFB;
@@ -44,7 +62,7 @@ bool vbe_get_mode_info(uint16_t mode, vbe_mode_info_t* info) {
         return false;
     }
 
-    memset(info, 0, sizeof(*info));
+    memset8(info, 0, sizeof(*info));
 
     // In a real implementation, this would call INT 0x10, AX=0x4F01
     // For now, return stub 1024x768x32 mode info
