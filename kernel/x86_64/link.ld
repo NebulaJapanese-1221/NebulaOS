@@ -8,13 +8,7 @@ ENTRY(_start)
 
 /* Memory layout */
 MEMORY {
-    /* Bootloader at 0x7C00 (512 bytes) */
-    boot (rx) : ORIGIN = 0x7C00, LENGTH = 512
-    
-    /* Low memory (0-640K) */
-    lowmem (rwx) : ORIGIN = 0x00000000, LENGTH = 640K
-    
-    /* Kernel starts at 1MB */
+    /* Kernel starts at 1MB (higher half for 64-bit) */
     kernel (rwx) : ORIGIN = 0x00100000, LENGTH = 32M
     
     /* Heap starts at 32MB */
@@ -26,9 +20,9 @@ MEMORY {
 
 /* Sections */
 SECTIONS {
-    /* Boot section */
-    .boot : {
-        *(.boot)
+    /* Multiboot2 header must be in first 8KB and aligned to 8 bytes */
+    .multiboot_header : {
+        *(.multiboot_header)
     } > kernel
     
     /* Text section (code) - 64-bit */
@@ -79,6 +73,3 @@ SECTIONS {
         *(.note.gnu.build-id)
     }
 }
-
-/* Entry point */
-ENTRY(_start)

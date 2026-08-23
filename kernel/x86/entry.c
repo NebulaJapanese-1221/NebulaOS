@@ -2,7 +2,7 @@
 // ===========================
 //
 // C entry point for x86 kernel
-// Called from entry.asm after bootloader sets up protected mode
+// Called from start.asm after GRUB loads kernel in protected mode
 
 #include "../common/include/nebula.h"
 #include "../common/include/stdint.h"
@@ -53,13 +53,30 @@ extern void init_idt(void);
 
 // -----------------------------------------------------------------------------
 // Kernel main entry point
-// Parameters from multiboot (if used):
+// Parameters from multiboot:
 //   magic: Multiboot magic number
 //   info:  Pointer to multiboot info structure
 // -----------------------------------------------------------------------------
 void kernel_main(uint32_t magic, uint32_t info) {
-    (void)magic;  // Unused for now
-    (void)info;   // Unused for now
+    // Verify multiboot magic
+    if (magic != 0x2BADB002) {
+        // Not loaded by multiboot - this is an error
+        vga_init();
+        vga_set_color(VGA_COLOR_RED);
+        vga_set_bg_color(VGA_COLOR_BLACK);
+        vga_clear();
+        vga_puts("ERROR: Invalid multiboot magic!\n");
+        vga_puts("Expected: 0x2BADB002\n");
+        vga_puts("Got: 0x");
+        // Print hex value
+        for (int i = 28; i >= 0; i -= 4) {
+            uint8_t nibble = (magic >> i) & 0xF;
+            char c = nibble < 10 ? '0' + nibble : 'A' + nibble - 10;
+            vga_putchar(c);
+        }
+        vga_puts("\n");
+        kernel_panic("Invalid multiboot magic");
+    }
     
     // Early initialization (before memory is available)
     kernel_early_init();
@@ -76,31 +93,32 @@ void kernel_main(uint32_t magic, uint32_t info) {
 // Sets up basic CPU state before memory management is available
 // -----------------------------------------------------------------------------
 void kernel_early_init(void) {
-    // Initialize GDT
-    init_gdt();
-    
-    // Initialize IDT
-    init_idt();
-    
-    // Initialize PIC (Programmable Interrupt Controller)
-    pic_init(0x20, 0x28);
-    
-    // Initialize PIT (Programmable Interval Timer)
-    pit_init(1000);  // 1000 Hz timer
-    
-    // Initialize basic paging (identity mapping for now)
-    // This will be enhanced with proper memory management
-    // For now, we rely on the bootloader's paging setup
-    
-    // Initialize VGA text mode for early output
+    // Initialize VGA text mode first for output
     vga_init();
     vga_set_color(VGA_COLOR_WHITE);
     vga_set_bg_color(VGA_COLOR_BLUE);
     vga_clear();
     
-    // Print early boot message
     vga_puts("NebulaOS x86 Kernel Booting...\n");
-    vga_puts("Initializing hardware...\n");
+    vga_puts("Multiboot magic verified.\n");
+    
+    // Initialize GDT
+    vga_puts("Initializing GDT...\n");
+    init_gdt();
+    
+    // Initialize IDT
+    vga_puts("Initializing IDT...\n");
+    init_idt();
+    
+    // Initialize PIC (Programmable Interrupt Controller)
+    vga_puts("Initializing PIC...\n");
+    pic_init(0x20, 0x28);
+    
+    // Initialize PIT (Programmable Interval Timer)
+    vga_puts("Initializing PIT...\n");
+    pit_init(1000);  // 1000 Hz timer
+    
+    vga_puts("Early initialization complete.\n");
 }
 
 // -----------------------------------------------------------------------------

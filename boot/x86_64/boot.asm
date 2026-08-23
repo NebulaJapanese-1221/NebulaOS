@@ -1,79 +1,123 @@
-; NebulaOS x86_64 Bootloader
-; ===========================
-; 
-; Bootloader for x86_64 architecture
-; Supports both BIOS and UEFI (BIOS legacy mode shown here)
-; Switches to 64-bit long mode
-; 
+; NebulaOS x86_64 GRUB Multiboot2 Bootloader
+; ===========================================
+;
+; Multiboot2-compliant bootloader for x86_64 architecture
+; Loaded by GRUB2, which provides multiboot information
+; GRUB2 switches to 64-bit long mode before calling this entry point
+;
 ; NASM syntax
 
-bits 16
+; -----------------------------------------------------------------------------
+; Multiboot2 Header (32-bit compatible data)
+; -----------------------------------------------------------------------------
+MB2_MAGIC    equ 0xE85250D6
+MB2_ARCH     equ 0           ; i386 architecture
+MB2_ALIGN    equ 8
+
+MB2_TAG_TYPE_END        equ 0
+MB2_TAG_TYPE_MEMORY     equ 4
+MB2_TAG_TYPE_FRAMEBUFFER equ 8
+MB2_TAG_FLAG_REQUIRED   equ 0
+
+section .multiboot_header
+align 8
+multiboot_header:
+    dd MB2_MAGIC
+    dd MB2_ARCH
+    dd multiboot_header_end - multiboot_header
+
+    ; Request memory map
+    align 8
+    .tag_memory:
+        dw MB2_TAG_TYPE_MEMORY
+        dw MB2_TAG_FLAG_REQUIRED
+        dd 16 - 8
+
+    ; Request framebuffer
+    align 8
+    .tag_framebuffer:
+        dw MB2_TAG_TYPE_FRAMEBUFFER
+        dw MB2_TAG_FLAG_REQUIRED
+        dd 24 - 8
+        dd 0, 0, 0
+
+    ; End tag
+    align 8
+    .tag_end:
+        dw MB2_TAG_TYPE_END
+        dw MB2_TAG_FLAG_REQUIRED
+        dd 8 - 8
+
+multiboot_header_end:
 
 ; -----------------------------------------------------------------------------
-; Boot sector entry point
+; Kernel Entry Point (64-bit)
 ; -----------------------------------------------------------------------------
-start:
+bits 64
+
+section .text
+global _start
+extern kernel_main
+
+_start:
+    ; GRUB2 has switched to 64-bit long mode
+    ; RBX = multiboot2 info structure pointer
+    
+    ; Disable interrupts
     cli
     
-    mov [boot_drive], dl
+    ; Save multiboot info pointer
+    mov [multiboot_info], rbx
     
-    xor ax, ax
-    mov ds, ax
-    mov es, ax
-    mov ss, ax
-    mov sp, 0x7C00
+    ; Set up 64-bit stack
+    mov rsp, stack_top
     
-    sti
+    ; Call C kernel entry
+    ; Pass multiboot info pointer in RDI (first argument)
+    mov rdi, rbx
+    call kernel_main
     
-    mov si, welcome_msg
-    call print_string
-    
-    call check_cpuid
-    cmp eax, 1
-    jne no_cpuid
-    
-    call check_long_mode
-    cmp eax, 1
-    jne no_long_mode
-    
-    call switch_to_pm
-    
-no_cpuid:
-    mov si, no_cpuid_msg
-    call print_string
-    jmp halt
-
-no_long_mode:
-    mov si, no_long_mode_msg
-    call print_string
-    jmp halt
-
-halt:
+    ; Halt on return
     cli
     hlt
-    jmp halt
+    jmp $
 
 ; -----------------------------------------------------------------------------
-; Boot signature
+; Simple VGA output for early boot messages
 ; -----------------------------------------------------------------------------
-
-times 510 - ($ - $$) db 0
- dw 0xAA55
+vga_puts:
+    push rax
+    push rdi
+    mov edi, (VGA_BUFFER + 0x0F00)  ; White on blue, start at row 24
+.next_char:
+    lodsb
+    test al, al
+    jz .done
+    mov ah, 0x0F
+    stosw
+    jmp .next_char
+.done:
+    pop rdi
+    pop rax
+    ret
 
 ; -----------------------------------------------------------------------------
-; Stage 2 would start here (loaded at different address)
+; Data Section
 ; -----------------------------------------------------------------------------
+section .data
+boot_msg db "NebulaOS x86_64 Kernel Booting via GRUB2...", 0
 
-%include "boot/x86_64/print.asm"
-%include "boot/x86_64/pm_switch.asm"
-%include "boot/x86_64/cpuid.asm"
+; Multiboot info storage
+multiboot_info dq 0
+
+; VGA constants
+VGA_BUFFER equ 0xB8000
 
 ; -----------------------------------------------------------------------------
-; Data section
+; BSS Section
 ; -----------------------------------------------------------------------------
-
-welcome_msg db "NebulaOS 64-bit Bootloader...", 0x0D, 0x0A, 0
-no_cpuid_msg db "ERROR: CPUID not supported", 0x0D, 0x0A, 0
-no_long_mode_msg db "ERROR: 64-bit long mode not supported", 0x0D, 0x0A, 0
-
-boot_drive db 0
+section .bss
+align 16
+stack_bottom:
+    resb 32768  ; 32KB stack for 64-bit
+stack_top:

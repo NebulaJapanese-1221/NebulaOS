@@ -2,12 +2,13 @@
 ; ==========================
 ; 
 ; Assembly entry point for x86 kernel
+; Multiboot-compliant entry point for GRUB bootloader
 ; This is the first C code entry point after bootloader
 
 bits 32
 
 ; -----------------------------------------------------------------------------
-; Multiboot header (for compatibility with multiboot bootloaders)
+; Multiboot header (already in boot.asm, but keep here for standalone use)
 ; -----------------------------------------------------------------------------
 MULTIBOOT_HEADER_MAGIC equ 0x1BADB002
 MULTIBOOT_HEADER_FLAGS equ 0x00000003
@@ -25,24 +26,28 @@ multiboot_header:
 ; -----------------------------------------------------------------------------
 section .text
 global _start
+extern kernel_main
+
 _start:
-    ; Bootloader has switched to protected mode
-    ; ES:EAX = Multiboot info structure (if using multiboot)
-    ; EBX = Multiboot magic number
+    ; Bootloader has loaded us in protected mode via GRUB
+    ; EAX = multiboot magic number (0x2BADB002)
+    ; EBX = multiboot info structure pointer
     
-    ; Save multiboot info pointer
-    mov [multiboot_ptr], eax
-    mov [multiboot_magic], ebx
-    
-    ; Set up stack
+    ; Disable interrupts
+    cli
+
+    ; Save multiboot info
+    mov [multiboot_magic], eax
+    mov [multiboot_info], ebx
+
+    ; Set up stack from linker script symbols
     mov esp, stack_top
-    
-    ; Push multiboot info to stack for C entry
-    push eax
-    push ebx
+
+    ; Push arguments for kernel_main
+    push ebx        ; multiboot info pointer
+    push eax        ; multiboot magic
     
     ; Call C kernel entry
-    extern kernel_main
     call kernel_main
     
     ; Halt on return
@@ -54,8 +59,8 @@ _start:
 ; Data section
 ; -----------------------------------------------------------------------------
 section .data
-multiboot_ptr dd 0
 multiboot_magic dd 0
+multiboot_info  dd 0
 
 ; -----------------------------------------------------------------------------
 ; BSS section (uninitialized data)

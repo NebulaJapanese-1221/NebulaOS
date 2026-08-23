@@ -2,7 +2,7 @@
 // ==============================
 //
 // C entry point for x86_64 kernel
-// Called from start.asm after bootloader sets up long mode
+// Called from start.asm after GRUB2 loads kernel in 64-bit long mode
 
 #include "../common/include/nebula.h"
 #include "../common/include/stdint.h"
@@ -48,7 +48,7 @@ extern void init_vga64(void);
 // -----------------------------------------------------------------------------
 // Kernel main entry point
 // Parameters:
-//   info: Pointer to boot info structure (unused for now)
+//   info: Pointer to multiboot2 info structure
 // -----------------------------------------------------------------------------
 void kernel_main(uint64_t info) {
     (void)info;
@@ -92,6 +92,8 @@ void kernel_early_init(void) {
 
     // Initialize keyboard
     init_keyboard64();
+    
+    vga_puts("Early initialization complete.\n");
 }
 
 // -----------------------------------------------------------------------------
