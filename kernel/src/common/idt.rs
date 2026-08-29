@@ -1,3 +1,24 @@
+pub unsafe fn init_idt64() {
+    IDT_PTR.limit = (core::mem::size_of::<[IdtEntry; IDT_MAX_DESCRIPTORS]>() - 1) as u16;
+    IDT_PTR.base = &mut IDT as *mut _ as u32;
+
+    for i in 0..IDT_MAX_DESCRIPTORS {
+        INTERRUPT_HANDLERS[i] = Some(default_interrupt_handler);
+    }
+
+    for i in 0..32 {
+        set_gate64(i, isr_table[i] as u64, 0x08, 0, IDT_FLAG_PRESENT | IDT_FLAG_INTERRUPT);
+    }
+    for i in 0..16 {
+        set_gate64(IRQ0 as usize + i, irq_table[i] as u64, 0x08, 0, IDT_FLAG_PRESENT | IDT_FLAG_INTERRUPT);
+    }
+    for i in 48..IDT_MAX_DESCRIPTORS {
+        set_gate64(i, default_interrupt_handler as u64, 0x08, 0, IDT_FLAG_PRESENT | IDT_FLAG_INTERRUPT);
+    }
+
+    idt_flush64();
+}
+
 pub unsafe fn set_gate64(num: usize, base: u64, sel: u16, ist: u8, flags: u8) {
     IDT[num].base_low = (base & 0xFFFF) as u16;
     IDT[num].sel = sel;
