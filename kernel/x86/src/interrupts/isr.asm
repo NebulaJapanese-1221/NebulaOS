@@ -166,7 +166,7 @@ irq_common:
     out 0x20, al
     
     ; Check if it's a slave IRQ (8-15)
-    cmp [esp + 52], byte 40  ; Compare interrupt number with 40 (IRQ8)
+    cmp [esp + 48], byte 40  ; Compare interrupt number with 40 (IRQ8)
     jb .no_slave_eoi
     out 0xA0, al           ; Send EOI to slave PIC
 .no_slave_eoi:

@@ -1,0 +1,20 @@
+{
+  "llvm-target": "i686-unknown-none",
+  "target-endian": "little",
+  "target-pointer-width": "32",
+  "data-layout": "e-m:e-p:32:32-p270:32:32-p272:32:32-i8:8:32-i16:16:32-i64:64:64-f64:64:64-v:96:128:128-n32:64-S128",
+  "arch": "x86",
+  "os": "none",
+  "executables": true,
+  "linker-flavor": "ld.lld",
+  "linker": "i686-linux-gnu-ld",
+  "pre-link-args": {
+    "ld.lld": ["-T", "kernel/x86/link.ld"]
+  },
+  "post-link-args": {
+    "ld.lld": []
+  },
+  "disable-red-zone": true,
+  "eliminate-frame-pointer": false,
+  "features": "-mmx,+soft-float"
+}

@@ -4,22 +4,10 @@
 ; Assembly entry point for x86 kernel
 ; Multiboot-compliant entry point for GRUB bootloader
 ; This is the first C code entry point after bootloader
+; Note: boot.asm contains the actual multiboot header and entry point.
+;       This file is kept for reference but is not linked into the kernel.
 
 bits 32
-
-; -----------------------------------------------------------------------------
-; Multiboot header (already in boot.asm, but keep here for standalone use)
-; -----------------------------------------------------------------------------
-MULTIBOOT_HEADER_MAGIC equ 0x1BADB002
-MULTIBOOT_HEADER_FLAGS equ 0x00000003
-MULTIBOOT_CHECKSUM equ -(MULTIBOOT_HEADER_MAGIC + MULTIBOOT_HEADER_FLAGS)
-
-section .multiboot_header
-align 4
-multiboot_header:
-    dd MULTIBOOT_HEADER_MAGIC
-    dd MULTIBOOT_HEADER_FLAGS
-    dd MULTIBOOT_CHECKSUM
 
 ; -----------------------------------------------------------------------------
 ; Kernel entry point

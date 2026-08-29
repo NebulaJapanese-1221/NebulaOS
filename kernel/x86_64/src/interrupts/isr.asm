@@ -180,7 +180,7 @@ irq_common:
 
     mov al, 0x20
     out 0x20, al
-    cmp qword [rsp + 112], 40
+    cmp qword [rsp + 120], 40
     jb .no_slave_eoi
     out 0xA0, al
 .no_slave_eoi:

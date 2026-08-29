@@ -297,7 +297,8 @@ build_arch() {
     # Compile library sources
     info "  Compiling libraries..."
     for src in $LIB_SOURCES; do
-        local obj="$OBJ_PREFIX/$(basename "$src" .cpp).o"
+        local ext="${src##*.}"
+        local obj="$OBJ_PREFIX/$(basename "$src" .$ext).o"
         if [ ! -f "$obj" ] || [ "$src" -nt "$obj" ]; then
             compile_source "$arch" "$src" "$obj"
         fi

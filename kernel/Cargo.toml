@@ -1,0 +1,13 @@
+[package]
+name = "kernel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+drivers = { path = "../drivers" }
+gui = { path = "../gui" }
+lib = { path = "../lib" }
+
+[lib]
+crate-type = ["staticlib"]

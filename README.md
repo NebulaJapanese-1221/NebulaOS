@@ -17,13 +17,13 @@ NebulaOS is a hobby operating system project designed to run on x86 and x86_64 h
 ### Build Commands
 
 ```bash
-make ARCH=x86        # Build x86 version
-make ARCH=x86_64     # Build x86_64 version
-make                 # Build both
-make clean           # Clean build files
-make iso             # Create bootable ISO image
-make run             # Run in QEMU
-make run-iso         # Run ISO in QEMU
+./build.sh              # Build all (x86 and x86_64)
+./build.sh x86          # Build x86 version
+./build.sh x86_64       # Build x86_64 version
+./build.sh clean        # Clean all build files
+./build.sh iso          # Create bootable ISO images
+./build.sh run          # Run in QEMU (x86_64 by default)
+./build.sh run ARCH=x86 # Run x86 in QEMU
 ```
 
 ## License

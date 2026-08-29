@@ -1,0 +1,20 @@
+[build]
+target = "x86_64-unknown-none"
+
+[target.x86_64-unknown-none]
+linker = "x86_64-linux-gnu-ld"
+rustflags = [
+    "-C", "link-arg=-T",
+    "-C", "link-arg=kernel/x86_64/link.ld",
+    "-C", "target-feature=-mmx,-sse",
+    "-C", "no-redzone=y",
+]
+
+[target.i686-unknown-none]
+linker = "i686-linux-gnu-ld"
+rustflags = [
+    "-C", "link-arg=-T",
+    "-C", "link-arg=kernel/x86/link.ld",
+    "-C", "target-feature=-mmx",
+    "-C", "no-redzone=y",
+]
