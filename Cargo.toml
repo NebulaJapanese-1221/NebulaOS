@@ -4,6 +4,7 @@ members = [
     "drivers",
     "gui",
     "lib",
+    "common",
 ]
 resolver = "2"
 

@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 lib = { path = "../lib" }
+common = { path = "../common" }
 
 [lib]
 crate-type = ["staticlib"]
