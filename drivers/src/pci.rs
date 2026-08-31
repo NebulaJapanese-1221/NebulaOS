@@ -91,7 +91,7 @@ unsafe fn pci_enumerate_bus() {
                 pdev.subclass = pci_read_config_byte(bus, device, function, 0x0A);
                 pdev.header_type = pci_read_config_byte(bus, device, function, 0x0E);
                 for i in 0..6 {
-                    pdev.bar[i] = pci_read_config_dword(bus, device, function, 0x10 + i * 4);
+                    pdev.bar[i] = pci_read_config_dword(bus, device, function, (0x10 + i * 4) as u8);
                 }
                 PCI_DEVICE_COUNT += 1;
             }

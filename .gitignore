@@ -3,6 +3,7 @@
 
 # Build output
 build/
+target/
 *.elf
 *.bin
 *.img

@@ -79,6 +79,12 @@ pub struct VbeModeInfo {
     pub reserved4: [u8; 189],
 }
 
+impl VbeModeInfo {
+    const fn zero() -> Self {
+        VbeModeInfo { mode_attributes: 0, win_a_attributes: 0, win_b_attributes: 0, win_granularity: 0, win_size: 0, win_a_segment: 0, win_b_segment: 0, win_func: 0, bytes_per_scanline: 0, x_resolution: 0, y_resolution: 0, x_char_size: 0, y_char_size: 0, number_of_planes: 0, bits_per_pixel: 0, number_of_banks: 0, memory_model: 0, bank_size: 0, number_of_image_pages: 0, reserved1: 0, red_mask_size: 0, red_field_position: 0, green_mask_size: 0, green_field_position: 0, blue_mask_size: 0, blue_field_position: 0, reserved_mask_size: 0, reserved_field_position: 0, direct_color_mode_info: 0, phys_base_ptr: 0, reserved2: 0, reserved3: 0, linear_bytes_per_scanline: 0, bnk_number_of_image_pages: 0, linear_number_of_image_pages: 0, linear_red_mask_size: 0, linear_red_field_position: 0, linear_green_mask_size: 0, linear_green_field_position: 0, linear_blue_mask_size: 0, linear_blue_field_position: 0, linear_reserved_mask_size: 0, linear_reserved_field_position: 0, max_pixel_clock: 0, reserved4: [0; 189] }
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct VesaState {

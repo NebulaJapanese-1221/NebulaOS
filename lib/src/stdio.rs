@@ -1,4 +1,5 @@
 use crate::common::vga;
+use crate::string;
 
 pub unsafe fn putchar(c: i32) -> i32 {
     if c == '\n' as i32 {
@@ -16,21 +17,21 @@ pub unsafe fn puts(s: *const u8) -> i32 {
     0
 }
 
-pub unsafe fn printf(format: *const u8, _args: ...) -> i32 {
+pub unsafe extern "C" fn printf(format: *const u8, _args: ...) -> i32 {
     vga::puts(format);
     0
 }
 
-pub unsafe fn sprintf(_buffer: *mut u8, _format: *const u8, _args: ...) -> i32 {
+pub unsafe extern "C" fn sprintf(_buffer: *mut u8, _format: *const u8, _args: ...) -> i32 {
     0
 }
 
-pub unsafe fn snprintf(buffer: *mut u8, size: usize, format: *const u8, _args: ...) -> i32 {
-    let len = crate::lib::string::strlen(format);
+pub unsafe extern "C" fn snprintf(buffer: *mut u8, size: usize, format: *const u8, _args: ...) -> i32 {
+    let len = string::strlen(format);
     if len >= size {
         size as i32
     } else {
-        crate::lib::string::strcpy(buffer, format);
+        string::strcpy(buffer, format);
         len as i32
     }
 }

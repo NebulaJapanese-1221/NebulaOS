@@ -1,4 +1,5 @@
 #![allow(unused_imports)]
+use core::arch::asm;
 use crate::nebula;
 use crate::PACKED;
 
@@ -116,11 +117,5 @@ pub unsafe fn gdt_flush() {
     unsafe {
         asm!("lgdt [rax]", in("rax") &GDT_PTR, options(nomem, nostack));
         asm!("mov eax, 0x10");
-        let eax_val: u32 = 0x10;
-        asm!("mov ds, eax", out("ds") _, in("eax") eax_val);
-        asm!("mov es, eax", out("es") _, in("eax") eax_val);
-        asm!("mov fs, eax", out("fs") _, in("eax") eax_val);
-        asm!("mov gs, eax", out("gs") _, in("eax") eax_val);
-        asm!("mov ss, eax", out("ss") _, in("eax") eax_val);
     }
 }

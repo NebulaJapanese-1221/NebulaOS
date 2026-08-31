@@ -7,6 +7,7 @@ pub mod pci;
 pub mod acpi;
 pub mod ata;
 pub mod vesa;
+pub mod common;
 
 pub use keyboard::*;
 pub use mouse::*;
