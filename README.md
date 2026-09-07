@@ -32,7 +32,7 @@ This project is licenced by the GNU General Public Licence v3.0
 
 ## Version
 
-Current version: 0.0.2
+Current version: 0.0.1
 
 ## Features
 
