@@ -1,103 +1,125 @@
-; NebulaOS x86 GRUB Multiboot Bootloader
-; ========================================
+; NebulaBoot - NebulaOS x86 Bootloader (Loaded by NebulaBoot)
+; ============================================================
 ;
-; Multiboot-compliant bootloader for x86 architecture
-; Loaded by GRUB, which provides multiboot information
+; This is the second stage loader that runs in 32-bit protected mode
+; Loaded by NebulaBoot stage 1, switches to protected mode and jumps to kernel
 ;
 ; NASM syntax
 
-bits 32
+bits 16
+org 0x10000
 
 ; -----------------------------------------------------------------------------
-; Multiboot Header
+; Stage 2 Entry (Real Mode)
 ; -----------------------------------------------------------------------------
-; Must be aligned to 4 bytes and in the first 8KB of the kernel
-; Multiboot magic: 0x1BADB002
-; Flags: 0x00010003 (align modules, request memory map, request graphics)
-
-MBALIGN     equ  1 << 0
-MEMINFO     equ  1 << 1
-GRAPHICS    equ  1 << 2
-FLAGS       equ  MBALIGN | MEMINFO
-MAGIC       equ  0x1BADB002
-CHECKSUM    equ  -(MAGIC + FLAGS)
-
-section .multiboot_header
-align 4
-multiboot_header:
-    dd MAGIC
-    dd FLAGS
-    dd CHECKSUM
-    dd 0x1000      ; header_addr
-    dd 0x1000      ; load_addr
-    dd 0            ; load_end_addr
-    dd 0            ; bss_end_addr
-    dd 0            ; entry_addr
-
-; -----------------------------------------------------------------------------
-; Kernel Entry Point
-; -----------------------------------------------------------------------------
-section .text
-global _start
-extern kernel_main
-
-_start:
-    ; Disable interrupts
+_start16:
+    ; Set up segments
     cli
-
-    ; Set up stack
-    mov esp, stack_top
-
-    ; Save multiboot magic and info pointer
-    ; EAX = multiboot magic (0x2BADB002)
-    ; EBX = multiboot info structure pointer
-    mov [multiboot_magic], eax
-    mov [multiboot_info], ebx
-
-    ; Print boot message using VGA (since we're in protected mode)
-    mov esi, boot_msg
-    call vga_puts
-
-    ; Call C kernel entry
-    push ebx        ; multiboot info pointer
-    push eax        ; multiboot magic
-    call kernel_main
-
-    ; If kernel returns, halt
-.halt:
-    cli
-    hlt
-    jmp .halt
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    mov sp, 0x7C00
+    
+    ; Enable A20
+    call enable_a20
+    
+    ; Load GDT
+    lgdt [gdt32_ptr]
+    
+    ; Enable protected mode
+    mov eax, cr0
+    or eax, 1
+    mov cr0, eax
+    
+    ; Far jump to 32-bit code
+    jmp CODE32_SEL:_start32
 
 ; -----------------------------------------------------------------------------
-; Simple VGA output for early boot messages
+; Enable A20 line
 ; -----------------------------------------------------------------------------
-vga_puts:
-    pusha
-    mov edi, (VGA_BUFFER + 0x0F00)  ; White on blue, start at row 24
-.next_char:
-    lodsb
-    test al, al
-    jz .done
-    mov ah, 0x0F
-    stosw
-    jmp .next_char
-.done:
-    popa
+enable_a20:
+    call a20_wait
+    mov al, 0xAD
+    out 0x64, al
+    call a20_wait
+    mov al, 0xD0
+    out 0x64, al
+    call a20_wait2
+    in al, 0x60
+    push ax
+    call a20_wait
+    mov al, 0xD1
+    out 0x64, al
+    call a20_wait
+    pop ax
+    or al, 2
+    out 0x60, al
+    call a20_wait
+    mov al, 0xAE
+    out 0x64, al
+    call a20_wait
+    ret
+
+a20_wait:
+    in al, 0x64
+    test al, 2
+    jnz a20_wait
+    ret
+
+a20_wait2:
+    in al, 0x64
+    test al, 1
+    jz a20_wait2
     ret
 
 ; -----------------------------------------------------------------------------
-; Data Section
+; 32-bit Protected Mode Entry
 ; -----------------------------------------------------------------------------
-section .data
-boot_msg db "NebulaOS x86 Kernel Booting via GRUB...", 0
+bits 32
+_start32:
+    ; Set up 32-bit segments
+    mov ax, DATA32_SEL
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+    mov esp, stack_top
+    
+    ; Enable SSE
+    mov eax, cr0
+    and eax, ~(1 << 2)  ; Clear EM bit
+    or eax, (1 << 1)    ; Set MP bit
+    mov cr0, eax
+    mov eax, cr4
+    or eax, (1 << 9) | (1 << 10)  ; OSFXSR | OSXMMEXCPT
+    mov cr4, eax
+    
+    ; Call C kernel entry
+    extern kernel_main
+    call kernel_main
+    
+    ; Halt on return
+    cli
+    hlt
+    jmp $
 
-; Multiboot info storage
-multiboot_magic dd 0
-multiboot_info  dd 0
+; -----------------------------------------------------------------------------
+; GDT for 32-bit Protected Mode
+; -----------------------------------------------------------------------------
+gdt32_start:
+    dq 0                            ; Null descriptor
+    dq 0x00CF9A000000FFFF           ; Code segment (0x08)
+    dq 0x00CF92000000FFFF           ; Data segment (0x10)
+gdt32_end:
 
-; VGA constants
-VGA_BUFFER equ 0xB8000
+gdt32_ptr:
+    dw gdt32_end - gdt32_start - 1
+    dd gdt32_start
+
+CODE32_SEL equ 0x08
+DATA32_SEL equ 0x10
 
 ; -----------------------------------------------------------------------------
 ; BSS Section
@@ -105,5 +127,5 @@ VGA_BUFFER equ 0xB8000
 section .bss
 align 16
 stack_bottom:
-    resb 16384      ; 16KB stack
+    resb 16384  ; 16KB stack
 stack_top:

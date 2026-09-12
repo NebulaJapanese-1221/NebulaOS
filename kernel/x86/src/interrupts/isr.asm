@@ -25,6 +25,13 @@ isr%1:
     jmp isr_common
 %endmacro
 
+%macro ISR_ERRCODE_IST 1
+isr%1:
+    cli
+    push %1
+    jmp isr_special_%1
+%endmacro
+
 ; -----------------------------------------------------------------------------
 ; Common IRQ macro
 ; -----------------------------------------------------------------------------
@@ -47,13 +54,13 @@ ISR_NOERRCODE 4   ; Overflow
 ISR_NOERRCODE 5   ; Bound range
 ISR_NOERRCODE 6   ; Invalid opcode
 ISR_NOERRCODE 7   ; Device not available
-ISR_ERRCODE   8   ; Double fault
+ISR_ERRCODE_IST 8   ; Double fault
 ISR_NOERRCODE 9   ; Coprocessor segment overrun
 ISR_ERRCODE   10  ; Invalid TSS
 ISR_ERRCODE   11  ; Segment not present
 ISR_ERRCODE   12  ; Stack segment fault
-ISR_ERRCODE   13  ; General protection fault
-ISR_ERRCODE   14  ; Page fault
+ISR_ERRCODE_IST 13  ; General protection fault
+ISR_ERRCODE_IST 14  ; Page fault
 ISR_NOERRCODE 15  ; Reserved
 ISR_NOERRCODE 16  ; x87 Floating-point exception
 ISR_ERRCODE   17  ; Alignment check
@@ -71,6 +78,18 @@ ISR_NOERRCODE 28  ; Reserved
 ISR_NOERRCODE 29  ; Reserved
 ISR_NOERRCODE 30  ; Reserved
 ISR_NOERRCODE 31  ; Reserved
+
+; -----------------------------------------------------------------------------
+; Special handlers for critical exceptions
+; -----------------------------------------------------------------------------
+isr_special_8:
+    jmp isr_double_fault_handler
+
+isr_special_13:
+    jmp isr_gpf_handler
+
+isr_special_14:
+    jmp isr_page_fault_handler
 
 ; -----------------------------------------------------------------------------
 ; IRQ stubs
@@ -133,6 +152,84 @@ isr_common:
     
     ; Return from interrupt
     iret
+
+; -----------------------------------------------------------------------------
+; Special exception handlers (with error screen)
+; -----------------------------------------------------------------------------
+isr_double_fault_handler:
+    pusha
+    push ds
+    push es
+    push fs
+    push gs
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    push esp
+    extern handle_double_fault
+    call handle_double_fault
+    add esp, 4
+    pop gs
+    pop fs
+    pop es
+    pop ds
+    popa
+    add esp, 8
+    cli
+    hlt
+    jmp $
+
+isr_gpf_handler:
+    pusha
+    push ds
+    push es
+    push fs
+    push gs
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    push esp
+    extern handle_gpf
+    call handle_gpf
+    add esp, 4
+    pop gs
+    pop fs
+    pop es
+    pop ds
+    popa
+    add esp, 8
+    cli
+    hlt
+    jmp $
+
+isr_page_fault_handler:
+    pusha
+    push ds
+    push es
+    push fs
+    push gs
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    push esp
+    extern handle_page_fault
+    call handle_page_fault
+    add esp, 4
+    pop gs
+    pop fs
+    pop es
+    pop ds
+    popa
+    add esp, 8
+    cli
+    hlt
+    jmp $
 
 ; -----------------------------------------------------------------------------
 ; Common IRQ handler

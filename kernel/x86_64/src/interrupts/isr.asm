@@ -24,6 +24,13 @@ isr%1:
     jmp isr_common
 %endmacro
 
+%macro ISR_ERRCODE_IST 2
+isr%1:
+    cli
+    push %1
+    jmp %2
+%endmacro
+
 ; -----------------------------------------------------------------------------
 ; Common IRQ macro
 ; -----------------------------------------------------------------------------
@@ -46,16 +53,16 @@ ISR_NOERRCODE 4
 ISR_NOERRCODE 5
 ISR_NOERRCODE 6
 ISR_NOERRCODE 7
-ISR_ERRCODE   8
+ISR_ERRCODE_IST 8, isr_double_fault_stub
 ISR_NOERRCODE 9
-ISR_ERRCODE   10
-ISR_ERRCODE   11
-ISR_ERRCODE   12
-ISR_ERRCODE   13
-ISR_ERRCODE   14
+ISR_ERRCODE 10
+ISR_ERRCODE 11
+ISR_ERRCODE 12
+ISR_ERRCODE_IST 13, isr_gpf_stub
+ISR_ERRCODE_IST 14, isr_page_fault_stub
 ISR_NOERRCODE 15
 ISR_NOERRCODE 16
-ISR_ERRCODE   17
+ISR_ERRCODE 17
 ISR_NOERRCODE 18
 ISR_NOERRCODE 19
 ISR_NOERRCODE 20
@@ -70,6 +77,25 @@ ISR_NOERRCODE 28
 ISR_NOERRCODE 29
 ISR_NOERRCODE 30
 ISR_NOERRCODE 31
+
+; -----------------------------------------------------------------------------
+; Special handlers with IST (Interrupt Stack Table)
+; These use separate stacks to prevent stack overflow during faults
+; -----------------------------------------------------------------------------
+isr_double_fault_stub:
+    cli
+    push 8
+    jmp isr_common_ist1
+
+isr_gpf_stub:
+    cli
+    push 13
+    jmp isr_common_ist2
+
+isr_page_fault_stub:
+    cli
+    push 14
+    jmp isr_common_ist3
 
 ; -----------------------------------------------------------------------------
 ; IRQ stubs (IRQ 0-15)
@@ -92,8 +118,7 @@ IRQ 14, 46
 IRQ 15, 47
 
 ; -----------------------------------------------------------------------------
-; Common ISR handler
-; Saves all 64-bit registers and calls C handler
+; Common ISR handler (standard)
 ; -----------------------------------------------------------------------------
 isr_common:
     push rax
@@ -146,6 +171,106 @@ isr_common:
 
     add rsp, 16
     iretq
+
+; -----------------------------------------------------------------------------
+; Common ISR handler with IST (uses separate stack)
+; -----------------------------------------------------------------------------
+isr_common_ist1:
+    ; IST1 for double fault - stack already switched by CPU
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push rbp
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+
+    mov rdi, rsp
+    extern handle_double_fault
+    call handle_double_fault
+
+    ; Never returns
+    cli
+    hlt
+    jmp $
+
+isr_common_ist2:
+    ; IST2 for GPF
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push rbp
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+
+    mov rdi, rsp
+    extern handle_gpf
+    call handle_gpf
+
+    cli
+    hlt
+    jmp $
+
+isr_common_ist3:
+    ; IST3 for page fault
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push rbp
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+
+    mov rdi, rsp
+    extern handle_page_fault
+    call handle_page_fault
+
+    cli
+    hlt
+    jmp $
 
 ; -----------------------------------------------------------------------------
 ; Common IRQ handler
@@ -262,3 +387,8 @@ global irq12
 global irq13
 global irq14
 global irq15
+
+; Special handlers
+global isr_double_fault_stub
+global isr_gpf_stub
+global isr_page_fault_stub

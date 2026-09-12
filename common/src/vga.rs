@@ -164,3 +164,35 @@ pub unsafe fn disable_cursor() {
     io::outb(0x3D4, 0x0A);
     io::outb(0x3D5, 0x20);
 }
+
+pub unsafe fn putc(x: usize, y: usize, c: u8) {
+    if x < VGA_WIDTH && y < VGA_HEIGHT {
+        let idx = y * VGA_WIDTH + x;
+        (*VGA_MEM.add(idx)).character = c;
+        (*VGA_MEM.add(idx)).color = CURRENT_COLOR;
+    }
+}
+
+pub unsafe fn puts_at(x: usize, y: usize, s: *const u8) {
+    let mut i = 0;
+    let mut cx = x;
+    let mut cy = y;
+    while *s.add(i) != 0 {
+        let c = *s.add(i);
+        if c == b'\n' {
+            cx = x;
+            cy += 1;
+        } else {
+            putc(cx, cy, c);
+            cx += 1;
+            if cx >= VGA_WIDTH {
+                cx = x;
+                cy += 1;
+            }
+        }
+        i += 1;
+        if cy >= VGA_HEIGHT {
+            break;
+        }
+    }
+}

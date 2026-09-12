@@ -9,7 +9,7 @@ extern "C" {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn kernel_main(_info: u64) {
+pub unsafe extern "C" fn kernel_main(_kernel_load_addr: u64) {
     init_gdt64();
     init_idt64();
     init_paging64();

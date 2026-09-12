@@ -8,16 +8,7 @@ extern "C" {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn kernel_main(magic: u32, _info: u32) {
-    if magic != 0x2BADB002 {
-        common::vga::init();
-        common::vga::set_color(common::vga::VGA_COLOR_RED);
-        common::vga::set_bg_color(common::vga::VGA_COLOR_BLACK);
-        common::vga::clear();
-        common::vga::puts(b"ERROR: Invalid multiboot magic!\n\0" as *const u8 as *const u8);
-        loop { asm!("hlt"); }
-    }
-
+pub unsafe extern "C" fn kernel_main() {
     common::vga::init();
     common::vga::set_color(common::vga::VGA_COLOR_WHITE);
     common::vga::set_bg_color(common::vga::VGA_COLOR_BLUE);
