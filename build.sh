@@ -14,8 +14,9 @@ ARCH="${ARCH:-all}"
 
 create_dirs() {
     mkdir -p "$BUILD_DIR"
-    mkdir -p "$ISO_DIR/boot/grub"
     mkdir -p "$ISO_DIR/boot/nebulaos"
+    mkdir -p "$ISO_DIR/EFI/BOOT"
+    mkdir -p "$ISO_DIR/EFI/NEBULA"
 }
 
 clean() {
@@ -70,6 +71,34 @@ build_arch() {
     fi
 }
 
+build_nebula_boot() {
+    local arch="$1"
+    info "Building NebulaBoot for $arch..."
+
+    if [ "$arch" = "x86" ]; then
+        # BIOS bootloader (flat binary)
+        nasm -f bin "$PROJECT_DIR/boot/nebula_boot/x86/boot.asm" -o "$BUILD_DIR/nebula_boot_x86.bin"
+        if [ $? -ne 0 ]; then
+            error "NebulaBoot x86 build failed"
+            return 1
+        fi
+    else
+        # UEFI bootloader (PE32+)
+        nasm -f win64 "$PROJECT_DIR/boot/nebula_boot/x86_64/boot.asm" -o "$BUILD_DIR/boot_x86_64.obj"
+        if [ $? -ne 0 ]; then
+            error "NebulaBoot x86_64 build failed"
+            return 1
+        fi
+
+        x86_64-w64-mingw32-gcc -nostdlib -Wl,-entry,efi_main -Wl,-subsystem,efi_application \
+            -o "$BUILD_DIR/bootx64.efi" "$BUILD_DIR/boot_x86_64.obj"
+        if [ $? -ne 0 ]; then
+            error "NebulaBoot x86_64 link failed"
+            return 1
+        fi
+    fi
+}
+
 create_iso() {
     local arch="$1"
     info "Creating ISO for $arch..."
@@ -86,33 +115,52 @@ create_iso() {
     mkdir -p "$ISO_DIR/boot/nebulaos"
     cp "$KERNEL_FILE" "$ISO_DIR/boot/nebulaos/nebulaos_${arch}.elf"
 
-    cat > "$ISO_DIR/boot/grub/grub.cfg" <<EOF
-set timeout=5
-set default=0
+    if [ "$arch" = "x86" ]; then
+        # Build NebulaBoot for x86
+        build_nebula_boot x86 || return 1
 
-menuentry "NebulaOS $arch" {
-    multiboot2 /boot/nebulaos/nebulaos_${arch}.elf
-    boot
-}
-EOF
+        # Copy bootloader to ISO
+        cp "$BUILD_DIR/nebula_boot_x86.bin" "$ISO_DIR/boot/nebulaos/nebula_boot_x86.bin"
+        if [ $? -ne 0 ]; then
+            error "Failed to copy NebulaBoot x86"
+            return 1
+        fi
 
-    local GRUB_CORE="$ISO_DIR/boot/grub/i386-pc/core.img"
-    mkdir -p "$(dirname "$GRUB_CORE")"
+        # Create BIOS-bootable ISO with El Torito
+        xorriso -as mkisofs \
+            -R -b boot/nebulaos/nebula_boot_x86.bin \
+            -no-emul-boot \
+            -boot-load-size 4 \
+            -boot-info-table \
+            -o "$ISO_FILE" \
+            "$ISO_DIR"
+    else
+        # Build NebulaBoot for x86_64 (UEFI)
+        build_nebula_boot x86_64 || return 1
 
-    grub-mkimage -O i386-pc-pxe \
-        -o "$GRUB_CORE" \
-        -p /boot/grub \
-        -d /usr/lib/grub/i386-pc \
-        normal configfile multiboot2 linux
+        # Copy UEFI bootloader
+        cp "$BUILD_DIR/bootx64.efi" "$ISO_DIR/EFI/BOOT/BOOTX64.EFI"
+        if [ $? -ne 0 ]; then
+            error "Failed to copy UEFI bootloader"
+            return 1
+        fi
 
-    xorriso -as mkisofs \
-        -R -b boot/grub/i386-pc/core.img \
-        -c boot/grub/boot.cat \
-        -no-emul-boot \
-        -boot-load-size 4 \
-        -boot-info-table \
-        -o "$ISO_FILE" \
-        "$ISO_DIR"
+        # Also copy kernel to EFI/NEBULA for the bootloader to find
+        cp "$KERNEL_FILE" "$ISO_DIR/EFI/NEBULA/nebulaos_x86_64.elf"
+        if [ $? -ne 0 ]; then
+            error "Failed to copy kernel to EFI"
+            return 1
+        fi
+
+        # Create UEFI-bootable ISO
+        xorriso -as mkisofs \
+            -R \
+            -eltorito-alt-boot \
+            -e EFI/BOOT/BOOTX64.EFI \
+            -no-emul-boot \
+            -o "$ISO_FILE" \
+            "$ISO_DIR"
+    fi
 
     info "ISO created: $ISO_FILE"
 }
