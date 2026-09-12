@@ -1,8 +1,9 @@
 [build]
 target = "x86_64-unknown-none"
+host = "x86_64-pc-windows-gnu"
 
 [target.x86_64-unknown-none]
-linker = "x86_64-linux-gnu-ld"
+linker = "rust-lld"
 rustflags = [
     "-C", "link-arg=-T",
     "-C", "link-arg=kernel/x86_64/link.ld",
@@ -11,10 +12,16 @@ rustflags = [
 ]
 
 [target.i686-unknown-none]
-linker = "i686-linux-gnu-ld"
+linker = "rust-lld"
 rustflags = [
     "-C", "link-arg=-T",
     "-C", "link-arg=kernel/x86/link.ld",
     "-C", "target-feature=-mmx",
     "-C", "no-redzone=y",
 ]
+
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
+
+[target.i686-pc-windows-gnu]
+linker = "i686-w64-mingw32-gcc"

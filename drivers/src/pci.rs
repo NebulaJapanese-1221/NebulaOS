@@ -69,7 +69,7 @@ unsafe fn pci_read_config_dword(bus: u8, device: u8, function: u8, offset: u8) -
 unsafe fn pci_enumerate_bus() {
     PCI_DEVICE_COUNT = 0;
     vga::puts(b"PCI: Enumerating bus...\n\0" as *const u8 as *const u8);
-    for bus in 0..256 {
+    for bus in 0u8..=255 {
         for device in 0..32 {
             if !pci_device_exists(bus, device, 0) {
                 continue;

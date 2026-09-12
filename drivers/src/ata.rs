@@ -34,7 +34,7 @@ pub unsafe extern "C" fn ata_init() -> i32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn ata_read_sectors(lba: u32, count: u8, buffer: *mut u8) -> i32 {
-    if buffer.is_null() || count == 0 || count > 256 {
+    if buffer.is_null() || count == 0 || count > 128 {
         return -1;
     }
     let base = 0x1F0;
@@ -45,7 +45,7 @@ pub unsafe extern "C" fn ata_read_sectors(lba: u32, count: u8, buffer: *mut u8) 
             break;
         }
     }
-    io::outb(base + 0x06, select | 0xE0 | ((lba >> 24) & 0x0F));
+    io::outb(base + 0x06, (select | 0xE0 | ((lba >> 24) & 0x0F)) as u8);
     io::outb(base + 0x01, 0x00);
     io::outb(base + 0x02, count);
     io::outb(base + 0x03, (lba & 0xFF) as u8);

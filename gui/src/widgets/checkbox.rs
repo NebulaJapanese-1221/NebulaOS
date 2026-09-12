@@ -1,4 +1,4 @@
-use crate::gui::widget::Widget;
+use crate::widgets::widget::Widget;
 
 pub struct Checkbox {
     pub widget: Widget,

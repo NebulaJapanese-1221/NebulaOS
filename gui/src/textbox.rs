@@ -1,4 +1,4 @@
-use crate::gui::Control;
+use crate::control::Control;
 
 pub struct TextBox {
     pub control: Control,

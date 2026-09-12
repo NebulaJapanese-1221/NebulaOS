@@ -87,35 +87,22 @@ pub const GDT_FLAGS_32BIT: u8 = 0x40;
 pub const GDT_FLAGS_64BIT: u8 = 0x20;
 pub const GDT_FLAGS_AVL: u8 = 0x10;
 
-static mut GDT: [GdtEntry; 256] = [GdtEntry { limit_low: 0, base_low: 0, base_mid: 0, access: 0, limit_high: 0, base_high: 0 }; 256];
-static mut GDT_PTR: GdtPtr = GdtPtr { limit: 0, base: 0 };
-static mut TSS: Tss = Tss { prev_tss: 0, reserved1: 0, esp0: 0, ss0: 0, reserved2: 0, esp1: 0, ss1: 0, reserved3: 0, esp2: 0, ss2: 0, reserved4: 0, cr3: 0, eip: 0, eflags: 0, eax: 0, ecx: 0, edx: 0, ebx: 0, esp: 0, ebp: 0, esi: 0, edi: 0, es: 0, reserved5: 0, cs: 0, reserved6: 0, ss: 0, reserved7: 0, ds: 0, reserved8: 0, fs: 0, reserved9: 0, gs: 0, reserved10: 0, ldt: 0, reserved11: 0, trap: 0, iomap_base: 0 };
-
+#[cfg(target_arch = "x86")]
 pub unsafe fn init_gdt() {
-    GDT_PTR.limit = (core::mem::size_of::<[GdtEntry; 256]>() - 1) as u16;
-    GDT_PTR.base = &mut GDT as *mut _ as u32;
-
-    set_gate(0, 0, 0, 0, 0);
-    set_gate(1, 0, 0xFFFFFFFF, GDT_ACCESS_PRESENT | GDT_ACCESS_PRIV_0 | GDT_ACCESS_TYPE_CODE | GDT_ACCESS_READABLE, GDT_FLAGS_GRANULARITY | GDT_FLAGS_32BIT);
-    set_gate(2, 0, 0xFFFFFFFF, GDT_ACCESS_PRESENT | GDT_ACCESS_PRIV_0 | GDT_ACCESS_TYPE_DATA | GDT_ACCESS_WRITABLE, GDT_FLAGS_GRANULARITY | GDT_FLAGS_32BIT);
-    set_gate(3, 0, 0xFFFFFFFF, GDT_ACCESS_PRESENT | GDT_ACCESS_PRIV_3 | GDT_ACCESS_TYPE_CODE | GDT_ACCESS_READABLE, GDT_FLAGS_GRANULARITY | GDT_FLAGS_32BIT);
-    set_gate(4, 0, 0xFFFFFFFF, GDT_ACCESS_PRESENT | GDT_ACCESS_PRIV_3 | GDT_ACCESS_TYPE_DATA | GDT_ACCESS_WRITABLE, GDT_FLAGS_GRANULARITY | GDT_FLAGS_32BIT);
-
-    gdt_flush();
+    // x86 GDT initialization is in kernel/src/x86/gdt.rs
 }
 
+#[cfg(target_arch = "x86_64")]
+pub unsafe fn init_gdt() {
+    // x86_64 GDT initialization is in kernel/src/x86_64/gdt.rs
+}
+
+#[cfg(target_arch = "x86")]
 pub unsafe fn set_gate(num: i32, base: u32, limit: u32, access: u8, flags: u8) {
-    GDT[num as usize].base_low = (base & 0xFFFF) as u16;
-    GDT[num as usize].base_mid = ((base >> 16) & 0xFF) as u8;
-    GDT[num as usize].base_high = ((base >> 24) & 0xFF) as u8;
-    GDT[num as usize].limit_low = (limit & 0xFFFF) as u16;
-    GDT[num as usize].limit_high = ((flags & 0xF0) as u32 | ((limit >> 16) & 0x0F)) as u8;
-    GDT[num as usize].access = access;
+    // x86 implementation in kernel/src/x86/gdt.rs
 }
 
-pub unsafe fn gdt_flush() {
-    unsafe {
-        asm!("lgdt [rax]", in("rax") &GDT_PTR, options(nomem, nostack));
-        asm!("mov eax, 0x10");
-    }
+#[cfg(target_arch = "x86_64")]
+pub unsafe fn set_gate(num: i32, base: u64, limit: u64, access: u8, flags: u8) {
+    // x86_64 implementation in kernel/src/x86_64/gdt.rs
 }

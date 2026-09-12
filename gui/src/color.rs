@@ -10,6 +10,6 @@ impl Color {
         Color { r, g, b, a }
     }
     pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
-        Color { r, g, b, 255 }
+        Color { r, g, b, a: 255 }
     }
 }

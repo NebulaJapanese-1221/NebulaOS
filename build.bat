@@ -71,7 +71,7 @@ exit /b %ERRORLEVEL%
 :build_arch
 set "arch=%~1"
 if /i "%arch%"=="x86" (
-    set "TARGET=i686-unknown-none"
+    set "TARGET=%PROJECT_DIR%\targets\x86.json"
     set "KERNEL_ELF=%BUILD_DIR%\nebulaos_x86.elf"
     set "KERNEL_BIN=%BUILD_DIR%\nebulaos_x86.bin"
 ) else (
@@ -82,7 +82,7 @@ if /i "%arch%"=="x86" (
 
 echo [INFO] Building NebulaOS for %arch%...
 echo [INFO]   Building Rust kernel for %TARGET%...
-cargo build --target "%TARGET%" --release
+cargo build -Zjson-target-spec -Zbuild-std=core,alloc --target "%TARGET%" --release
 if errorlevel 1 (
     echo [ERROR] Rust build failed for %arch%
     exit /b 1

@@ -1,4 +1,4 @@
-use crate::gui::Window;
+use crate::window::Window;
 
 pub struct Terminal {
     pub window: Window,

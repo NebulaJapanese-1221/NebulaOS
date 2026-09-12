@@ -138,129 +138,142 @@ pub unsafe extern "C" fn default_interrupt_handler(regs: *mut Registers) {
 
 // Exception handlers with error screen
 pub unsafe extern "C" fn handle_double_fault(regs: *mut Registers) {
-    show_error_screen(8, "DOUBLE FAULT", "A double fault occurred. The system will halt.", (*regs).error_code);
+    unsafe { show_error_screen(8, "DOUBLE FAULT", "A double fault occurred. The system will halt.", (*regs).error_code); }
 }
 
 pub unsafe extern "C" fn handle_gpf(regs: *mut Registers) {
-    show_error_screen(13, "GENERAL PROTECTION FAULT", "A general protection fault occurred.", (*regs).error_code);
+    unsafe { show_error_screen(13, "GENERAL PROTECTION FAULT", "A general protection fault occurred.", (*regs).error_code); }
 }
 
 pub unsafe extern "C" fn handle_page_fault(regs: *mut Registers) {
-    let cr2: u64;
-    asm!("mov {}, cr2", out(reg) cr2);
-    show_page_fault_screen((*regs).error_code, cr2);
+    #[cfg(target_arch = "x86_64")]
+    {
+        let cr2: u64;
+        unsafe { asm!("mov {}, cr2", out(reg) cr2); }
+        unsafe { show_page_fault_screen((*regs).error_code, cr2); }
+    }
+    #[cfg(target_arch = "x86")]
+    {
+        let cr2: u32;
+        unsafe { asm!("mov {}, cr2", out(reg) cr2); }
+        unsafe { show_page_fault_screen((*regs).error_code, cr2 as u64); }
+    }
 }
 
 fn show_error_screen(vector: u32, title: &str, message: &str, error_code: u32) {
     use crate::vga;
     
-    // Disable interrupts
-    asm!("cli");
-    
-    // Set up error screen
-    vga::init();
-    vga::set_color(vga::VGA_COLOR_WHITE);
-    vga::set_bg_color(vga::VGA_COLOR_RED);
-    vga::clear();
-    
-    // Draw border
-    for i in 0..80 {
-        vga::putc(i, 0, b'=' as u8);
-        vga::putc(i, 24, b'=' as u8);
-    }
-    for i in 0..25 {
-        vga::putc(0, i, b'|' as u8);
-        vga::putc(79, i, b'|' as u8);
-    }
-    
-    // Print title
-    vga::set_color(vga::VGA_COLOR_YELLOW);
-    vga::set_bg_color(vga::VGA_COLOR_RED);
-    vga::puts_at(10, 2, b"*** NEBULAOS EXCEPTION ***\0" as *const u8 as *const u8);
-    
-    vga::set_color(vga::VGA_COLOR_WHITE);
-    vga::puts_at(10, 4, title.as_ptr() as *const u8);
-    
-    vga::puts_at(10, 6, message.as_ptr() as *const u8);
-    
-    // Print error code
-    vga::puts_at(10, 8, b"Exception Vector: \0" as *const u8 as *const u8);
-    print_hex_at(28, 8, vector as u64);
-    
-    vga::puts_at(10, 9, b"Error Code:       \0" as *const u8 as *const u8);
-    print_hex_at(28, 9, error_code as u64);
-    
-    // Print register dump
-    vga::puts_at(10, 11, b"Register Dump:\0" as *const u8 as *const u8);
-    
-    // Halt system
-    vga::puts_at(10, 20, b"System halted. Press any key to reboot...\0" as *const u8 as *const u8);
-    
-    loop {
-        asm!("hlt");
+    unsafe {
+        // Disable interrupts
+        asm!("cli");
+        
+        // Set up error screen
+        vga::init();
+        vga::set_color(vga::VGA_COLOR_WHITE);
+        vga::set_bg_color(vga::VGA_COLOR_RED);
+        vga::clear();
+        
+        // Draw border
+        for i in 0..80 {
+            vga::putc(i, 0, b'=' as u8);
+            vga::putc(i, 24, b'=' as u8);
+        }
+        for i in 0..25 {
+            vga::putc(0, i, b'|' as u8);
+            vga::putc(79, i, b'|' as u8);
+        }
+        
+        // Print title
+        vga::set_color(vga::VGA_COLOR_YELLOW);
+        vga::set_bg_color(vga::VGA_COLOR_RED);
+        vga::puts_at(10, 2, b"*** NEBULAOS EXCEPTION ***\0" as *const u8 as *const u8);
+        
+        vga::set_color(vga::VGA_COLOR_WHITE);
+        vga::puts_at(10, 4, title.as_ptr() as *const u8);
+        
+        vga::puts_at(10, 6, message.as_ptr() as *const u8);
+        
+        // Print error code
+        vga::puts_at(10, 8, b"Exception Vector: \0" as *const u8 as *const u8);
+        print_hex_at(28, 8, vector as u64);
+        
+        vga::puts_at(10, 9, b"Error Code:       \0" as *const u8 as *const u8);
+        print_hex_at(28, 9, error_code as u64);
+        
+        // Print register dump
+        vga::puts_at(10, 11, b"Register Dump:\0" as *const u8 as *const u8);
+        
+        // Halt system
+        vga::puts_at(10, 20, b"System halted. Press any key to reboot...\0" as *const u8 as *const u8);
+        
+        loop {
+            asm!("hlt");
+        }
     }
 }
 
 fn show_page_fault_screen(error_code: u32, cr2: u64) {
     use crate::vga;
     
-    asm!("cli");
-    
-    vga::init();
-    vga::set_color(vga::VGA_COLOR_WHITE);
-    vga::set_bg_color(vga::VGA_COLOR_RED);
-    vga::clear();
-    
-    for i in 0..80 {
-        vga::putc(i, 0, b'=' as u8);
-        vga::putc(i, 24, b'=' as u8);
-    }
-    for i in 0..25 {
-        vga::putc(0, i, b'|' as u8);
-        vga::putc(79, i, b'|' as u8);
-    }
-    
-    vga::set_color(vga::VGA_COLOR_YELLOW);
-    vga::set_bg_color(vga::VGA_COLOR_RED);
-    vga::puts_at(10, 2, b"*** NEBULAOS PAGE FAULT ***\0" as *const u8 as *const u8);
-    
-    vga::set_color(vga::VGA_COLOR_WHITE);
-    vga::puts_at(10, 4, b"A page fault occurred.\0" as *const u8 as *const u8);
-    
-    vga::puts_at(10, 6, b"Faulting Address: \0" as *const u8 as *const u8);
-    print_hex_at(28, 6, cr2);
-    
-    vga::puts_at(10, 7, b"Error Code:       \0" as *const u8 as *const u8);
-    print_hex_at(28, 7, error_code as u64);
-    
-    // Decode error code
-    vga::puts_at(10, 9, b"Error Details:\0" as *const u8 as *const u8);
-    if error_code & 1 != 0 {
-        vga::puts_at(12, 10, b"- Page not present\0" as *const u8 as *const u8);
-    } else {
-        vga::puts_at(12, 10, b"- Page protection violation\0" as *const u8 as *const u8);
-    }
-    if error_code & 2 != 0 {
-        vga::puts_at(12, 11, b"- Write access\0" as *const u8 as *const u8);
-    } else {
-        vga::puts_at(12, 11, b"- Read access\0" as *const u8 as *const u8);
-    }
-    if error_code & 4 != 0 {
-        vga::puts_at(12, 12, b"- User mode\0" as *const u8 as *const u8);
-    } else {
-        vga::puts_at(12, 12, b"- Kernel mode\0" as *const u8 as *const u8);
-    }
-    if error_code & 8 != 0 {
-        vga::puts_at(12, 13, b"- Reserved bit set\0" as *const u8 as *const u8);
-    }
-    if error_code & 16 != 0 {
-        vga::puts_at(12, 14, b"- Instruction fetch\0" as *const u8 as *const u8);
-    }
-    
-    vga::puts_at(10, 20, b"System halted. Press any key to reboot...\0" as *const u8 as *const u8);
-    
-    loop {
-        asm!("hlt");
+    unsafe {
+        asm!("cli");
+        
+        vga::init();
+        vga::set_color(vga::VGA_COLOR_WHITE);
+        vga::set_bg_color(vga::VGA_COLOR_RED);
+        vga::clear();
+        
+        for i in 0..80 {
+            vga::putc(i, 0, b'=' as u8);
+            vga::putc(i, 24, b'=' as u8);
+        }
+        for i in 0..25 {
+            vga::putc(0, i, b'|' as u8);
+            vga::putc(79, i, b'|' as u8);
+        }
+        
+        vga::set_color(vga::VGA_COLOR_YELLOW);
+        vga::set_bg_color(vga::VGA_COLOR_RED);
+        vga::puts_at(10, 2, b"*** NEBULAOS PAGE FAULT ***\0" as *const u8 as *const u8);
+        
+        vga::set_color(vga::VGA_COLOR_WHITE);
+        vga::puts_at(10, 4, b"A page fault occurred.\0" as *const u8 as *const u8);
+        
+        vga::puts_at(10, 6, b"Faulting Address: \0" as *const u8 as *const u8);
+        print_hex_at(28, 6, cr2);
+        
+        vga::puts_at(10, 7, b"Error Code:       \0" as *const u8 as *const u8);
+        print_hex_at(28, 7, error_code as u64);
+        
+        // Decode error code
+        vga::puts_at(10, 9, b"Error Details:\0" as *const u8 as *const u8);
+        if error_code & 1 != 0 {
+            vga::puts_at(12, 10, b"- Page not present\0" as *const u8 as *const u8);
+        } else {
+            vga::puts_at(12, 10, b"- Page protection violation\0" as *const u8 as *const u8);
+        }
+        if error_code & 2 != 0 {
+            vga::puts_at(12, 11, b"- Write access\0" as *const u8 as *const u8);
+        } else {
+            vga::puts_at(12, 11, b"- Read access\0" as *const u8 as *const u8);
+        }
+        if error_code & 4 != 0 {
+            vga::puts_at(12, 12, b"- User mode\0" as *const u8 as *const u8);
+        } else {
+            vga::puts_at(12, 12, b"- Kernel mode\0" as *const u8 as *const u8);
+        }
+        if error_code & 8 != 0 {
+            vga::puts_at(12, 13, b"- Reserved bit set\0" as *const u8 as *const u8);
+        }
+        if error_code & 16 != 0 {
+            vga::puts_at(12, 14, b"- Instruction fetch\0" as *const u8 as *const u8);
+        }
+        
+        vga::puts_at(10, 20, b"System halted. Press any key to reboot...\0" as *const u8 as *const u8);
+        
+        loop {
+            asm!("hlt");
+        }
     }
 }
 
@@ -274,5 +287,5 @@ fn print_hex_at(x: usize, y: usize, mut val: u64) {
         buf[i] = if digit < 10 { b'0' + digit } else { b'A' + (digit - 10) };
         val >>= 4;
     }
-    vga::puts_at(x, y, buf.as_ptr());
+    unsafe { vga::puts_at(x, y, buf.as_ptr()); }
 }

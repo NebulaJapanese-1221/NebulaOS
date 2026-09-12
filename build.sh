@@ -30,41 +30,27 @@ build_arch() {
     info "Building NebulaOS for $arch..."
 
     if [ "$arch" = "x86" ]; then
-        local TARGET="i686-unknown-none"
+        local TARGET="$PROJECT_DIR/targets/x86.json"
         local KERNEL_ELF="$BUILD_DIR/nebulaos_${arch}.elf"
         local KERNEL_BIN="$BUILD_DIR/nebulaos_${arch}.bin"
-        local LINK_SCRIPT="$PROJECT_DIR/kernel/x86/link.ld"
-        local ASM_FILES="$PROJECT_DIR/kernel/x86/src/interrupts/isr.asm $PROJECT_DIR/kernel/x86/src/syscall/syscall_entry.asm $PROJECT_DIR/kernel/x86/src/device/rm_trampoline.asm"
     else
         local TARGET="x86_64-unknown-none"
         local KERNEL_ELF="$BUILD_DIR/nebulaos_${arch}.elf"
         local KERNEL_BIN="$BUILD_DIR/nebulaos_${arch}.bin"
-        local LINK_SCRIPT="$PROJECT_DIR/kernel/x86_64/link.ld"
-        local ASM_FILES="$PROJECT_DIR/kernel/x86_64/src/interrupts/isr.asm $PROJECT_DIR/kernel/x86_64/src/syscall/syscall_entry.asm"
     fi
 
     info "  Building Rust kernel for $TARGET..."
     cd "$PROJECT_DIR"
-    if ! cargo build --target "$TARGET" --release; then
+    if ! cargo build -Zjson-target-spec -Zbuild-std=core,alloc --target "$TARGET" --release; then
         error "Rust build failed for $arch"
         return 1
     fi
 
-    if [ -f "target/$TARGET/release/kernel" ]; then
-        cp "target/$TARGET/release/kernel" "$KERNEL_ELF"
-    elif [ -f "target/$TARGET/release/libkernel.a" ]; then
-        error "Only static lib produced, need full kernel binary"
-        return 1
-    fi
-
+    # Find the kernel binary
+    find "target" -name "kernel" -type f 2>/dev/null | head -1 | xargs -I {} cp {} "$KERNEL_ELF" 2>/dev/null || true
+    
     if [ -f "$KERNEL_ELF" ]; then
-        info "  Converting to binary..."
-        if [ "$arch" = "x86" ]; then
-            i686-linux-gnu-objcopy -O binary "$KERNEL_ELF" "$KERNEL_BIN"
-        else
-            x86_64-linux-gnu-objcopy -O binary "$KERNEL_ELF" "$KERNEL_BIN"
-        fi
-        info "  Build complete: $KERNEL_BIN"
+        info "  Build complete: $KERNEL_ELF"
     else
         error "Kernel ELF not found after build"
         return 1

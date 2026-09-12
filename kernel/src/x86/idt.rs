@@ -7,5 +7,5 @@ extern "C" {
 
 #[no_mangle]
 pub unsafe extern "C" fn init_idt() {
-    idt::init_idt();
+    idt::init_idt64();
 }

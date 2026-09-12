@@ -6,15 +6,19 @@ NebulaOS is a hobby operating system project designed to run on x86 and x86_64 h
 
 ## Building
 
-### Prerequisites
+### Prerequisites (Linux)
 - NASM (Netwide Assembler)
-- GCC with 32-bit and 64-bit support
-- GNU Make
+- QEMU (for testing)
+- xorriso (for ISO creation)
+- Rust toolchain (nightly)
+
+### Prerequisites (Windows)
+- NASM (Netwide Assembler)
 - QEMU (for testing)
 - xorriso (for ISO creation)
 - mingw-w64 (for UEFI bootloader on x86_64)
-
-### Build Commands
+- Rust toolchain (nightly)
+### Build Commands (Linux)
 
 ```bash
 ./build.sh              # Build all (x86 and x86_64)
@@ -25,6 +29,15 @@ NebulaOS is a hobby operating system project designed to run on x86 and x86_64 h
 ./build.sh run          # Run in QEMU (x86_64 by default)
 ./build.sh run ARCH=x86 # Run x86 in QEMU
 ```
+
+### Build Commands (Windows)
+
+'''
+build.bat run # Run in QEMU (x86_64 by default)
+build.bat x86 # Build x86 version
+build.bat iso # Create buildable iso
+build.bat x86_64 Build x86_64 version
+build.bat clean # Clean all build files
 
 ## Bootloader
 
@@ -40,20 +53,3 @@ This project is licenced by the GNU General Public Licence v3.0
 
 ## Version
 
-Current version: 0.0.1
-
-## Features
-
-- x86 and x86_64 kernel support
-- Custom NebulaBoot bootloader with interactive menu
-- Buddy system + slab allocator for kernel heap
-- FAT32 filesystem driver with ATA PIO backend
-- ELF32/ELF64 binary loader
-- Process management with round-robin scheduler
-- Syscall interface (INT 0x80)
-- PCI, ACPI, serial, VESA, RTL8139, ATA drivers
-- VGA text mode and linear framebuffer GUI
-- Standard C library: stdio, stdlib, ctype
-- C++ runtime: new/delete, exception stubs, RTTI stubs
-- GUI framework: fonts, rendering, widgets, windows
-- Error screen for exceptions (double fault, GPF, page fault) to prevent triple faults

@@ -12,3 +12,7 @@ common = { path = "../common" }
 
 [lib]
 crate-type = ["staticlib"]
+
+[[bin]]
+name = "kernel"
+path = "src/lib.rs"

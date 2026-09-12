@@ -1,5 +1,6 @@
 use crate::common::stdint::*;
 use crate::common::io;
+use core::arch::{asm, global_asm};
 
 static mut GDT: [GdtEntry; 7] = [GdtEntry::zero(); 7];
 static mut GDT_PTR: GdtPtr = GdtPtr::zero();
@@ -71,7 +72,7 @@ pub const GDT_FLAGS_64BIT: u8 = 0x20;
 #[no_mangle]
 pub unsafe extern "C" fn init_gdt64() {
     GDT_PTR.limit = (core::mem::size_of::<[GdtEntry; 7]>() - 1) as u16;
-    GDT_PTR.base = &mut GDT as *mut _ as u64;
+    GDT_PTR.base = &raw mut GDT as *mut _ as u64;
 
     // Initialize IST stacks
     IST_STACKS[0].fill(0);  // IST1 - Double fault
@@ -80,10 +81,10 @@ pub unsafe extern "C" fn init_gdt64() {
     IST_STACKS[3].fill(0);  // IST4 - Reserved
     
     // Set up TSS IST pointers
-    TSS.ist[0] = &IST_STACKS[0] as *const _ as u64 + 4096;
-    TSS.ist[1] = &IST_STACKS[1] as *const _ as u64 + 4096;
-    TSS.ist[2] = &IST_STACKS[2] as *const _ as u64 + 4096;
-    TSS.ist[3] = &IST_STACKS[3] as *const _ as u64 + 4096;
+    TSS.ist[0] = &raw const IST_STACKS[0] as u64 + 4096;
+    TSS.ist[1] = &raw const IST_STACKS[1] as u64 + 4096;
+    TSS.ist[2] = &raw const IST_STACKS[2] as u64 + 4096;
+    TSS.ist[3] = &raw const IST_STACKS[3] as u64 + 4096;
 
     set_gate(0, 0, 0, 0, 0);
     set_gate(1, 0, 0, GDT_ACCESS_PRESENT | GDT_ACCESS_PRIV_0 | GDT_ACCESS_TYPE_CODE | GDT_ACCESS_READABLE, GDT_FLAGS_GRANULARITY | GDT_FLAGS_64BIT);
@@ -92,7 +93,7 @@ pub unsafe extern "C" fn init_gdt64() {
     set_gate(4, 0, 0, GDT_ACCESS_PRESENT | GDT_ACCESS_PRIV_3 | GDT_ACCESS_TYPE_DATA | GDT_ACCESS_WRITABLE, GDT_FLAGS_GRANULARITY);
     
     // TSS descriptor (index 5, selector 0x28)
-    let tss_base = &mut TSS as *mut _ as u64;
+    let tss_base = &raw mut TSS as *mut _ as u64;
     let tss_limit = core::mem::size_of::<Tss>() as u64 - 1;
     set_gate_tss(5, tss_base, tss_limit);
 
@@ -107,7 +108,7 @@ unsafe fn set_gate(num: i32, base: u64, limit: u64, access: u8, flags: u8) {
     GDT[num as usize].base_mid = ((base >> 16) & 0xFF) as u8;
     GDT[num as usize].base_high = ((base >> 24) & 0xFF) as u8;
     GDT[num as usize].limit_low = (limit & 0xFFFF) as u16;
-    GDT[num as usize].limit_high = ((flags & 0xF0) | ((limit >> 16) & 0x0F)) as u8;
+    GDT[num as usize].limit_high = (flags & 0xF0) | ((limit >> 16) & 0x0F) as u8;
     GDT[num as usize].access = access;
 }
 
@@ -120,18 +121,26 @@ unsafe fn set_gate_tss(num: i32, base: u64, limit: u64) {
     GDT[num as usize].access = GDT_ACCESS_PRESENT | GDT_ACCESS_PRIV_0 | GDT_ACCESS_TSS_AVAILABLE;
 }
 
-#[naked]
-unsafe fn gdt_flush64() {
-    asm!("lgdt [{0}]", in(reg) &GDT_PTR, options(nomem, nostack));
-    asm!("mov $0x10, %rax", out("rax") _);
-    asm!("mov %rax, %ds", out("rax") _);
-    asm!("mov %rax, %es", out("rax") _);
-    asm!("mov %rax, %fs", out("rax") _);
-    asm!("mov %rax, %gs", out("rax") _);
-    asm!("mov %rax, %ss", out("rax") _);
-    asm!("pushq $0x08");
-    asm!("lea .lgdt_return(%rip), %rax", out("rax") _);
-    asm!("pushq %rax");
-    asm!("lretq");
-    asm!(".lgdt_return:", options(nomem, nostack));
+unsafe extern "C" {
+    fn gdt_flush64();
 }
+
+global_asm!(
+    ".att_syntax",
+    ".global gdt_flush64",
+    ".type gdt_flush64, @function",
+    "gdt_flush64:",
+    "lgdt [GDT_PTR]",
+    "mov $0x10, %rax",
+    "mov %rax, %ds",
+    "mov %rax, %es",
+    "mov %rax, %fs",
+    "mov %rax, %gs",
+    "mov %rax, %ss",
+    "pushq $0x08",
+    "lea .lgdt_return(%rip), %rax",
+    "pushq %rax",
+    "lretq",
+    ".lgdt_return:",
+    "ret"
+);
