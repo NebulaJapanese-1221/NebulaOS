@@ -13,7 +13,7 @@ NebulaOS is a hobby operating system project designed to run on x86 and x86_64 h
 - Rust toolchain (nightly)
 
 ### Prerequisites (Windows)
-- NASM (Netwide Assembler)
+- NASM (Netwide Assembler, installed to PATH)
 - QEMU (for testing)
 - xorriso (for ISO creation)
 - mingw-w64 (for UEFI bootloader on x86_64)
