@@ -13,11 +13,17 @@
 bits 16
 org 0x7C00
 
+jmp short boot_start
+nop
+times 8 - ($ - $$) db 0
+boot_info:
+times 56 db 0
+
 ; -----------------------------------------------------------------------------
 ; Boot Sector (Stage 1) - 512 bytes
 ; -----------------------------------------------------------------------------
 
-start:
+boot_start:
     ; BIOS loads us at 0x7C00, DL = boot drive
     cli
     
@@ -34,21 +40,21 @@ start:
     ; Enable A20 line
     call enable_a20
     
-    ; Load Stage 2 (sectors 1-16, 8KB)
-    mov bx, STAGE2_SEGMENT
-    mov es, bx
-    xor bx, bx
-    mov ah, 0x02        ; Read sectors
-    mov al, 16          ; Sectors to read
-    mov ch, 0           ; Cylinder 0
-    mov cl, 2           ; Sector 2 (1-indexed, sector 1 is boot sector)
-    mov dh, 0           ; Head 0
+    ; Load the remaining 15 sectors of this El Torito image.
+    mov eax, [boot_info]
+    inc eax
+    mov [dap_lba], eax
+    mov dword [dap_lba + 4], 0
+    mov word [dap_count], 15
+    mov word [dap_offset], 0x7E00
+    mov word [dap_segment], 0
+    mov si, dap
+    mov ah, 0x42
     mov dl, [boot_drive]
     int 0x13
     jc disk_error
     
-    ; Jump to Stage 2
-    jmp STAGE2_SEGMENT:0
+    jmp 0x0000:0x7E00
 
 ; -----------------------------------------------------------------------------
 ; Enable A20 line
@@ -119,9 +125,20 @@ print_string:
 ; Data
 ; -----------------------------------------------------------------------------
 boot_drive db 0
+kernel_bytes dd 0
 msg_disk_error db "NebulaBoot: Disk read error!", 0
 
-STAGE2_SEGMENT equ 0x1000  ; Stage 2 loads at 0x10000
+align 4
+dap:
+    db 0x10, 0
+dap_count:
+    dw 0
+dap_offset:
+    dw 0
+dap_segment:
+    dw 0
+dap_lba:
+    dq 0
 
 ; -----------------------------------------------------------------------------
 ; Boot signature
@@ -134,7 +151,6 @@ dw 0xAA55
 ; ==============================================================================
 
 bits 16
-org 0
 
 stage2_start:
     ; Set up segments
@@ -203,16 +219,24 @@ shutdown:
 ; Load 32-bit kernel (from disk)
 ; -----------------------------------------------------------------------------
 load_kernel_32:
-    ; Read kernel from disk (assuming it's at a fixed location)
-    ; For simplicity, we'll load from sector 100 onwards
-    mov bx, KERNEL_32_SEGMENT
-    mov es, bx
-    xor bx, bx
-    mov ah, 0x02
-    mov al, 64          ; Read 64 sectors (32KB)
-    mov ch, 0
-    mov cl, 100         ; Sector 100
-    mov dh, 0
+    ; Load the flat kernel appended after the 8KB bootloader image.
+    mov eax, [boot_info]
+    add eax, 16
+    mov [dap_lba], eax
+    mov dword [dap_lba + 4], 0
+
+    mov eax, [boot_info + 4]
+    sub eax, 8192
+    mov [kernel_bytes], eax
+    add eax, 511
+    shr eax, 9
+    cmp eax, 127
+    ja disk_error
+    mov [dap_count], ax
+    mov word [dap_offset], 0
+    mov word [dap_segment], 0x2000
+    mov si, dap
+    mov ah, 0x42
     mov dl, [boot_drive]
     int 0x13
     jc disk_error
@@ -258,9 +282,15 @@ pm32_start:
     mov gs, ax
     mov ss, ax
     mov esp, 0x90000
-    
-    ; Jump to kernel entry (loaded at 0x100000)
-    jmp KERNEL_32_SEGMENT:0
+
+    cld
+    mov esi, 0x20000
+    mov edi, 0x100000
+    mov ecx, [kernel_bytes]
+    add ecx, 3
+    shr ecx, 2
+    rep movsd
+    jmp CODE32_SEL:0x100000
 
 ; -----------------------------------------------------------------------------
 ; 32-bit GDT
@@ -277,8 +307,6 @@ gdt32_ptr:
 
 CODE32_SEL equ 0x08
 DATA32_SEL equ 0x10
-
-KERNEL_32_SEGMENT equ 0x10000  ; Kernel loads at 0x100000 (1MB)
 
 ; -----------------------------------------------------------------------------
 ; Strings

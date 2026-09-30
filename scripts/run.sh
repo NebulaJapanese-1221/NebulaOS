@@ -112,7 +112,7 @@ fi
 
 if [ "$ARCH" = "x86" ]; then
     QEMU_BIN="qemu-system-i386"
-    KERNEL_BIN="$BUILD_DIR/nebulaos_x86.bin"
+    KERNEL_BIN="$BUILD_DIR/nebulaos_x86.elf"
     ISO_FILE="$BUILD_DIR/iso/nebulaos_x86.iso"
 else
     QEMU_BIN="qemu-system-x86_64"

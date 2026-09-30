@@ -7,29 +7,52 @@
 
 bits 32
 
+section .multiboot_header
+align 4
+dd 0x1BADB002
+dd 0x00000003
+dd -(0x1BADB002 + 0x00000003)
+
 ; -----------------------------------------------------------------------------
 ; Kernel entry point
 ; -----------------------------------------------------------------------------
-section .text
+section .text.start
 global _start
 extern kernel_main
 
 _start:
-    ; Already in 32-bit protected mode (set up by NebulaBoot)
-    
-    ; Disable interrupts
     cli
+    cld
 
-    ; Set up stack from linker script symbols
+    lgdt [gdt_descriptor]
+    jmp 0x08:.reload_segments
+
+.reload_segments:
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
     mov esp, stack_top
 
-    ; Call C kernel entry
     call kernel_main
-    
-    ; Halt on return
+
+.halt:
     cli
     hlt
-    jmp $
+    jmp .halt
+
+section .rodata
+align 8
+gdt_start:
+    dq 0
+    dq 0x00CF9A000000FFFF
+    dq 0x00CF92000000FFFF
+gdt_end:
+gdt_descriptor:
+    dw gdt_end - gdt_start - 1
+    dd gdt_start
 
 ; -----------------------------------------------------------------------------
 ; Data section

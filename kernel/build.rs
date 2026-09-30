@@ -7,10 +7,18 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let kernel_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
 
-    let (arch, asm_file) = if target.contains("x86_64") {
-        ("x86_64", kernel_dir.join("x86_64/start.asm"))
+    let (arch, asm_file, linker_script) = if target.contains("x86_64") {
+        (
+            "x86_64",
+            kernel_dir.join("x86_64/start.asm"),
+            kernel_dir.join("x86_64/link.ld"),
+        )
     } else {
-        ("x86", kernel_dir.join("x86/start.asm"))
+        (
+            "x86",
+            kernel_dir.join("x86/start.asm"),
+            kernel_dir.join("x86/link.ld"),
+        )
     };
 
     let obj_file = out_dir.join(format!("start_{}.o", arch));
@@ -33,5 +41,7 @@ fn main() {
     }
 
     println!("cargo:rustc-link-arg={}", obj_file.display());
+    println!("cargo:rustc-link-arg=-T{}", linker_script.display());
     println!("cargo:rerun-if-changed={}", asm_file.display());
+    println!("cargo:rerun-if-changed={}", linker_script.display());
 }

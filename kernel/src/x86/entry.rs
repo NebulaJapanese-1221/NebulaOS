@@ -1,46 +1,23 @@
 #![no_std]
 
-use crate::common::{idt, io, nebula};
-
-extern "C" {
-    fn init_gdt();
-    fn init_idt();
-}
+use core::arch::asm;
 
 #[no_mangle]
-pub unsafe extern "C" fn kernel_main() {
-    common::vga::init();
-    common::vga::set_color(common::vga::VGA_COLOR_WHITE);
-    common::vga::set_bg_color(common::vga::VGA_COLOR_BLUE);
-    common::vga::clear();
-    common::vga::puts(b"NebulaOS x86 Kernel Booting...\n\0" as *const u8 as *const u8);
+pub extern "C" fn kernel_main() -> ! {
+    let vga = 0xB8000 as *mut u16;
+    let message = b"NebulaOS x86 kernel booted (Multiboot)";
 
-    init_gdt();
-    init_idt();
+    unsafe {
+        for cell in 0..(80 * 25) {
+            vga.add(cell).write_volatile(0x0F20);
+        }
 
-    drivers::pic::pic_init(0x20, 0x28);
-    drivers::pit::pit_init(1000);
+        for (index, byte) in message.iter().enumerate() {
+            vga.add(index).write_volatile(0x0F00 | *byte as u16);
+        }
+    }
 
-    common::memory::memory_init();
-    drivers::keyboard::keyboard_init();
-    drivers::mouse::mouse_init();
-    common::process::process_init();
-    common::scheduler::scheduler_init();
-    common::syscall::syscall_init();
-    common::fs::fs_init();
-    drivers::pci::pci_init();
-    drivers::acpi::acpi_init();
-    drivers::serial::serial_init(0x3F8, 115200);
-    drivers::ata::ata_init();
-    drivers::vesa::vesa_init();
-
-    common::vga::puts(b"\nNebulaOS x86 Kernel Initialized\n\0" as *const u8 as *const u8);
-    common::vga::puts(b"Version: 0.0.1\n\0" as *const u8 as *const u8);
-
-    common::shell::shell_init();
-
-    asm!("sti");
     loop {
-        asm!("hlt");
+        unsafe { asm!("cli", "hlt", options(nomem, nostack)); }
     }
 }

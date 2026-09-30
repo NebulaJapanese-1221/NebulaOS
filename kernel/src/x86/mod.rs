@@ -1,5 +1,6 @@
 pub mod gdt;
 pub mod idt;
+pub mod entry;
 
 pub use crate::common::vga;
 pub use crate::common::memory;

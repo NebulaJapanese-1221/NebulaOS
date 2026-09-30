@@ -20,14 +20,15 @@ MEMORY {
 
 /* Sections */
 SECTIONS {
-    /* Multiboot header must be in first 8KB */
-    .multiboot_header : {
-        *(.multiboot_header)
-    } > kernel
-    
     /* Text section (code) */
     .text : {
+        KEEP(*(.text.start))
         *(.text*)
+    } > kernel
+
+    /* Keep the Multiboot header within the first 8KB of the kernel image. */
+    .multiboot_header : {
+        KEEP(*(.multiboot_header))
     } > kernel
     
     /* Read-only data */
@@ -38,6 +39,7 @@ SECTIONS {
     /* Data section (initialized) */
     .data : {
         *(.data*)
+        *(.got .got.* .got.plt .igot.*)
     } > kernel
     
     /* BSS section (uninitialized) */
@@ -47,7 +49,7 @@ SECTIONS {
     } > kernel
     
     /* Heap */
-    .heap : {
+    .heap (NOLOAD) : {
         . = ALIGN(4096);
         _heap_start = .;
         . += 64M;
@@ -55,7 +57,7 @@ SECTIONS {
     } > heap
     
     /* Stack (grows downward from end of heap) */
-    .stack : {
+    .stack (NOLOAD) : {
         . = ALIGN(16);
         _stack_start = .;
         . += 16K;
