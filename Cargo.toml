@@ -5,6 +5,7 @@ members = [
     "gui",
     "lib",
     "common",
+    "boot/nebula_boot/x86_64/uefi_loader",
 ]
 resolver = "2"
 

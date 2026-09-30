@@ -1,6 +1,10 @@
-#![no_std]
-
 use core::arch::asm;
+
+extern "C" {
+    fn init_idt();
+    static __kernel_start: u8;
+    static __kernel_end: u8;
+}
 
 unsafe fn serial_out(port: u16, value: u8) {
     asm!("out dx, al", in("dx") port, in("al") value, options(nomem, nostack, preserves_flags));
@@ -29,112 +33,57 @@ fn serial_write(message: &[u8]) {
     }
 }
 
-const VGA_WIDTH: usize = 80;
-const VGA_HEIGHT: usize = 25;
-const VGA_BUFFER: *mut u16 = 0xB8000 as *mut u16;
-
-unsafe fn fill_row(row: usize, attribute: u8) {
-    for column in 0..VGA_WIDTH {
-        VGA_BUFFER.add(row * VGA_WIDTH + column)
-            .write_volatile(((attribute as u16) << 8) | b' ' as u16);
-    }
-}
-
-unsafe fn write_text(row: usize, column: usize, text: &[u8], attribute: u8) {
-    for (offset, byte) in text.iter().enumerate() {
-        let x = column + offset;
-        if x >= VGA_WIDTH || row >= VGA_HEIGHT {
-            break;
-        }
-        VGA_BUFFER.add(row * VGA_WIDTH + x)
-            .write_volatile(((attribute as u16) << 8) | *byte as u16);
-    }
-}
-
-unsafe fn draw_desktop(window: u8) {
-    for row in 0..VGA_HEIGHT {
-        fill_row(row, 0x1F);
-    }
-
-    fill_row(0, 0x70);
-    write_text(0, 2, b"NEBULA OS", 0x70);
-    write_text(0, 16, b"Desktop", 0x70);
-    write_text(0, 65, b"x86 BIOS", 0x70);
-
-    write_text(3, 3, b"[T] Terminal", 0x1F);
-    write_text(5, 3, b"[S] System", 0x1F);
-    write_text(7, 3, b"[?] Help", 0x1F);
-
-    for row in 4..19 {
-        for column in 17..65 {
-            VGA_BUFFER.add(row * VGA_WIDTH + column)
-                .write_volatile(((0x70u16) << 8) | b' ' as u16);
-        }
-    }
-    fill_row(4, 0x17);
-    write_text(4, 19, b"NebulaOS", 0x17);
-
-    match window {
-        1 => {
-            write_text(6, 19, b"Terminal", 0x70);
-            write_text(8, 19, b"NebulaOS command console", 0x70);
-            write_text(10, 19, b"The kernel is running in 32-bit mode.", 0x70);
-            write_text(12, 19, b"Type T to return to the desktop.", 0x70);
-            write_text(14, 19, b"nebula> _", 0x70);
-        }
-        2 => {
-            write_text(6, 19, b"System", 0x70);
-            write_text(8, 19, b"NebulaOS x86", 0x70);
-            write_text(10, 19, b"Booted with NebulaBoot BIOS loader.", 0x70);
-            write_text(12, 19, b"Memory and device services are not yet", 0x70);
-            write_text(13, 19, b"available in this x86 desktop build.", 0x70);
-            write_text(15, 19, b"Press Esc to close this window.", 0x70);
-        }
-        _ => {
-            write_text(7, 19, b"Welcome to NebulaOS", 0x70);
-            write_text(9, 19, b"The desktop is ready.", 0x70);
-            write_text(11, 19, b"T  Open terminal", 0x70);
-            write_text(12, 19, b"S  System information", 0x70);
-            write_text(14, 19, b"Esc  Close a window", 0x70);
-        }
-    }
-
-    fill_row(24, 0x70);
-    write_text(24, 2, b"Nebula", 0x70);
-    write_text(24, 13, b"T: Terminal   S: System", 0x70);
-    write_text(24, 66, b"Ready", 0x70);
-}
-
-unsafe fn read_key() -> Option<u8> {
-    let status: u8;
-    asm!("in al, dx", in("dx") 0x64u16, out("al") status, options(nomem, nostack, preserves_flags));
-    if status & 1 == 0 {
-        return None;
-    }
-
-    let scan_code: u8;
-    asm!("in al, dx", in("dx") 0x60u16, out("al") scan_code, options(nomem, nostack, preserves_flags));
-    if scan_code & 0x80 == 0 {
-        Some(scan_code)
-    } else {
-        None
-    }
+#[repr(C)]
+struct BootFramebuffer {
+    address: u32,
+    width: u32,
+    height: u32,
+    stride: u32,
+    bits_per_pixel: u32,
+    red_size: u32,
+    red_position: u32,
+    green_size: u32,
+    green_position: u32,
+    blue_size: u32,
+    blue_position: u32,
+    memory_map: u32,
+    memory_region_count: u32,
 }
 
 #[no_mangle]
 pub extern "C" fn kernel_main() -> ! {
     serial_write(b"NebulaOS x86 kernel booted\r\n");
     unsafe {
-        let mut window = 0;
-        draw_desktop(window);
-        loop {
-            match read_key() {
-                Some(0x14) => window = if window == 1 { 0 } else { 1 },
-                Some(0x1F) => window = if window == 2 { 0 } else { 2 },
-                Some(0x01) => window = 0,
-                _ => continue,
-            }
-            draw_desktop(window);
-        }
+        init_idt();
+        drivers::pic::pic_init(0x20, 0x28);
+        drivers::keyboard::keyboard_init();
+        drivers::pic::pic_enable_irq(1);
+        drivers::mouse::mouse_init();
+        let display = &*(0x5000 as *const BootFramebuffer);
+        common::memory::memory_init_with_map(
+            display.memory_map as *const common::memory::MemoryRegion,
+            display.memory_region_count as usize,
+            core::ptr::addr_of!(__kernel_start) as u64,
+            core::ptr::addr_of!(__kernel_end) as u64,
+            display.address as u64,
+            (display.stride as u64) * (display.height as u64),
+        );
+        common::scheduler::scheduler_init();
+        common::process::process_init();
+        common::fs::fs_init();
+        gui::gui::init(
+            display.address as *mut u8,
+            display.width,
+            display.height,
+            display.stride,
+            display.bits_per_pixel,
+            display.red_size,
+            display.red_position,
+            display.green_size,
+            display.green_position,
+            display.blue_size,
+            display.blue_position,
+        );
+        gui::gui::run();
     }
 }

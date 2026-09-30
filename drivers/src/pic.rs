@@ -21,6 +21,8 @@ pub unsafe fn pic_enable_irq(irq: u8) {
     } else {
         let mask = io::inb(0xA1) & !(1 << (irq - 8));
         io::outb(0xA1, mask);
+        let master_mask = io::inb(0x21) & !(1 << 2);
+        io::outb(0x21, master_mask);
     }
 }
 

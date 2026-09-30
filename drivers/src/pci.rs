@@ -1,5 +1,4 @@
 use crate::common::io;
-use crate::common::vga;
 
 static mut PCI_DEVICES: [PciDevice; 256] = [PciDevice::zero(); 256];
 static mut PCI_DEVICE_COUNT: u32 = 0;
@@ -40,7 +39,6 @@ pub struct PciDriver {
 
 #[no_mangle]
 pub unsafe extern "C" fn pci_init() {
-    vga::puts(b"Initializing PCI subsystem...\n\0" as *const u8 as *const u8);
     pci_enumerate_bus();
 }
 
@@ -68,7 +66,6 @@ unsafe fn pci_read_config_dword(bus: u8, device: u8, function: u8, offset: u8) -
 
 unsafe fn pci_enumerate_bus() {
     PCI_DEVICE_COUNT = 0;
-    vga::puts(b"PCI: Enumerating bus...\n\0" as *const u8 as *const u8);
     for bus in 0u8..=255 {
         for device in 0..32 {
             if !pci_device_exists(bus, device, 0) {
@@ -97,18 +94,4 @@ unsafe fn pci_enumerate_bus() {
             }
         }
     }
-    vga::puts(b"PCI: Found \0" as *const u8 as *const u8);
-    let mut count = PCI_DEVICE_COUNT;
-    let mut buf = [0u8; 16];
-    let mut i = 0;
-    while count > 0 && i < 15 {
-        buf[i] = (count % 10) as u8 + b'0';
-        count /= 10;
-        i += 1;
-    }
-    while i > 0 {
-        i -= 1;
-        vga::putchar(buf[i] as char);
-    }
-    vga::puts(b" devices\n\0" as *const u8 as *const u8);
 }

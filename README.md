@@ -37,7 +37,9 @@ NebulaOS uses **NebulaBoot**, a custom bootloader:
 - **x86 (BIOS)**: NebulaBoot loads the appended kernel image and enters protected mode
 - **x86_64 (UEFI)**: NebulaBoot UEFI application presents a menu and loads the kernel directly in long mode
 
-The x86 ISO boots through NebulaBoot; the x86 ELF also carries a Multiboot header for direct QEMU testing. GRUB is not used.
+The x86 BIOS ISO boots through NebulaBoot and passes VBE and E820 information to the kernel. Use `make -f makefile.mk run` or `run-iso`; `run-elf` bypasses the loader and framebuffer handoff.
+
+The x86_64 UEFI loader is a separate Rust `no_std` application under `boot/nebula_boot/x86_64/uefi_loader`. Build it with `make -f makefile.mk uefi`; boot with `make -f makefile.mk run-uefi OVMF_CODE=/path/to/OVMF_CODE.fd`. This path is experimental and still needs firmware/QEMU validation.
 
 ## License
 

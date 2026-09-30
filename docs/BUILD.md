@@ -70,6 +70,8 @@ Build specific architecture:
 ```bash
 make -f makefile.mk x86      # Build 32-bit x86 kernel
 make -f makefile.mk x86_64   # Build 64-bit x86_64 kernel
+make -f makefile.mk uefi     # Build UEFI app and FAT staging directory
+make -f makefile.mk test     # Run common crate unit tests
 ```
 
 Or using the ARCH variable:
@@ -80,10 +82,20 @@ make -f makefile.mk x86_64
 
 ## Running
 
-Run in QEMU:
+Run the supported x86 BIOS ISO in QEMU:
 
 ```bash
 make -f makefile.mk run
+```
+
+`run` uses the ISO loader and supplies the VBE framebuffer handoff. `run-elf` boots the kernel directly and does not supply that handoff.
+
+UEFI build and run require the `x86_64-unknown-uefi` Rust target, QEMU with OVMF, and an OVMF firmware image:
+
+```bash
+make -f makefile.mk uefi
+make -f makefile.mk run-uefi OVMF_CODE=/path/to/OVMF_CODE.fd
+make -f makefile.mk smoke-uefi OVMF_CODE=/path/to/OVMF_CODE.fd
 ```
 
 Run from ISO:
@@ -111,7 +123,7 @@ make -f makefile.mk run
 make -f makefile.mk iso
 ```
 
-The x86 ISO will be created at `build/iso/nebulaos_x86.iso`.
+The x86 ISO will be created at `build/nebulaos_x86.iso`.
 
 ## Cleaning
 
@@ -123,32 +135,24 @@ make -f makefile.mk clean
 
 ```
 NebulaOS/
-├── boot/                    # Bootloaders
-│   ├── x86/                 # 32-bit bootloader
-│   └── x86_64/              # 64-bit bootloader
-├── config/                  # Configuration files
-│   └── kernel.conf          # Kernel build configuration
-├── docs/                    # Documentation
-├── drivers/                 # Hardware drivers
-│   ├── include/             # Driver headers
-│   └── src/                 # Driver implementations
-├── gui/                     # GUI framework (text mode)
-├── kernel/                  # Kernel source
-│   ├── common/              # Architecture-independent code
-│   ├── x86/                 # 32-bit specific code
-│   └── x86_64/              # 64-bit specific code
-├── lib/                     # Kernel libraries
-│   ├── include/             # Library headers
-│   └── src/                 # Library implementations
-├── scripts/                 # Build and utility scripts
-└── tools/                   # Development tools
+├── boot/nebula_boot/        # BIOS and experimental UEFI loaders
+├── common/src/              # Shared no_std kernel services
+├── drivers/src/             # Rust device drivers
+├── gui/src/                 # Framebuffer desktop and GUI types
+├── kernel/src/              # Rust kernel entry and architecture code
+├── kernel/x86*/             # Startup assembly and linker scripts
+├── lib/src/                 # no_std utility library
+├── targets/                 # Custom Rust target specifications
+└── docs/                    # Project documentation
 ```
+
+`kernel/src/common/mod.rs` re-exports the external `common` crate. The neighboring files in `kernel/src/common/` are not included by that module tree; `common/src/` is the authoritative shared implementation.
 
 ## Troubleshooting
 
-### Cross-compiler not found
+### Required tools not found
 
-If you see errors about `i686-linux-gnu-gcc` or `x86_64-linux-gnu-gcc` not being found, make sure you have installed the multilib cross-compiler packages.
+Install Rust nightly with `rust-src`, GNU Make, NASM, `objcopy`, xorriso, and QEMU. The build uses Rust rather than the C cross-compilers described in some older notes.
 
 ### QEMU crashes on boot
 
@@ -156,4 +160,4 @@ Make sure you are using the correct architecture binary. The x86_64 kernel will 
 
 ### ISO won't boot
 
-The ISO uses GRUB for booting. Make sure genisoimage is installed. If you are using UEFI, you may need to add UEFI support to the build system.
+The x86 ISO uses NebulaBoot via an El Torito BIOS image and requires xorriso. UEFI is experimental; run `smoke-uefi` before relying on it.

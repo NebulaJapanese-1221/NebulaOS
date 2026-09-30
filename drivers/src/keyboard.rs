@@ -49,6 +49,12 @@ pub unsafe extern "C" fn keyboard_irq_handler(_regs: *mut idt::Registers) {
     if let Some(callback) = KEYBOARD_CALLBACK {
         callback(code, KEYBOARD_MODIFIERS, pressed as u8);
     }
+    if pressed {
+        crate::common::input::push(crate::common::input::InputEvent::KeyDown {
+            scancode: code,
+            modifiers: KEYBOARD_MODIFIERS,
+        });
+    }
 
     io::outb(0x20, 0x20);
 }

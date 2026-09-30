@@ -1,4 +1,5 @@
-use crate::stdint::*;
+use crate::memory;
+use crate::scheduler;
 
 pub const MAX_PROCESSES: usize = 16;
 
@@ -42,6 +43,18 @@ pub unsafe fn process_init() {
 }
 
 pub unsafe fn process_create(entry: *mut u8, stack_size: u32) -> i32 {
+    if entry.is_null() || stack_size == 0 {
+        return -1;
+    }
+    let requested_size = stack_size as usize;
+    let Some(aligned_size) = requested_size.checked_add(memory::PAGE_SIZE - 1) else {
+        return -1;
+    };
+    let aligned_size = aligned_size & !(memory::PAGE_SIZE - 1);
+    let stack = memory::heap_alloc(aligned_size, 16);
+    if stack.is_null() {
+        return -1;
+    }
     for i in 0..MAX_PROCESSES {
         let proc = &mut *PROCESS_TABLE.as_mut_ptr().add(i as usize);
         if proc.state == PROC_ZOMBIE {
@@ -49,11 +62,11 @@ pub unsafe fn process_create(entry: *mut u8, stack_size: u32) -> i32 {
             NEXT_PID += 1;
             proc.state = PROC_READY;
             proc.entry_point = entry;
-            proc.stack_size = (stack_size + 15) & !15;
-            proc.stack_base = 0x10000000 + (i as usize) * 0x10000;
+            proc.stack_size = aligned_size.min(u32::MAX as usize) as u32;
+            proc.stack_base = stack as usize;
             proc.context = CpuContext {
                 rip: entry as u64,
-                rsp: proc.stack_base as u64,
+                rsp: (proc.stack_base + aligned_size) as u64,
                 cs: 0x08,
                 ss: 0x10,
                 rflags: 0x202,
@@ -65,9 +78,11 @@ pub unsafe fn process_create(entry: *mut u8, stack_size: u32) -> i32 {
             if CURRENT_PROCESS.is_null() {
                 CURRENT_PROCESS = proc as *mut Process;
             }
+            scheduler::scheduler_add(proc.pid);
             return proc.pid as i32;
         }
     }
+    memory::heap_free(stack);
     -1
 }
 
@@ -86,10 +101,15 @@ pub unsafe fn process_set_current(pid: u32) {
 
 pub unsafe fn process_destroy(pid: u32) {
     for i in 0..MAX_PROCESSES {
-        if (*PROCESS_TABLE.as_ptr().add(i as usize)).pid == pid {
-            (*PROCESS_TABLE.as_mut_ptr().add(i as usize)).state = PROC_ZOMBIE;
-            if CURRENT_PROCESS == PROCESS_TABLE.as_ptr().add(i as usize) as *mut Process {
+        let proc = &mut *PROCESS_TABLE.as_mut_ptr().add(i as usize);
+        if proc.pid == pid && proc.state != PROC_ZOMBIE {
+            proc.state = PROC_ZOMBIE;
+            scheduler::scheduler_remove(pid);
+            if CURRENT_PROCESS == proc as *mut Process {
                 CURRENT_PROCESS = core::ptr::null_mut();
+            } else if proc.stack_base != 0 {
+                memory::heap_free(proc.stack_base as *mut u8);
+                proc.stack_base = 0;
             }
             return;
         }

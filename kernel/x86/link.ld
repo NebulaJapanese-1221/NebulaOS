@@ -23,12 +23,8 @@ SECTIONS {
     /* Text section (code) */
     .text : {
         KEEP(*(.text.start))
-        *(.text*)
-    } > kernel
-
-    /* Keep the Multiboot header within the first 8KB of the kernel image. */
-    .multiboot_header : {
         KEEP(*(.multiboot_header))
+        *(.text*)
     } > kernel
     
     /* Read-only data */
@@ -44,8 +40,13 @@ SECTIONS {
     
     /* BSS section (uninitialized) */
     .bss : {
+        . = ALIGN(16);
+        __bss_start = .;
         *(.bss*)
         *(COMMON)
+        . = ALIGN(16);
+        __bss_end = .;
+        __kernel_end = .;
     } > kernel
     
     /* Heap */
@@ -65,6 +66,7 @@ SECTIONS {
     } > heap
     
     /* Symbols */
+    __kernel_start = ORIGIN(kernel);
     _end = .;
     PROVIDE(end = _end);
     

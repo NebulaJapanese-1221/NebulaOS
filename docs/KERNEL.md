@@ -9,7 +9,7 @@ NebulaOS is a hobby x86/x86_64 operating system designed for learning and experi
 
 - Dual architecture support (32-bit x86 and 64-bit x86_64)
 - Monolithic kernel design
-- VGA text mode console
+- BIOS text boot screen followed by a framebuffer desktop on x86
 - Interrupt-driven I/O
 - Identity-mapped paging
 - Simple shell interface
@@ -20,18 +20,13 @@ NebulaOS is a hobby x86/x86_64 operating system designed for learning and experi
 
 1. BIOS loads boot sector at 0x7C00
 2. Bootloader loads stage 2 from disk
-3. Stage 2 loads kernel and switches to protected mode
-4. Kernel entry point (`kernel/x86/start.asm`)
-5. C entry point (`kernel/x86/entry.c`)
-6. `kernel_main()` initializes hardware and enters main loop
+3. Stage 2 loads the kernel, configures VBE, and collects E820 memory regions
+4. Kernel entry (`kernel/x86/start.asm`) clears BSS and calls Rust `kernel_main`
+5. The kernel reserves the kernel and framebuffer before initializing the desktop
 
 ### x86_64 (64-bit)
 
-1. GRUB loads kernel at 1MB
-2. Bootloader switches to 64-bit long mode
-3. Kernel entry point (`kernel/x86_64/start.asm`)
-4. C entry point (`kernel/x86_64/entry.c`)
-5. `kernel_main()` initializes hardware and enters main loop
+The Rust UEFI loader in `boot/nebula_boot/x86_64/uefi_loader` loads ELF segments, selects GOP, collects conventional-memory descriptors, exits boot services, and passes the shared framebuffer/memory handoff. The path is experimental until the OVMF smoke test passes.
 
 ## Memory Layout
 
@@ -42,16 +37,14 @@ NebulaOS is a hobby x86/x86_64 operating system designed for learning and experi
 0x00000400 - 0x000004FF  BDA
 0x00007C00 - 0x00007CFF  Boot sector
 0x00010000 - 0x0001FFFF  Page directory/tables
-0x00100000 - 0x01FFFFFF  Kernel code/data
-0x01000000 - 0x04FFFFFF  Kernel heap
+0x00100000 - __kernel_end  Kernel image and BSS
+0x00000000 - 0xFFFFFFFF  Pages tracked from BIOS E820 usable regions
 ```
 
 ### x86_64 (64-bit)
 
 ```
-0x0000000000000000 - 0x0000000000000FFF  Low memory (identity mapped)
-0x0000000000010000 - 0x00000000001FFFFF  Kernel code/data
-0x0000000001000000 - 0x0000000004FFFFFF  Kernel heap
+The UEFI loader supplies conventional-memory regions to the x86_64 allocator; firmware-owned and loader-owned ranges are omitted from the free-region list.
 ```
 
 ## Subsystems
@@ -84,7 +77,7 @@ x86_64 uses 4-level paging:
 - PDT (Page Directory)
 - PT (Page Table)
 
-Currently uses identity mapping (virtual = physical).
+The x86_64 kernel currently retains firmware paging; a kernel-owned paging and mapping policy is still required.
 
 ### Interrupts
 
@@ -95,57 +88,24 @@ Currently uses identity mapping (virtual = physical).
 
 ## Code Organization
 
-```
-kernel/
-├── common/
-│   ├── include/           # Shared headers
-│   │   ├── nebula.h       # Core definitions
-│   │   ├── gdt.h          # GDT structures
-│   │   ├── idt.h          # IDT structures
-│   │   ├── vga.h          # VGA driver
-│   │   ├── memory.h       # Memory management
-│   │   └── ...
-│   └── src/               # Shared implementations
-│       ├── vga.c
-│       └── memory/
-│           └── memory.c
-├── x86/                   # 32-bit specific
-│   ├── start.asm
-│   ├── entry.c
-│   ├── link.ld
-│   └── src/
-│       ├── device/gdt.c
-│       ├── interrupts/idt.c
-│       ├── interrupts/isr.asm
-│       └── process/shell.c
-└── x86_64/                # 64-bit specific
-    ├── start.asm
-    ├── entry.c
-    ├── link.ld
-    └── src/
-        ├── device/gdt.c
-        ├── device/stubs.c
-        ├── interrupts/idt.c
-        ├── interrupts/isr.asm
-        ├── memory/paging.c
-        └── process/shell.c
-```
+- `common/src/` is the authoritative shared Rust implementation.
+- `kernel/src/common/mod.rs` re-exports that crate; nearby duplicate `.rs` files are not included in the module tree.
+- `kernel/src/x86/` and `kernel/src/x86_64/` contain architecture-specific Rust entry and descriptor-table setup.
+- `kernel/x86/` and `kernel/x86_64/` contain startup assembly and linker scripts.
+- `gui/src/desktop.rs` draws the shared framebuffer desktop; the remaining widget/window types are not yet a complete windowing system.
 
 ## Driver Architecture
 
 Drivers are organized by function:
 
-- `drivers/include/` - Driver headers
-- `drivers/src/` - Driver implementations
-- Each driver provides init, handler, and utility functions
-- Drivers register interrupt handlers via `register_interrupt_handler()`
+- `drivers/src/` contains Rust driver modules.
+- `drivers/src/common/` re-exports the shared `common` crate.
+- Several drivers remain partial; see `docs/DRIVERS.md` for their current limits.
 
 ## Future Plans
 
-- Proper multiboot2 support
-- ACPI support for modern hardware
-- SMP (multi-processor) support
-- Virtual filesystem (VFS)
-- ELF binary loading
-- Process management
-- System calls
+- Complete and test UEFI file loading and ExitBootServices support
+- Pass UEFI memory maps to the allocator and establish kernel-owned page tables
+- Replace the RAM filesystem with a block-backed filesystem and VFS
+- Add real context switching, user-mode mappings, and validated syscalls
+- Add automated BIOS and UEFI QEMU smoke tests

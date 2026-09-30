@@ -13,7 +13,7 @@ pub mod label;
 pub mod textbox;
 pub mod panel;
 pub mod font;
-pub mod renderer;
+pub mod desktop;
 pub mod fontrenderer;
 pub mod widgets;
 pub mod windows;

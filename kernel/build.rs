@@ -7,21 +7,24 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let kernel_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
 
-    let (arch, asm_file, linker_script) = if target.contains("x86_64") {
+    let (arch, asm_file, isr_file, linker_script) = if target.contains("x86_64") {
         (
             "x86_64",
             kernel_dir.join("x86_64/start.asm"),
+            kernel_dir.join("x86_64/src/interrupts/isr.asm"),
             kernel_dir.join("x86_64/link.ld"),
         )
     } else {
         (
             "x86",
             kernel_dir.join("x86/start.asm"),
+            kernel_dir.join("x86/src/interrupts/isr.asm"),
             kernel_dir.join("x86/link.ld"),
         )
     };
 
     let obj_file = out_dir.join(format!("start_{}.o", arch));
+    let isr_obj_file = out_dir.join(format!("isr_{}.o", arch));
 
     let nasm = if arch == "x86_64" {
         "nasm"
@@ -41,7 +44,19 @@ fn main() {
     }
 
     println!("cargo:rustc-link-arg={}", obj_file.display());
+    let mut isr_cmd = Command::new(nasm);
+    isr_cmd
+        .arg("-f")
+        .arg(if arch == "x86_64" { "elf64" } else { "elf32" })
+        .arg(&isr_file)
+        .arg("-o")
+        .arg(&isr_obj_file);
+    if !isr_cmd.status().unwrap().success() {
+        panic!("Failed to assemble {}", isr_file.display());
+    }
+    println!("cargo:rustc-link-arg={}", isr_obj_file.display());
     println!("cargo:rustc-link-arg=-T{}", linker_script.display());
     println!("cargo:rerun-if-changed={}", asm_file.display());
+    println!("cargo:rerun-if-changed={}", isr_file.display());
     println!("cargo:rerun-if-changed={}", linker_script.display());
 }

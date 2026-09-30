@@ -13,6 +13,7 @@ pub const IDT_FLAG_INTERRUPT: u8 = 0x0E;
 
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
+#[cfg(target_arch = "x86_64")]
 pub struct IdtEntry {
     pub base_low: u16,
     pub sel: u16,
@@ -24,6 +25,25 @@ pub struct IdtEntry {
 }
 
 #[repr(C, packed)]
+#[derive(Clone, Copy)]
+#[cfg(target_arch = "x86")]
+pub struct IdtEntry {
+    pub base_low: u16,
+    pub sel: u16,
+    pub zero: u8,
+    pub flags: u8,
+    pub base_high: u16,
+}
+
+#[repr(C, packed)]
+#[cfg(target_arch = "x86_64")]
+pub struct IdtPtr {
+    pub limit: u16,
+    pub base: u64,
+}
+
+#[repr(C, packed)]
+#[cfg(target_arch = "x86")]
 pub struct IdtPtr {
     pub limit: u16,
     pub base: u32,
@@ -52,38 +72,56 @@ pub struct Registers {
     pub r15: u64,
 }
 
+#[cfg(target_arch = "x86_64")]
 pub static mut IDT: [IdtEntry; IDT_MAX_DESCRIPTORS] = [IdtEntry { base_low: 0, sel: 0, ist: 0, flags: 0, base_mid: 0, base_high: 0, reserved: 0 }; IDT_MAX_DESCRIPTORS];
+#[cfg(target_arch = "x86")]
+pub static mut IDT: [IdtEntry; IDT_MAX_DESCRIPTORS] = [IdtEntry { base_low: 0, sel: 0, zero: 0, flags: 0, base_high: 0 }; IDT_MAX_DESCRIPTORS];
+#[cfg(target_arch = "x86_64")]
+pub static mut IDT_PTR: IdtPtr = IdtPtr { limit: 0, base: 0 };
+#[cfg(target_arch = "x86")]
 pub static mut IDT_PTR: IdtPtr = IdtPtr { limit: 0, base: 0 };
 pub static mut INTERRUPT_HANDLERS: [Option<InterruptHandler>; IDT_MAX_DESCRIPTORS] = [None; IDT_MAX_DESCRIPTORS];
 
 extern "C" {
     static mut isr_table: [unsafe extern "C" fn(); 32];
     static mut irq_table: [unsafe extern "C" fn(); 16];
-    static mut isr_double_fault: unsafe extern "C" fn();
-    static mut isr_gpf: unsafe extern "C" fn();
-    static mut isr_page_fault: unsafe extern "C" fn();
 }
 
+#[cfg(target_arch = "x86")]
+pub unsafe fn init_idt32() {
+    IDT_PTR.limit = (core::mem::size_of::<[IdtEntry; IDT_MAX_DESCRIPTORS]>() - 1) as u16;
+    IDT_PTR.base = core::ptr::addr_of!(IDT) as u32;
+    for i in 0..IDT_MAX_DESCRIPTORS {
+        INTERRUPT_HANDLERS[i] = Some(default_interrupt_handler);
+    }
+    for i in 0..32 {
+        set_gate32(i, isr_table[i] as usize as u32, 0x08, IDT_FLAG_PRESENT | IDT_FLAG_INTERRUPT);
+    }
+    for i in 0..16 {
+        set_gate32(IRQ0 as usize + i, irq_table[i] as usize as u32, 0x08, IDT_FLAG_PRESENT | IDT_FLAG_INTERRUPT);
+    }
+    idt_flush();
+}
+
+#[cfg(target_arch = "x86")]
+unsafe fn set_gate32(num: usize, base: u32, selector: u16, flags: u8) {
+    IDT[num].base_low = base as u16;
+    IDT[num].sel = selector;
+    IDT[num].zero = 0;
+    IDT[num].flags = flags;
+    IDT[num].base_high = (base >> 16) as u16;
+}
+
+#[cfg(target_arch = "x86_64")]
 pub unsafe fn init_idt64() {
     IDT_PTR.limit = (core::mem::size_of::<[IdtEntry; IDT_MAX_DESCRIPTORS]>() - 1) as u16;
-    IDT_PTR.base = &mut IDT as *mut _ as u32;
+    IDT_PTR.base = core::ptr::addr_of!(IDT) as u64;
 
     for i in 0..IDT_MAX_DESCRIPTORS {
         INTERRUPT_HANDLERS[i] = Some(default_interrupt_handler);
     }
 
-    // Standard ISRs (0-7, 9, 15-31)
-    for i in 0..8 {
-        set_gate64(i, isr_table[i] as u64, 0x08, 0, IDT_FLAG_PRESENT | IDT_FLAG_INTERRUPT);
-    }
-    set_gate64(8, isr_double_fault as u64, 0x08, 1, IDT_FLAG_PRESENT | IDT_FLAG_INTERRUPT);  // Double fault with IST
-    set_gate64(9, isr_table[9] as u64, 0x08, 0, IDT_FLAG_PRESENT | IDT_FLAG_INTERRUPT);
-    for i in 10..14 {
-        set_gate64(i, isr_table[i] as u64, 0x08, 0, IDT_FLAG_PRESENT | IDT_FLAG_INTERRUPT);
-    }
-    set_gate64(13, isr_gpf as u64, 0x08, 2, IDT_FLAG_PRESENT | IDT_FLAG_INTERRUPT);  // GPF with IST
-    set_gate64(14, isr_page_fault as u64, 0x08, 3, IDT_FLAG_PRESENT | IDT_FLAG_INTERRUPT);  // Page fault with IST
-    for i in 15..32 {
+    for i in 0..32 {
         set_gate64(i, isr_table[i] as u64, 0x08, 0, IDT_FLAG_PRESENT | IDT_FLAG_INTERRUPT);
     }
     
@@ -97,6 +135,7 @@ pub unsafe fn init_idt64() {
     idt_flush64();
 }
 
+#[cfg(target_arch = "x86_64")]
 pub unsafe fn set_gate64(num: usize, base: u64, sel: u16, ist: u8, flags: u8) {
     IDT[num].base_low = (base & 0xFFFF) as u16;
     IDT[num].sel = sel;
@@ -107,8 +146,14 @@ pub unsafe fn set_gate64(num: usize, base: u64, sel: u16, ist: u8, flags: u8) {
     IDT[num].reserved = 0;
 }
 
+#[cfg(target_arch = "x86")]
+unsafe fn idt_flush() {
+    asm!("lidt [{}]", in(reg) core::ptr::addr_of!(IDT_PTR), options(readonly, nostack, preserves_flags));
+}
+
+#[cfg(target_arch = "x86_64")]
 pub unsafe fn idt_flush64() {
-    asm!("lidt [{0}]", in(reg) &IDT_PTR, options(nomem, nostack));
+    asm!("lidt [{}]", in(reg) core::ptr::addr_of!(IDT_PTR), options(readonly, nostack, preserves_flags));
 }
 
 pub unsafe fn register_interrupt_handler(n: usize, handler: Option<InterruptHandler>) {
@@ -117,7 +162,8 @@ pub unsafe fn register_interrupt_handler(n: usize, handler: Option<InterruptHand
     }
 }
 
-pub unsafe fn interrupt_handler(regs: *mut Registers) {
+#[no_mangle]
+pub unsafe extern "C" fn interrupt_handler(regs: *mut Registers) {
     let int_no = (*regs).int_no as usize;
     if int_no < IDT_MAX_DESCRIPTORS {
         if let Some(handler) = INTERRUPT_HANDLERS[int_no] {
@@ -137,14 +183,17 @@ pub unsafe extern "C" fn default_interrupt_handler(regs: *mut Registers) {
 }
 
 // Exception handlers with error screen
+#[no_mangle]
 pub unsafe extern "C" fn handle_double_fault(regs: *mut Registers) {
     unsafe { show_error_screen(8, "DOUBLE FAULT", "A double fault occurred. The system will halt.", (*regs).error_code); }
 }
 
+#[no_mangle]
 pub unsafe extern "C" fn handle_gpf(regs: *mut Registers) {
     unsafe { show_error_screen(13, "GENERAL PROTECTION FAULT", "A general protection fault occurred.", (*regs).error_code); }
 }
 
+#[no_mangle]
 pub unsafe extern "C" fn handle_page_fault(regs: *mut Registers) {
     #[cfg(target_arch = "x86_64")]
     {

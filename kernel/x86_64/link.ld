@@ -42,8 +42,13 @@ SECTIONS {
     
     /* BSS section (uninitialized) */
     .bss : {
+        . = ALIGN(16);
+        __bss_start = .;
         *(.bss*)
         *(COMMON)
+        . = ALIGN(16);
+        __bss_end = .;
+        __kernel_end = .;
     } > kernel
     
     /* Heap */
@@ -63,6 +68,7 @@ SECTIONS {
     } > heap
     
     /* Symbols */
+    __kernel_start = ORIGIN(kernel);
     _end = .;
     PROVIDE(end = _end);
     

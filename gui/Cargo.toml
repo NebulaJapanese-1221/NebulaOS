@@ -9,4 +9,4 @@ lib = { path = "../lib" }
 common = { path = "../common" }
 
 [lib]
-crate-type = ["staticlib"]
+crate-type = ["rlib"]

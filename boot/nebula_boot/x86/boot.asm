@@ -236,10 +236,152 @@ load_kernel_32:
     jmp .read_kernel
 
 .kernel_loaded:
-    
+    call set_graphics_mode
+    jc graphics_error
+    call collect_memory_map
+
     ; Switch to protected mode and jump to kernel
     call switch_to_pm32
     jmp $
+
+collect_memory_map:
+    push es
+    pushad
+    mov ax, 0x9100
+    mov es, ax
+    xor ebx, ebx
+    xor bp, bp
+.next_region:
+    cmp bp, 128
+    jae .done
+    mov di, bp
+    imul di, 24
+    mov dword [es:di + 20], 1
+    mov eax, 0xE820
+    mov edx, 0x534D4150
+    mov ecx, 24
+    int 0x15
+    jc .done
+    cmp eax, 0x534D4150
+    jne .done
+    inc bp
+    test ebx, ebx
+    jnz .next_region
+.done:
+    mov dword [0x502C], 0x91000
+    movzx eax, bp
+    mov [0x5030], eax
+    popad
+    pop es
+    ret
+
+; Configure a VBE linear framebuffer while BIOS services are still available.
+; The kernel reads the resulting handoff structure at physical address 0x5000.
+set_graphics_mode:
+    push es
+    xor ax, ax
+    mov es, ax
+    mov di, 0x6000
+    mov cx, 128
+    cld
+    rep stosw
+
+    mov ax, 0x4F01
+    mov cx, 0x0118
+    int 0x10
+    cmp ax, 0x004F
+    jne .failed
+    xor ax, ax
+    mov es, ax
+
+    ; Require a supported graphics mode with a linear framebuffer.
+    mov ax, [es:0x6000]
+    and ax, 0x0091
+    cmp ax, 0x0091
+    jne .failed
+    cmp byte [es:0x6019], 24
+    je .valid_bpp
+    cmp byte [es:0x6019], 32
+    jne .failed
+.valid_bpp:
+    cmp byte [es:0x601B], 6
+    jne .failed
+    cmp dword [es:0x6028], 0
+    je .failed
+
+    ; Store framebuffer, dimensions, pitch, pixel depth, and RGB layout.
+    mov eax, [es:0x6028]
+    mov [0x5000], eax
+    movzx eax, word [es:0x6012]
+    mov [0x5004], eax
+    movzx eax, word [es:0x6014]
+    mov [0x5008], eax
+    movzx eax, word [es:0x6032]
+    test eax, eax
+    jnz .have_pitch
+    movzx eax, word [es:0x6010]
+.have_pitch:
+    mov [0x500C], eax
+    movzx eax, byte [es:0x6019]
+    mov [0x5010], eax
+
+    movzx eax, byte [es:0x6036]
+    test eax, eax
+    jnz .have_red
+    movzx eax, byte [es:0x601F]
+.have_red:
+    mov [0x5014], eax
+    movzx eax, byte [es:0x6037]
+    test eax, eax
+    jnz .have_red_pos
+    movzx eax, byte [es:0x6020]
+.have_red_pos:
+    mov [0x5018], eax
+    movzx eax, byte [es:0x6038]
+    test eax, eax
+    jnz .have_green
+    movzx eax, byte [es:0x6021]
+.have_green:
+    mov [0x501C], eax
+    movzx eax, byte [es:0x6039]
+    test eax, eax
+    jnz .have_green_pos
+    movzx eax, byte [es:0x6022]
+.have_green_pos:
+    mov [0x5020], eax
+    movzx eax, byte [es:0x603A]
+    test eax, eax
+    jnz .have_blue
+    movzx eax, byte [es:0x6023]
+.have_blue:
+    mov [0x5024], eax
+    movzx eax, byte [es:0x603B]
+    test eax, eax
+    jnz .have_blue_pos
+    movzx eax, byte [es:0x6024]
+.have_blue_pos:
+    mov [0x5028], eax
+
+    mov ax, 0x4F02
+    mov bx, 0x4118
+    int 0x10
+    cmp ax, 0x004F
+    jne .failed
+    clc
+    pop es
+    ret
+.failed:
+    stc
+    pop es
+    ret
+
+graphics_error:
+    mov si, msg_graphics_error
+    call print_string
+    cli
+.halt:
+    hlt
+    jmp .halt
 
 ; -----------------------------------------------------------------------------
 ; Load 64-bit kernel (from disk)
@@ -321,6 +463,7 @@ menu db "Select boot option:", 13, 10
 msg_loading_32 db "Loading NebulaOS 32-bit kernel...", 13, 10, 0
 msg_loading_64 db "Loading NebulaOS 64-bit kernel...", 13, 10, 0
 msg_uefi_required db "64-bit mode requires UEFI boot.", 13, 10, 0
+msg_graphics_error db "VESA graphics mode unavailable; stopping in text mode.", 13, 10, 0
 
 ; -----------------------------------------------------------------------------
 ; Pad stage 2 to fill remaining space

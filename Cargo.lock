@@ -38,3 +38,7 @@ version = "0.0.2"
 dependencies = [
  "common",
 ]
+
+[[package]]
+name = "nebula-uefi-loader"
+version = "0.0.2"
