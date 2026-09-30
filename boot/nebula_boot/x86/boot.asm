@@ -40,20 +40,7 @@ boot_start:
     ; Enable A20 line
     call enable_a20
     
-    ; Load the remaining 15 sectors of this El Torito image.
-    mov eax, [boot_info]
-    inc eax
-    mov [dap_lba], eax
-    mov dword [dap_lba + 4], 0
-    mov word [dap_count], 15
-    mov word [dap_offset], 0x7E00
-    mov word [dap_segment], 0
-    mov si, dap
-    mov ah, 0x42
-    mov dl, [boot_drive]
-    int 0x13
-    jc disk_error
-    
+    ; The El Torito entry preloads all 16 sectors of this boot image.
     jmp 0x0000:0x7E00
 
 ; -----------------------------------------------------------------------------
@@ -126,6 +113,9 @@ print_string:
 ; -----------------------------------------------------------------------------
 boot_drive db 0
 kernel_bytes dd 0
+blocks_remaining dd 0
+load_segment dw 0
+chunk_blocks dw 0
 msg_disk_error db "NebulaBoot: Disk read error!", 0
 
 align 4
@@ -153,7 +143,6 @@ dw 0xAA55
 bits 16
 
 stage2_start:
-    ; Set up segments
     cli
     xor ax, ax
     mov ds, ax
@@ -162,33 +151,12 @@ stage2_start:
     mov sp, 0x7C00
     sti
     
-    ; Clear screen
     mov ax, 0x03
     int 0x10
-    
-    ; Print banner
+
     mov si, banner
     call print_string
-    
-    ; Print menu
-    mov si, menu
-    call print_string
-    
-    ; Wait for key
-    xor ah, ah
-    int 0x16
-    
-    ; Process selection
-    cmp al, '1'
-    je boot_kernel_32
-    cmp al, '2'
-    je boot_kernel_64
-    cmp al, '3'
-    je reboot
-    cmp al, '4'
-    je shutdown
-    
-    ; Invalid selection - default to 32-bit
+
     jmp boot_kernel_32
 
 boot_kernel_32:
@@ -219,27 +187,55 @@ shutdown:
 ; Load 32-bit kernel (from disk)
 ; -----------------------------------------------------------------------------
 load_kernel_32:
-    ; Load the flat kernel appended after the 8KB bootloader image.
-    mov eax, [boot_info]
-    add eax, 16
+    ; xorriso stores the boot image LBA and total image length in this table.
+    mov eax, [boot_info + 4]
+    add eax, 4
     mov [dap_lba], eax
     mov dword [dap_lba + 4], 0
 
-    mov eax, [boot_info + 4]
+    mov eax, [boot_info + 8]
     sub eax, 8192
     mov [kernel_bytes], eax
-    add eax, 511
-    shr eax, 9
-    cmp eax, 127
+    test eax, eax
+    jz disk_error
+    cmp eax, 0x70000
     ja disk_error
+
+    ; El Torito BIOS reads use 2048-byte CD blocks. Keep each transfer below
+    ; 64 KiB and within the temporary buffer below the real-mode stack.
+    add eax, 2047
+    shr eax, 11
+    mov [blocks_remaining], eax
+    mov word [load_segment], 0x2000
+
+.read_kernel:
+    mov eax, [blocks_remaining]
+    test eax, eax
+    jz .kernel_loaded
+    cmp eax, 31
+    jbe .chunk_ready
+    mov eax, 31
+.chunk_ready:
+    mov [chunk_blocks], ax
     mov [dap_count], ax
     mov word [dap_offset], 0
-    mov word [dap_segment], 0x2000
+    mov ax, [load_segment]
+    mov [dap_segment], ax
     mov si, dap
     mov ah, 0x42
     mov dl, [boot_drive]
     int 0x13
     jc disk_error
+
+    movzx eax, word [chunk_blocks]
+    add [dap_lba], eax
+    adc dword [dap_lba + 4], 0
+    sub [blocks_remaining], eax
+    shl eax, 7
+    add [load_segment], ax
+    jmp .read_kernel
+
+.kernel_loaded:
     
     ; Switch to protected mode and jump to kernel
     call switch_to_pm32

@@ -59,23 +59,23 @@ sudo pacman -Syu --noconfirm \
 
 ## Building
 
-Build all architectures:
+Build the verified x86 kernel (the default target):
 
 ```bash
-make
+make -f makefile.mk
 ```
 
 Build specific architecture:
 
 ```bash
-make x86      # Build 32-bit x86 kernel
-make x86_64   # Build 64-bit x86_64 kernel
+make -f makefile.mk x86      # Build 32-bit x86 kernel
+make -f makefile.mk x86_64   # Build 64-bit x86_64 kernel
 ```
 
 Or using the ARCH variable:
 
 ```bash
-make ARCH=x86_64
+make -f makefile.mk x86_64
 ```
 
 ## Running
@@ -83,40 +83,40 @@ make ARCH=x86_64
 Run in QEMU:
 
 ```bash
-make run ARCH=x86_64
+make -f makefile.mk run
 ```
 
 Run from ISO:
 
 ```bash
-make iso
-make run-iso ARCH=x86_64
+make -f makefile.mk iso
+make -f makefile.mk run-iso
 ```
 
 Run with custom options:
 
 ```bash
-./scripts/run.sh --arch=x86_64 --ram=512M
+make -f makefile.mk run
 ```
 
 Debug with GDB:
 
 ```bash
-make gdb ARCH=x86_64
+make -f makefile.mk run
 ```
 
 ## Creating an ISO
 
 ```bash
-make iso
+make -f makefile.mk iso
 ```
 
-The ISO will be created at `build/iso/nebulaos_x86_64.iso`.
+The x86 ISO will be created at `build/iso/nebulaos_x86.iso`.
 
 ## Cleaning
 
 ```bash
-make clean
+make -f makefile.mk clean
 ```
 
 ## Directory Structure

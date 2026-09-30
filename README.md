@@ -18,34 +18,26 @@ NebulaOS is a hobby operating system project designed to run on x86 and x86_64 h
 - xorriso (for ISO creation)
 - mingw-w64 (for UEFI bootloader on x86_64)
 - Rust toolchain (nightly)
-### Build Commands (Linux)
+### Build Commands
 
 ```bash
-./build.sh              # Build all (x86 and x86_64)
-./build.sh x86          # Build x86 version
-./build.sh x86_64       # Build x86_64 version
-./build.sh clean        # Clean all build files
-./build.sh iso          # Create bootable ISO images
-./build.sh run          # Run in QEMU (x86_64 by default)
-./build.sh run ARCH=x86 # Run x86 in QEMU
+make -f makefile.mk          # Build the x86 kernel
+make -f makefile.mk x86_64   # Build the x86_64 kernel
+make -f makefile.mk iso      # Create the x86 NebulaBoot ISO
+make -f makefile.mk run      # Boot the x86 ELF directly in QEMU
+make -f makefile.mk run-iso  # Boot the x86 ISO in QEMU
+make -f makefile.mk clean    # Remove generated build files
 ```
 
-### Build Commands (Windows)
-
-'''
-build.bat run # Run in QEMU (x86_64 by default)
-build.bat x86 # Build x86 version
-build.bat iso # Create buildable iso
-build.bat x86_64 Build x86_64 version
-build.bat clean # Clean all build files
+GNU Make, Rust nightly with `rust-src`, NASM, and `objcopy` are required to build. QEMU is required to run the kernel.
 
 ## Bootloader
 
-NebulaOS uses **NebulaBoot**, a custom bootloader with a menu system:
-- **x86 (BIOS)**: NebulaBoot stage 1 (boot sector) loads stage 2 which presents a menu and loads the kernel in protected mode
+NebulaOS uses **NebulaBoot**, a custom bootloader:
+- **x86 (BIOS)**: NebulaBoot loads the appended kernel image and enters protected mode
 - **x86_64 (UEFI)**: NebulaBoot UEFI application presents a menu and loads the kernel directly in long mode
 
-No GRUB or Multiboot required - the kernel is loaded directly by NebulaBoot.
+The x86 ISO boots through NebulaBoot; the x86 ELF also carries a Multiboot header for direct QEMU testing. GRUB is not used.
 
 ## License
 
