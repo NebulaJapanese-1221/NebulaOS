@@ -37,13 +37,29 @@ pub unsafe extern "C" fn kernel_main(display_info: *const BootFramebuffer64) -> 
     drivers::mouse::mouse_init();
 
     let display = &*display_info;
+    let mut framebuffer = display.address as *mut u8;
+    let mut width = display.width;
+    let mut height = display.height;
+    let mut stride = display.stride;
+    let mut bpp = display.bits_per_pixel;
+
+    if display.address == 0 || display.width == 0 || display.height == 0 || display.stride == 0 {
+        if drivers::vesa::vesa_init() {
+            framebuffer = drivers::vesa::vesa_get_framebuffer();
+            width = drivers::vesa::vesa_get_width();
+            height = drivers::vesa::vesa_get_height();
+            stride = drivers::vesa::vesa_get_stride();
+            bpp = drivers::vesa::vesa_get_bpp();
+        }
+    }
+
     common::memory::memory_init_with_map(
         display.memory_map as *const common::memory::MemoryRegion,
         display.memory_region_count as usize,
         core::ptr::addr_of!(__kernel_start) as u64,
         core::ptr::addr_of!(__kernel_end) as u64,
-        display.address,
-        (display.stride as u64) * (display.height as u64),
+        framebuffer as u64,
+        (stride as u64) * (height as u64),
     );
     common::process::process_init();
     common::scheduler::scheduler_init();
@@ -57,11 +73,11 @@ pub unsafe extern "C" fn kernel_main(display_info: *const BootFramebuffer64) -> 
 
     asm!("sti");
     gui::gui::init(
-        display.address as *mut u8,
-        display.width,
-        display.height,
-        display.stride,
-        display.bits_per_pixel,
+        framebuffer,
+        width,
+        height,
+        stride,
+        bpp,
         display.red_size,
         display.red_position,
         display.green_size,

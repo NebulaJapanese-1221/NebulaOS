@@ -112,6 +112,7 @@ print_string:
 ; Data
 ; -----------------------------------------------------------------------------
 boot_drive db 0
+boot_mode db 0
 kernel_bytes dd 0
 blocks_remaining dd 0
 load_segment dw 0
@@ -150,17 +151,49 @@ stage2_start:
     mov ss, ax
     mov sp, 0x7C00
     sti
-    
+
     mov ax, 0x03
     int 0x10
 
+    call show_boot_menu
+    jmp wait_boot_choice
+
+show_boot_menu:
     mov si, banner
     call print_string
+    mov si, menu
+    call print_string
+    ret
 
-    jmp boot_kernel_32
+wait_boot_choice:
+    mov si, prompt
+    call print_string
+    xor ax, ax
+    int 0x16
+    cmp al, '1'
+    je boot_kernel_32
+    cmp al, '2'
+    je boot_kernel_32_text
+    cmp al, '3'
+    je boot_kernel_64
+    cmp al, '4'
+    je reboot
+    cmp al, '5'
+    je shutdown
+    jmp wait_boot_choice
 
 boot_kernel_32:
+    mov byte [boot_mode], 0
+    mov byte [0x5034], 0
     mov si, msg_loading_32
+    call print_string
+    call load_kernel_32
+    jmp $
+
+boot_kernel_32_text:
+    mov byte [boot_mode], 1
+    mov byte [0x5034], 1
+    mov si, msg_loading_text
     call print_string
     call load_kernel_32
     jmp $
@@ -236,13 +269,33 @@ load_kernel_32:
     jmp .read_kernel
 
 .kernel_loaded:
+    cmp byte [boot_mode], 1
+    je .text_only
     call set_graphics_mode
     jc graphics_error
     call collect_memory_map
-
-    ; Switch to protected mode and jump to kernel
     call switch_to_pm32
     jmp $
+.text_only:
+    call collect_memory_map
+    call switch_to_pm32
+    jmp $
+
+graphics_error:
+    mov si, msg_graphics_error
+    call print_string
+    call show_boot_menu
+    jmp wait_boot_choice
+
+; -----------------------------------------------------------------------------
+; Load 64-bit kernel (from disk)
+; -----------------------------------------------------------------------------
+load_kernel_64:
+    ; For x86_64, we'd typically use UEFI
+    ; This is a placeholder - in reality we'd chain to UEFI loader
+    mov si, msg_uefi_required
+    call print_string
+    ret
 
 collect_memory_map:
     push es
@@ -282,116 +335,187 @@ set_graphics_mode:
     xor ax, ax
     mov es, ax
     mov di, 0x6000
-    mov cx, 128
-    cld
-    rep stosw
-
-    mov ax, 0x4F01
-    mov cx, 0x0118
+    mov dword [es:di], 0x32454256
+    mov ax, 0x4F00
+    push ds
     int 0x10
+    pop ds
     cmp ax, 0x004F
     jne .failed
     xor ax, ax
     mov es, ax
+    cmp dword [es:0x6000], 0x41534556
+    jne .failed
 
-    ; Require a supported graphics mode with a linear framebuffer.
-    mov ax, [es:0x6000]
+    mov ax, [es:0x600E]
+    mov [mode_list_offset], ax
+    mov ax, [es:0x6010]
+    test ax, ax
+    jz .failed
+    mov es, ax
+    mov si, [mode_list_offset]
+    mov word [selected_mode], 0
+
+.next_mode:
+    mov ax, [es:si]
+    cmp ax, 0xFFFF
+    je .modes_done
+    mov [candidate_mode], ax
+
+    push es
+    push si
+    xor ax, ax
+    mov es, ax
+    mov di, 0x6200
+    mov cx, [candidate_mode]
+    mov ax, 0x4F01
+    push ds
+    int 0x10
+    pop ds
+    cmp ax, 0x004F
+    jne .skip_candidate
+    xor ax, ax
+    mov es, ax
+
+    ; Require supported graphics, direct-color LFB modes of at least VGA size.
+    mov ax, [es:0x6200]
     and ax, 0x0091
     cmp ax, 0x0091
-    jne .failed
-    cmp byte [es:0x6019], 24
+    jne .skip_candidate
+    cmp byte [es:0x6219], 24
     je .valid_bpp
-    cmp byte [es:0x6019], 32
-    jne .failed
+    cmp byte [es:0x6219], 32
+    jne .skip_candidate
 .valid_bpp:
-    cmp byte [es:0x601B], 6
-    jne .failed
-    cmp dword [es:0x6028], 0
-    je .failed
+    cmp byte [es:0x621B], 6
+    jne .skip_candidate
+    cmp word [es:0x6212], 640
+    jb .skip_candidate
+    cmp word [es:0x6214], 480
+    jb .skip_candidate
+    cmp dword [es:0x6228], 0
+    je .skip_candidate
 
-    ; Store framebuffer, dimensions, pitch, pixel depth, and RGB layout.
-    mov eax, [es:0x6028]
+    movzx eax, word [es:0x6250]
+    test eax, eax
+    jnz .have_candidate_pitch
+    movzx eax, word [es:0x6210]
+.have_candidate_pitch:
+    mov [candidate_pitch], eax
+    movzx edx, byte [es:0x6219]
+    add edx, 7
+    shr edx, 3
+    movzx eax, word [es:0x6212]
+    imul eax, edx
+    cmp [candidate_pitch], eax
+    jb .skip_candidate
+
+    ; Keep the first usable mode as fallback, but prefer 1024x768.
+    cmp word [selected_mode], 0
+    jne .check_preferred
+    jmp .select_candidate
+.check_preferred:
+    cmp word [es:0x6212], 1024
+    jne .skip_candidate
+    cmp word [es:0x6214], 768
+    jne .skip_candidate
+.select_candidate:
+    mov ax, [candidate_mode]
+    mov [selected_mode], ax
+    mov si, 0x6200
+    mov di, 0x6400
+    mov cx, 128
+    rep movsw
+    cmp word [es:0x6212], 1024
+    jne .skip_candidate
+    cmp word [es:0x6214], 768
+    je .selected_mode_ready
+
+.skip_candidate:
+    pop si
+    pop es
+    add si, 2
+    jmp .next_mode
+
+.modes_done:
+    cmp word [selected_mode], 0
+    je .failed
+    xor ax, ax
+    mov es, ax
+
+    ; Store the selected mode's framebuffer, geometry, pitch, and RGB layout.
+    mov eax, [es:0x6428]
     mov [0x5000], eax
-    movzx eax, word [es:0x6012]
+    movzx eax, word [es:0x6412]
     mov [0x5004], eax
-    movzx eax, word [es:0x6014]
+    movzx eax, word [es:0x6414]
     mov [0x5008], eax
-    movzx eax, word [es:0x6032]
+    movzx eax, word [es:0x6450]
     test eax, eax
     jnz .have_pitch
-    movzx eax, word [es:0x6010]
+    movzx eax, word [es:0x6410]
 .have_pitch:
     mov [0x500C], eax
-    movzx eax, byte [es:0x6019]
+    movzx eax, byte [es:0x6419]
     mov [0x5010], eax
 
-    movzx eax, byte [es:0x6036]
+    movzx eax, byte [es:0x6456]
     test eax, eax
     jnz .have_red
-    movzx eax, byte [es:0x601F]
+    movzx eax, byte [es:0x641F]
 .have_red:
     mov [0x5014], eax
-    movzx eax, byte [es:0x6037]
+    movzx eax, byte [es:0x6457]
     test eax, eax
     jnz .have_red_pos
-    movzx eax, byte [es:0x6020]
+    movzx eax, byte [es:0x6420]
 .have_red_pos:
     mov [0x5018], eax
-    movzx eax, byte [es:0x6038]
+    movzx eax, byte [es:0x6458]
     test eax, eax
     jnz .have_green
-    movzx eax, byte [es:0x6021]
+    movzx eax, byte [es:0x6421]
 .have_green:
     mov [0x501C], eax
-    movzx eax, byte [es:0x6039]
+    movzx eax, byte [es:0x6459]
     test eax, eax
     jnz .have_green_pos
-    movzx eax, byte [es:0x6022]
+    movzx eax, byte [es:0x6422]
 .have_green_pos:
     mov [0x5020], eax
-    movzx eax, byte [es:0x603A]
+    movzx eax, byte [es:0x645A]
     test eax, eax
     jnz .have_blue
-    movzx eax, byte [es:0x6023]
+    movzx eax, byte [es:0x6423]
 .have_blue:
     mov [0x5024], eax
-    movzx eax, byte [es:0x603B]
+    movzx eax, byte [es:0x645B]
     test eax, eax
     jnz .have_blue_pos
-    movzx eax, byte [es:0x6024]
+    movzx eax, byte [es:0x6424]
 .have_blue_pos:
     mov [0x5028], eax
 
     mov ax, 0x4F02
-    mov bx, 0x4118
+    mov bx, [selected_mode]
+    or bx, 0x4000
+    push ds
     int 0x10
+    pop ds
     cmp ax, 0x004F
     jne .failed
     clc
     pop es
     ret
+.selected_mode_ready:
+    pop si
+    pop es
+    jmp .modes_done
 .failed:
     stc
     pop es
     ret
 
-graphics_error:
-    mov si, msg_graphics_error
-    call print_string
-    cli
-.halt:
-    hlt
-    jmp .halt
-
-; -----------------------------------------------------------------------------
-; Load 64-bit kernel (from disk)
-; -----------------------------------------------------------------------------
-load_kernel_64:
-    ; For x86_64, we'd typically use UEFI
-    ; This is a placeholder - in reality we'd chain to UEFI loader
-    mov si, msg_uefi_required
-    call print_string
-    ret
 
 ; -----------------------------------------------------------------------------
 ; Switch to 32-bit protected mode
@@ -449,21 +573,29 @@ DATA32_SEL equ 0x10
 ; -----------------------------------------------------------------------------
 ; Strings
 ; -----------------------------------------------------------------------------
-banner db 13, 10, "========================================", 13, 10
-       db "      NebulaBoot - NebulaOS Loader     ", 13, 10
-       db "========================================", 13, 10, 13, 10, 0
+banner db 13, 10
+       db "   .-------------------------------.     ", 13, 10
+       db "   |  NebulaBoot // NebulaOS      |     ", 13, 10
+       db "   |-----------------------------|     ", 13, 10
+       db "   |  [1] Graphical mode         |     ", 13, 10
+       db "   |  [2] Text mode only         |     ", 13, 10
+       db "   |  [3] UEFI 64-bit            |     ", 13, 10
+       db "   |  [4] Reboot                 |     ", 13, 10
+       db "   |  [5] Shutdown              |     ", 13, 10
+       db "   .-------------------------------.     ", 13, 10, 0
 
-menu db "Select boot option:", 13, 10
-     db "  1. NebulaOS (32-bit)", 13, 10
-     db "  2. NebulaOS (64-bit) [UEFI required]", 13, 10
-     db "  3. Reboot", 13, 10
-     db "  4. Shutdown", 13, 10, 13, 10
-     db "Choice: ", 0
+menu db 13, 10, "Choose a boot target and press Enter.", 13, 10, 0
+prompt db "Selection: ", 0
 
-msg_loading_32 db "Loading NebulaOS 32-bit kernel...", 13, 10, 0
+msg_loading_32 db "Loading NebulaOS 32-bit graphical kernel...", 13, 10, 0
+msg_loading_text db "Loading NebulaOS 32-bit text mode kernel...", 13, 10, 0
 msg_loading_64 db "Loading NebulaOS 64-bit kernel...", 13, 10, 0
 msg_uefi_required db "64-bit mode requires UEFI boot.", 13, 10, 0
-msg_graphics_error db "VESA graphics mode unavailable; stopping in text mode.", 13, 10, 0
+msg_graphics_error db "VESA graphics mode unavailable. Returning to menu.", 13, 10, 0
+mode_list_offset dw 0
+candidate_mode dw 0
+selected_mode dw 0
+candidate_pitch dd 0
 
 ; -----------------------------------------------------------------------------
 ; Pad stage 2 to fill remaining space

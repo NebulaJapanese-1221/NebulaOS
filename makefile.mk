@@ -85,11 +85,13 @@ smoke-uefi: uefi
 	fi
 
 iso: x86
+	rm -rf "$(ISO_DIR)"
 	mkdir -p "$(ISO_DIR)/boot/nebulaos"
 	cp "$(BUILD_DIR)/nebulaos_x86.elf" "$(ISO_DIR)/boot/nebulaos/nebulaos_x86.elf"
 	nasm -f bin "$(ROOT)/boot/nebula_boot/x86/boot.asm" -o "$(BUILD_DIR)/nebula_boot_x86.bin"
 	cat "$(BUILD_DIR)/nebula_boot_x86.bin" "$(BUILD_DIR)/nebulaos_x86.bin" > "$(BUILD_DIR)/boot_image_x86.bin"
 	cp "$(BUILD_DIR)/boot_image_x86.bin" "$(ISO_DIR)/boot/nebulaos/nebula_boot_x86.bin"
+	find "$(ISO_DIR)" \( -name 'desktop.ini' -o -name '.DS_Store' -o -name 'Thumbs.db' \) -delete
 	rm -f "$(ISO_FILE)"
 	xorriso -as mkisofs -R -b boot/nebulaos/nebula_boot_x86.bin -no-emul-boot -boot-load-size 16 -boot-info-table -o "$(ISO_FILE)" "$(ISO_DIR)"
 	printf 'Created %s\n' "$(ISO_FILE)"
