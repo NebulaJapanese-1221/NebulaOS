@@ -35,4 +35,8 @@ make run
 
 `make` creates `nebulaos.iso`, a bootable GRUB ISO containing the Multiboot ELF kernel. `make run` starts it in QEMU. Override tool commands as needed, for example `make QEMU=qemu-system-i386`.
 
+At startup the kernel presents a text-only status screen before launching the graphical desktop. GRUB selects and passes the graphics framebuffer using the Multiboot information structure. Framebuffer access and pixel drawing are isolated in `kernel/framebuffer.cpp` and `kernel/framebuffer.hpp`; the display text and desktop UI are layered on top by the graphics driver. The x86 startup code installs a kernel GDT, IDT exception/IRQ stubs, a remapped PIC, and a PIT-driven system tick used for boot delays.
 
+## Hardware notes
+
+This is a 32-bit x86 BIOS/GRUB Multiboot 1 kernel. It is intended to boot on QEMU and legacy-BIOS or BIOS-compatibility-mode x86 systems with a GRUB-supported 32-bit RGB framebuffer and PS/2-compatible input. Native UEFI-only systems, framebuffer formats other than 32-bit RGB, and framebuffer addresses above 4 GiB are not supported yet. Hardware boot depends on firmware and GRUB providing a Multiboot 1 handoff and usable framebuffer; test the ISO in a virtual machine before trying it on physical hardware.

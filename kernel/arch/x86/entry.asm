@@ -23,9 +23,9 @@ align 4
     dd 0x00000007
     dd -(0x1BADB002 + 0x00000007)
     dd 0
-    dd 0
-    dd 0
-    dd 0
+    dd 800
+    dd 600
+    dd 32
 
 section .text
     global _start
@@ -33,13 +33,37 @@ section .text
 
 _start:
     cli
+    mov esi, eax
+    mov edi, ebx
+
+    lgdt [gdt_descriptor]
+    jmp 0x08:.reload_segments
+
+.reload_segments:
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
     mov esp, 0x90000
-    push ebx
-    push eax
+    push edi
+    push esi
     call kmain
 .halt:
     cli
     hlt
     jmp .halt
+
+section .rodata
+align 8
+gdt:
+    dq 0
+    dq 0x00CF9A000000FFFF
+    dq 0x00CF92000000FFFF
+gdt_end:
+gdt_descriptor:
+    dw gdt_end - gdt - 1
+    dd gdt
 
 section .note.GNU-stack noalloc noexec nowrite progbits

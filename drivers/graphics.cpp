@@ -1,4 +1,4 @@
-// Framebuffer drawing support for the NebulaOS x86 operating system.
+// Text and shape drawing for the NebulaOS x86 operating system.
 // Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -16,47 +16,9 @@
 // See LICENCE for the full license text.
 
 #include "graphics.hpp"
+#include "../kernel/framebuffer.hpp"
 
 namespace {
-struct __attribute__((packed)) MultibootInfo {
-    unsigned int flags;
-    unsigned int memory_lower;
-    unsigned int memory_upper;
-    unsigned int boot_device;
-    unsigned int command_line;
-    unsigned int modules_count;
-    unsigned int modules_address;
-    unsigned int symbols[4];
-    unsigned int memory_map_length;
-    unsigned int memory_map_address;
-    unsigned int drives_length;
-    unsigned int drives_address;
-    unsigned int configuration_table;
-    unsigned int boot_loader_name;
-    unsigned int apm_table;
-    unsigned int vbe_control_info;
-    unsigned int vbe_mode_info;
-    unsigned short vbe_mode;
-    unsigned short vbe_interface_segment;
-    unsigned short vbe_interface_offset;
-    unsigned short vbe_interface_length;
-    unsigned long long framebuffer_address;
-    unsigned int framebuffer_pitch;
-    unsigned int framebuffer_width;
-    unsigned int framebuffer_height;
-    unsigned char framebuffer_bpp;
-    unsigned char framebuffer_type;
-    unsigned char color_info[6];
-};
-
-volatile unsigned int* framebuffer = nullptr;
-unsigned int screen_width = 0;
-unsigned int screen_height = 0;
-unsigned int screen_pitch = 0;
-unsigned int red_position = 16;
-unsigned int green_position = 8;
-unsigned int blue_position = 0;
-
 unsigned char glyph_column(char character, unsigned int column) {
     static const unsigned char glyphs[36][5] = {
         {0x7E, 0x11, 0x11, 0x11, 0x7E}, {0x7F, 0x49, 0x49, 0x49, 0x36},
@@ -110,47 +72,15 @@ unsigned char glyph_column(char character, unsigned int column) {
 namespace drivers::graphics {
 
 bool initialize(unsigned int multiboot_info_address) {
-    const MultibootInfo* info = reinterpret_cast<const MultibootInfo*>(multiboot_info_address);
-    if ((info->flags & (1U << 12)) == 0 || info->framebuffer_type != 1 ||
-        info->framebuffer_bpp != 32 || info->framebuffer_width < 640 ||
-        info->framebuffer_height < 480 || info->framebuffer_pitch < info->framebuffer_width * 4) {
-        return false;
-    }
-
-    framebuffer = reinterpret_cast<volatile unsigned int*>(
-        static_cast<unsigned int>(info->framebuffer_address));
-    screen_width = info->framebuffer_width;
-    screen_height = info->framebuffer_height;
-    screen_pitch = info->framebuffer_pitch / 4;
-    red_position = info->color_info[0];
-    green_position = info->color_info[2];
-    blue_position = info->color_info[4];
-    return true;
+    return kernel::framebuffer::initialize(multiboot_info_address);
 }
 
 void clear(unsigned int color) {
-    for (unsigned int y = 0; y < screen_height; ++y) {
-        for (unsigned int x = 0; x < screen_width; ++x) {
-            framebuffer[y * screen_pitch + x] = color;
-        }
-    }
+    kernel::framebuffer::clear(color);
 }
 
 void fill_rect(unsigned int x, unsigned int y, unsigned int rect_width, unsigned int rect_height, unsigned int color) {
-    if (x >= screen_width || y >= screen_height) {
-        return;
-    }
-    if (rect_width > screen_width - x) {
-        rect_width = screen_width - x;
-    }
-    if (rect_height > screen_height - y) {
-        rect_height = screen_height - y;
-    }
-    for (unsigned int row = y; row < y + rect_height; ++row) {
-        for (unsigned int column = x; column < x + rect_width; ++column) {
-            framebuffer[row * screen_pitch + column] = color;
-        }
-    }
+    kernel::framebuffer::fill_rect(x, y, rect_width, rect_height, color);
 }
 
 void draw_text(unsigned int x, unsigned int y, const char* text, unsigned int color, unsigned int scale) {
@@ -163,7 +93,8 @@ void draw_text(unsigned int x, unsigned int y, const char* text, unsigned int co
             const unsigned char pixels = glyph_column(text[index], column);
             for (unsigned int row = 0; row < 7; ++row) {
                 if ((pixels & (1U << row)) != 0) {
-                    fill_rect(left + column * scale, y + row * scale, scale, scale, color);
+                    kernel::framebuffer::fill_rect(
+                        left + column * scale, y + row * scale, scale, scale, color);
                 }
             }
         }
@@ -171,11 +102,11 @@ void draw_text(unsigned int x, unsigned int y, const char* text, unsigned int co
 }
 
 unsigned int width() {
-    return screen_width;
+    return kernel::framebuffer::width();
 }
 
 unsigned int height() {
-    return screen_height;
+    return kernel::framebuffer::height();
 }
 
 }
