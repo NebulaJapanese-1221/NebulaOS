@@ -1,4 +1,4 @@
-// Kernel framebuffer interface for the NebulaOS x86 operating system.
+// Kernel heap interface for the NebulaOS x86 operating system.
 // Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -17,12 +17,19 @@
 
 #pragma once
 
-namespace kernel::framebuffer {
+namespace kernel::memory {
 
-bool initialize(unsigned int multiboot_info_address, const char** reason = nullptr);
-void clear(unsigned int color);
-void fill_rect(unsigned int x, unsigned int y, unsigned int width, unsigned int height, unsigned int color);
-unsigned int width();
-unsigned int height();
+// First-fit allocator backed by frames from the physical page frame manager.
+// Every block is tracked in one doubly linked list so adjacent free blocks can
+// be merged on release.
+void initialize(unsigned int reserve_megabytes);
+bool is_initialized();
+
+void* allocate(unsigned int bytes);
+void release(void* pointer);
+
+unsigned int total_bytes();
+unsigned int used_bytes();
+unsigned int free_bytes();
 
 }

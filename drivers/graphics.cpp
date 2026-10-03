@@ -71,8 +71,8 @@ unsigned char glyph_column(char character, unsigned int column) {
 
 namespace drivers::graphics {
 
-bool initialize(unsigned int multiboot_info_address) {
-    return kernel::framebuffer::initialize(multiboot_info_address);
+bool initialize(unsigned int multiboot_info_address, const char** reason) {
+    return kernel::framebuffer::initialize(multiboot_info_address, reason);
 }
 
 void clear(unsigned int color) {

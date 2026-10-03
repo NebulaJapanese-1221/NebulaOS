@@ -25,10 +25,11 @@ CXXFLAGS := -m32 -std=gnu++17 -ffreestanding -fno-exceptions -fno-rtti \
 	-fno-stack-protector -fno-pic -fno-pie -nostdinc++ -Wall -Wextra -O2
 LDFLAGS := -m elf_i386 -T kernel/arch/x86/linker.ld -nostdlib
 
-KERNEL_OBJECTS := kernel_entry.o interrupts_entry.o kernel.o kernel/framebuffer.o kernel/timer.o kernel/arch/x86/interrupts.o drivers/graphics.o drivers/keyboard.o drivers/mouse.o shell.o
+KERNEL_OBJECTS := kernel_entry.o interrupts_entry.o kernel.o kernel/framebuffer.o kernel/timer.o kernel/arch/x86/interrupts.o drivers/graphics.o drivers/keyboard.o drivers/mouse.o drivers/serial.o shell.o
 ISO_ROOT := build/isodir
+QEMU_FLAGS ?= -m 64M
 
-.PHONY: all clean run
+.PHONY: all clean run run-serial run-debug
 
 all: nebulaos.iso
 
@@ -38,7 +39,7 @@ kernel_entry.o: kernel/arch/x86/entry.asm
 interrupts_entry.o: kernel/arch/x86/interrupts.asm
 	$(NASM) -f elf32 $< -o $@
 
-kernel.o: kernel/main.cpp kernel/framebuffer.hpp kernel/timer.hpp kernel/arch/x86/interrupts.hpp drivers/graphics.hpp drivers/keyboard.hpp drivers/mouse.hpp shell/shell.hpp
+kernel.o: kernel/main.cpp kernel/framebuffer.hpp kernel/timer.hpp kernel/arch/x86/interrupts.hpp drivers/graphics.hpp drivers/keyboard.hpp drivers/mouse.hpp drivers/serial.hpp shell/shell.hpp
 	$(CXX) $(CXXFLAGS) -I. -c $< -o $@
 
 kernel/framebuffer.o: kernel/framebuffer.cpp kernel/framebuffer.hpp
@@ -47,7 +48,7 @@ kernel/framebuffer.o: kernel/framebuffer.cpp kernel/framebuffer.hpp
 kernel/timer.o: kernel/timer.cpp kernel/timer.hpp
 	$(CXX) $(CXXFLAGS) -I. -c $< -o $@
 
-kernel/arch/x86/interrupts.o: kernel/arch/x86/interrupts.cpp kernel/arch/x86/interrupts.hpp kernel/timer.hpp
+kernel/arch/x86/interrupts.o: kernel/arch/x86/interrupts.cpp kernel/arch/x86/interrupts.hpp kernel/timer.hpp drivers/serial.hpp
 	$(CXX) $(CXXFLAGS) -I. -c $< -o $@
 
 drivers/graphics.o: drivers/graphics.cpp drivers/graphics.hpp kernel/framebuffer.hpp
@@ -57,6 +58,9 @@ drivers/keyboard.o: drivers/keyboard.cpp drivers/keyboard.hpp
 	$(CXX) $(CXXFLAGS) -I. -c $< -o $@
 
 drivers/mouse.o: drivers/mouse.cpp drivers/mouse.hpp
+	$(CXX) $(CXXFLAGS) -I. -c $< -o $@
+
+drivers/serial.o: drivers/serial.cpp drivers/serial.hpp
 	$(CXX) $(CXXFLAGS) -I. -c $< -o $@
 
 shell.o: shell/shell.cpp shell/shell.hpp drivers/graphics.hpp drivers/keyboard.hpp drivers/mouse.hpp
@@ -72,8 +76,17 @@ nebulaos.iso: kernel.elf boot/grub/grub.cfg
 	$(GRUB_MKRESCUE) -o $@ $(ISO_ROOT)
 
 run: nebulaos.iso
-	$(QEMU) -cdrom $< -m 64M
+	$(QEMU) $(QEMU_FLAGS) -cdrom $<
+
+# Boot with the serial console mirrored to stdout instead of a graphics window.
+run-serial: nebulaos.iso
+	$(QEMU) $(QEMU_FLAGS) -cdrom $< -display none -serial stdio
+
+# Boot headless and record CPU exceptions, resets and serial output for triage.
+run-debug: nebulaos.iso
+	$(QEMU) $(QEMU_FLAGS) -cdrom $< -display none -serial stdio -no-reboot \
+		-d int,cpu_reset -D build/qemu-debug.log
 
 clean:
-	rm -f kernel_entry.o interrupts_entry.o kernel.o kernel/framebuffer.o kernel/timer.o kernel/arch/x86/interrupts.o drivers/graphics.o drivers/keyboard.o drivers/mouse.o shell.o kernel.elf nebulaos.iso
+	rm -f kernel_entry.o interrupts_entry.o kernel.o kernel/framebuffer.o kernel/timer.o kernel/arch/x86/interrupts.o drivers/graphics.o drivers/keyboard.o drivers/mouse.o drivers/serial.o shell.o kernel.elf nebulaos.iso
 	rm -rf build

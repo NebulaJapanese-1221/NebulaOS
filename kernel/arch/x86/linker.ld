@@ -22,9 +22,11 @@ ENTRY(_start)
 
 SECTIONS {
     . = 0x00100000;
+    kernel_image_start = .;
     .multiboot ALIGN(4) : { KEEP(*(.multiboot)) }
     .text : { *(.text*) }
     .rodata : { *(.rodata*) }
     .data : { *(.data*) }
     .bss : { *(.bss*) *(COMMON) }
+    kernel_image_end = .;
 }

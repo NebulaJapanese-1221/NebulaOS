@@ -17,6 +17,7 @@
 
 #include "interrupts.hpp"
 #include "../../timer.hpp"
+#include "../../../drivers/serial.hpp"
 
 namespace {
 struct __attribute__((packed)) IdtEntry {
@@ -77,7 +78,7 @@ void remap_pic() {
 
 namespace kernel::interrupts {
 
-void initialize() {
+void install_handlers() {
     disable();
 
     const unsigned int fallback =
@@ -94,7 +95,12 @@ void initialize() {
         reinterpret_cast<unsigned int>(idt)
     };
     asm volatile("lidt %0" : : "m"(pointer));
+}
 
+void initialize() {
+    disable();
+
+    install_handlers();
     remap_pic();
     kernel::timer::initialize();
     enable();
@@ -110,7 +116,41 @@ void disable() {
 
 }
 
+namespace {
+unsigned int fault_address() {
+    unsigned int address = 0;
+    asm volatile("mov %%cr2, %0" : "=r"(address));
+    return address;
+}
+
+void report_page_fault(unsigned int error_code) {
+    const unsigned int address = fault_address();
+
+    volatile unsigned short* const text =
+        reinterpret_cast<volatile unsigned short*>(0xB8000);
+    const char message[] = "NEBULAOS PAGE FAULT";
+    for (unsigned int index = 0; message[index] != '\0'; ++index) {
+        text[index] = static_cast<unsigned short>(0x4F00 | message[index]);
+    }
+
+    drivers::serial::write_line("NEBULAOS PAGE FAULT");
+    drivers::serial::write("address ");
+    drivers::serial::write_hex(address);
+    drivers::serial::write(" error ");
+    drivers::serial::write_hex(error_code);
+    drivers::serial::write_newline();
+}
+}
+
 extern "C" void interrupt_dispatch(unsigned int vector, unsigned int error_code) {
+    if (vector == 14) {
+        kernel::interrupts::disable();
+        report_page_fault(error_code);
+        for (;;) {
+            asm volatile("cli; hlt");
+        }
+    }
+
     if (vector < 32) {
         kernel::interrupts::disable();
         volatile unsigned short* const text =
@@ -129,8 +169,14 @@ extern "C" void interrupt_dispatch(unsigned int vector, unsigned int error_code)
         text[32] = static_cast<unsigned short>(0x4F00 | ('0' + ((error_code / 100) % 10)));
         text[33] = static_cast<unsigned short>(0x4F00 | ('0' + ((error_code / 10) % 10)));
         text[34] = static_cast<unsigned short>(0x4F00 | ('0' + (error_code % 10)));
+        drivers::serial::write_line("NEBULAOS CPU EXCEPTION");
+        drivers::serial::write("vector ");
+        drivers::serial::write_hex(vector);
+        drivers::serial::write(" error ");
+        drivers::serial::write_hex(error_code);
+        drivers::serial::write_newline();
         for (;;) {
-            asm volatile("hlt");
+            asm volatile("cli; hlt");
         }
     }
 

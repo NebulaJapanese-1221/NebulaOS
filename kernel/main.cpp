@@ -18,6 +18,7 @@
 #include "../drivers/graphics.hpp"
 #include "../drivers/keyboard.hpp"
 #include "../drivers/mouse.hpp"
+#include "../drivers/serial.hpp"
 #include "arch/x86/interrupts.hpp"
 #include "timer.hpp"
 #include "../shell/shell.hpp"
@@ -35,12 +36,13 @@ void show_boot_screen() {
 
 void show_status(unsigned int row, const char* text, unsigned int color) {
     drivers::graphics::draw_text(24, 86 + row * 24, text, color, 1);
+    drivers::serial::write("[boot] ");
+    drivers::serial::write_line(text);
 }
 
-[[noreturn]] void halt_with_error(const char* message) {
+void write_vga_line(const char* prefix, const char* message) {
     volatile unsigned short* const text_buffer =
         reinterpret_cast<volatile unsigned short*>(0xB8000);
-    const char prefix[] = "NEBULAOS BOOT ERROR: ";
     unsigned int index = 0;
     for (unsigned int letter = 0; prefix[letter] != '\0' && index < 80; ++letter) {
         text_buffer[index] = static_cast<unsigned short>(0x4F00 | prefix[letter]);
@@ -50,6 +52,13 @@ void show_status(unsigned int row, const char* text, unsigned int color) {
         text_buffer[index] = static_cast<unsigned short>(0x4F00 | message[letter]);
         ++index;
     }
+}
+
+[[noreturn]] void halt_with_error(const char* message) {
+    const char prefix[] = "NEBULAOS BOOT ERROR: ";
+    write_vga_line(prefix, message);
+    drivers::serial::write_line(prefix);
+    drivers::serial::write_line(message);
     for (;;) {
         asm volatile("cli; hlt");
     }
@@ -57,12 +66,24 @@ void show_status(unsigned int row, const char* text, unsigned int color) {
 }
 
 extern "C" void kmain(unsigned int boot_magic, unsigned int multiboot_info_address) {
+    drivers::serial::initialize();
+
     if (boot_magic != 0x2BADB002) {
         halt_with_error("INVALID MULTIBOOT HANDOFF");
     }
-    if (!drivers::graphics::initialize(multiboot_info_address)) {
-        halt_with_error("FRAMEBUFFER UNAVAILABLE");
+
+    const char* framebuffer_reason = nullptr;
+    if (!drivers::graphics::initialize(multiboot_info_address,
+                                       &framebuffer_reason)) {
+        halt_with_error(framebuffer_reason == nullptr ? "FRAMEBUFFER UNAVAILABLE"
+                                                      : framebuffer_reason);
     }
+
+    drivers::serial::write("framebuffer ");
+    drivers::serial::write_decimal(drivers::graphics::width());
+    drivers::serial::write("x");
+    drivers::serial::write_decimal(drivers::graphics::height());
+    drivers::serial::write_line(" pixels");
 
     kernel::interrupts::initialize();
     show_boot_screen();

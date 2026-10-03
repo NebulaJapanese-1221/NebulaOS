@@ -19,6 +19,9 @@
 
 namespace kernel::interrupts {
 
+// Loads the IDT with interrupts still disabled. Paging must be enabled only
+// after this runs, otherwise a fault during translation cannot be reported.
+void install_handlers();
 void initialize();
 void enable();
 void disable();

@@ -1,4 +1,4 @@
-// Kernel framebuffer interface for the NebulaOS x86 operating system.
+// 16550A UART interface for the NebulaOS x86 operating system.
 // Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -17,12 +17,22 @@
 
 #pragma once
 
-namespace kernel::framebuffer {
+namespace drivers::serial {
 
-bool initialize(unsigned int multiboot_info_address, const char** reason = nullptr);
-void clear(unsigned int color);
-void fill_rect(unsigned int x, unsigned int y, unsigned int width, unsigned int height, unsigned int color);
-unsigned int width();
-unsigned int height();
+enum Port : unsigned short {
+    com1 = 0x3F8,
+    com2 = 0x2F8,
+    com3 = 0x3E8,
+    com4 = 0x2E8
+};
+
+bool initialize(unsigned short port = com1);
+bool is_ready();
+void write(char character);
+void write(const char* text);
+void write_line(const char* text);
+void write_hex(unsigned int value);
+void write_decimal(unsigned int value);
+void write_newline();
 
 }
