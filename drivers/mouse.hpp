@@ -1,4 +1,4 @@
-// VGA text output interface for the NebulaOS x86 operating system.
+// PS/2 mouse input for the NebulaOS x86 operating system.
 // Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -17,13 +17,16 @@
 
 #pragma once
 
-namespace drivers::vga {
+namespace drivers::mouse {
 
-void initialize();
-void clear();
-void write(const char* text);
-void write_line(const char* text);
-void put(char character);
-void backspace();
+struct State {
+    unsigned int x;
+    unsigned int y;
+    bool left_pressed;
+    bool left_clicked;
+};
+
+bool initialize(unsigned int screen_width, unsigned int screen_height);
+bool poll(State& state);
 
 }

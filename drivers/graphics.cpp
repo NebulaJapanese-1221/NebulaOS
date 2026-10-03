@@ -1,3 +1,20 @@
+// Framebuffer drawing support for the NebulaOS x86 operating system.
+// Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
+// See LICENCE for the full license text.
+
 #include "graphics.hpp"
 
 namespace {
@@ -19,6 +36,10 @@ struct __attribute__((packed)) MultibootInfo {
     unsigned int apm_table;
     unsigned int vbe_control_info;
     unsigned int vbe_mode_info;
+    unsigned short vbe_mode;
+    unsigned short vbe_interface_segment;
+    unsigned short vbe_interface_offset;
+    unsigned short vbe_interface_length;
     unsigned long long framebuffer_address;
     unsigned int framebuffer_pitch;
     unsigned int framebuffer_width;
@@ -35,12 +56,6 @@ unsigned int screen_pitch = 0;
 unsigned int red_position = 16;
 unsigned int green_position = 8;
 unsigned int blue_position = 0;
-
-unsigned int rgb(unsigned char red, unsigned char green, unsigned char blue) {
-    return (static_cast<unsigned int>(red) << red_position) |
-           (static_cast<unsigned int>(green) << green_position) |
-           (static_cast<unsigned int>(blue) << blue_position);
-}
 
 unsigned char glyph_column(char character, unsigned int column) {
     static const unsigned char glyphs[36][5] = {

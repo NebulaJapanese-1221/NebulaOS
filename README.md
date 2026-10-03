@@ -1,6 +1,14 @@
 # NebulaOS
 
-NebulaOS is a small 32-bit x86 hobby operating system. GRUB loads its Multiboot kernel, which requests a 32-bit graphics framebuffer and starts a simple desktop-style shell.
+NebulaOS is a small 32-bit x86 hobby operating system. GRUB loads its Multiboot kernel, which uses a 32-bit graphics framebuffer and starts a simple desktop-style shell.
+
+## Copyright and license
+
+Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>.
+
+NebulaOS is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. It is distributed without any warranty; see [LICENCE](./LICENCE) for the complete license text.
+
+Electronic contact: [nebulajapanese@gmail.com](mailto:nebulajapanese@gmail.com). No paper-mail address is available.
 
 ## Linux requirements
 
@@ -27,20 +35,4 @@ make run
 
 `make` creates `nebulaos.iso`, a bootable GRUB ISO containing the Multiboot ELF kernel. `make run` starts it in QEMU. Override tool commands as needed, for example `make QEMU=qemu-system-i386`.
 
-## Shell
 
-The initial GUI shell draws a desktop header, status tile, terminal window, and taskbar using the GRUB-provided linear framebuffer. It accepts keyboard input and supports:
-
-- `help`
-- `clear`
-- `about`
-- `echo <text>`
-
-The display currently uses a basic built-in bitmap font and a fixed 32-bit RGB framebuffer mode request (800x600).
-
-## Source layout
-
-- `boot/grub/grub.cfg` defines the GRUB boot menu.
-- `kernel/` contains the Multiboot entry point, kernel startup, and x86 linker script.
-- `drivers/graphics.*` draws the framebuffer interface; `drivers/keyboard.*` reads PS/2 keyboard input.
-- `shell/` contains the graphical terminal shell.
