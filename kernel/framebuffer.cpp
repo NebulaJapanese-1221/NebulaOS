@@ -1,4 +1,4 @@
-// GRUB framebuffer setup and pixel access for the NebulaOS x86 kernel.
+// GRUB framebuffer setup, double buffering and pixel access for NebulaOS.
 // Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -16,50 +16,18 @@
 // See LICENCE for the full license text.
 
 #include "framebuffer.hpp"
+#include "heap.hpp"
+#include "multiboot.hpp"
+#include "paging.hpp"
 
 namespace {
-struct __attribute__((packed)) MultibootInfo {
-    unsigned int flags;
-    unsigned int memory_lower;
-    unsigned int memory_upper;
-    unsigned int boot_device;
-    unsigned int command_line;
-    unsigned int modules_count;
-    unsigned int modules_address;
-    unsigned int symbols[4];
-    unsigned int memory_map_length;
-    unsigned int memory_map_address;
-    unsigned int drives_length;
-    unsigned int drives_address;
-    unsigned int configuration_table;
-    unsigned int boot_loader_name;
-    unsigned int apm_table;
-    unsigned int vbe_control_info;
-    unsigned int vbe_mode_info;
-    unsigned short vbe_mode;
-    unsigned short vbe_interface_segment;
-    unsigned short vbe_interface_offset;
-    unsigned short vbe_interface_length;
-    unsigned long long framebuffer_address;
-    unsigned int framebuffer_pitch;
-    unsigned int framebuffer_width;
-    unsigned int framebuffer_height;
-    unsigned char framebuffer_bpp;
-    unsigned char framebuffer_type;
-    unsigned char red_position;
-    unsigned char red_mask_size;
-    unsigned char green_position;
-    unsigned char green_mask_size;
-    unsigned char blue_position;
-    unsigned char blue_mask_size;
-};
-
 struct ChannelMask {
     unsigned int position;
     unsigned int size;
 };
 
-volatile unsigned char* pixels = nullptr;
+unsigned char* display_pointer = nullptr;
+unsigned char* back_buffer = nullptr;
 unsigned int pixel_width = 0;
 unsigned int pixel_height = 0;
 unsigned int pitch_bytes = 0;
@@ -130,6 +98,19 @@ unsigned int encode_color(unsigned int color) {
            convert_channel((color >> 8) & 0xFF, green_mask_size, green_position) |
            convert_channel(color & 0xFF, blue_mask_size, blue_position);
 }
+
+// Hardware can sit above the identity mapping, in which case paging exposes it
+// through the reserved device window.
+bool resolve_display_pointer(unsigned int physical_base, unsigned int length,
+                             unsigned int* virtual_base) {
+    const unsigned int identity_limit =
+        static_cast<unsigned int>(kernel::memory::paging::identity_megabytes()) * 1024U * 1024U;
+    if (physical_base < identity_limit && physical_base + length <= identity_limit) {
+        *virtual_base = physical_base;
+        return true;
+    }
+    return kernel::memory::paging::map_device_range(physical_base, length, virtual_base);
+}
 }
 
 namespace kernel::framebuffer {
@@ -137,14 +118,13 @@ namespace kernel::framebuffer {
 bool initialize(unsigned int multiboot_info_address, const char** reason) {
     set_reason(reason, "FRAMEBUFFER UNAVAILABLE");
 
-    if (multiboot_info_address == 0) {
+    const kernel::multiboot::Information* info =
+        kernel::multiboot::information(multiboot_info_address);
+    if (info == nullptr) {
         set_reason(reason, "NO MULTIBOOT INFORMATION");
         return false;
     }
-
-    const MultibootInfo* info =
-        reinterpret_cast<const MultibootInfo*>(multiboot_info_address);
-    if ((info->flags & (1U << 12)) == 0) {
+    if ((info->flags & kernel::multiboot::flag_framebuffer) == 0) {
         set_reason(reason, "BOOTLOADER SUPPLIED NO FRAMEBUFFER");
         return false;
     }
@@ -174,15 +154,12 @@ bool initialize(unsigned int multiboot_info_address, const char** reason) {
     ChannelMask red = {info->red_position, info->red_mask_size};
     ChannelMask green = {info->green_position, info->green_mask_size};
     ChannelMask blue = {info->blue_position, info->blue_mask_size};
-    if (!masks_usable(info->framebuffer_bpp, red, green, blue)) {
-        if (!standard_masks(info->framebuffer_bpp, red, green, blue)) {
-            set_reason(reason, "FRAMEBUFFER CHANNEL MASKS ARE UNUSABLE");
-            return false;
-        }
+    if (!masks_usable(info->framebuffer_bpp, red, green, blue) &&
+        !standard_masks(info->framebuffer_bpp, red, green, blue)) {
+        set_reason(reason, "FRAMEBUFFER CHANNEL MASKS ARE UNUSABLE");
+        return false;
     }
 
-    pixels = reinterpret_cast<volatile unsigned char*>(
-        static_cast<unsigned int>(info->framebuffer_address));
     pixel_width = info->framebuffer_width;
     pixel_height = info->framebuffer_height;
     pitch_bytes = info->framebuffer_pitch;
@@ -193,17 +170,73 @@ bool initialize(unsigned int multiboot_info_address, const char** reason) {
     green_mask_size = green.size;
     blue_position = blue.position;
     blue_mask_size = blue.size;
+
+    const unsigned long long physical = info->framebuffer_address;
+    const unsigned long long length =
+        static_cast<unsigned long long>(pitch_bytes) * pixel_height;
+    unsigned int virtual_base = 0;
+    if (length > 0xFFFFFFFFULL ||
+        !resolve_display_pointer(static_cast<unsigned int>(physical),
+                                 static_cast<unsigned int>(length),
+                                 &virtual_base)) {
+        set_reason(reason, "FRAMEBUFFER COULD NOT BE MAPPED");
+        return false;
+    }
+    display_pointer = reinterpret_cast<unsigned char*>(virtual_base);
+
+    // A back buffer keeps a whole frame in ordinary memory so the visible
+    // update is a single sequential copy rather than a scatter of writes to
+    // device memory. If the heap cannot satisfy it the framebuffer still works,
+    // it just draws straight through.
+    back_buffer = static_cast<unsigned char*>(
+        memory::heap::allocate(static_cast<unsigned int>(length)));
+    if (back_buffer != nullptr) {
+        for (unsigned int offset = 0; offset < static_cast<unsigned int>(length); ++offset) {
+            back_buffer[offset] = 0;
+        }
+    }
+
     set_reason(reason, nullptr);
     return true;
 }
 
 void clear(unsigned int color) {
-    fill_rect(0, 0, pixel_width, pixel_height, color);
+    if (display_pointer == nullptr) {
+        return;
+    }
+    if (back_buffer == nullptr) {
+        fill_rect(0, 0, pixel_width, pixel_height, color);
+        return;
+    }
+
+    // Widen the pattern to the pixel stride so full-screen clears do not need a
+    // write per channel. Only the 32bpp case has a row pitch that is always a
+    // multiple of the wider store, so narrower formats keep the byte loop.
+    const unsigned int pixel_color = encode_color(color);
+    for (unsigned int row = 0; row < pixel_height; ++row) {
+        unsigned char* const destination = back_buffer + row * pitch_bytes;
+        unsigned int column = 0;
+        if (bytes_per_pixel == 4) {
+            unsigned int* const words = reinterpret_cast<unsigned int*>(destination);
+            for (; column + 4 <= pixel_width; column += 4) {
+                words[column] = pixel_color;
+            }
+        }
+        for (; column < pixel_width; ++column) {
+            unsigned char* pixel = destination + column * bytes_per_pixel;
+            pixel[0] = static_cast<unsigned char>(pixel_color);
+            pixel[1] = static_cast<unsigned char>(pixel_color >> 8);
+            pixel[2] = static_cast<unsigned char>(pixel_color >> 16);
+            if (bytes_per_pixel == 4) {
+                pixel[3] = static_cast<unsigned char>(pixel_color >> 24);
+            }
+        }
+    }
 }
 
 void fill_rect(unsigned int x, unsigned int y, unsigned int rect_width,
                unsigned int rect_height, unsigned int color) {
-    if (pixels == nullptr || x >= pixel_width || y >= pixel_height) {
+    if (display_pointer == nullptr || x >= pixel_width || y >= pixel_height) {
         return;
     }
     if (rect_width > pixel_width - x) {
@@ -213,20 +246,62 @@ void fill_rect(unsigned int x, unsigned int y, unsigned int rect_width,
         rect_height = pixel_height - y;
     }
 
+    unsigned char* const target = back_buffer != nullptr ? back_buffer : display_pointer;
     const unsigned int pixel_color = encode_color(color);
     for (unsigned int row = y; row < y + rect_height; ++row) {
-        volatile unsigned char* destination =
-            pixels + row * pitch_bytes + x * bytes_per_pixel;
+        unsigned char* destination = target + row * pitch_bytes + x * bytes_per_pixel;
+        if (bytes_per_pixel == 4) {
+            unsigned int* const words = reinterpret_cast<unsigned int*>(destination);
+            for (unsigned int column = 0; column < rect_width; ++column) {
+                words[column] = pixel_color;
+            }
+            continue;
+        }
         for (unsigned int column = 0; column < rect_width; ++column) {
-            volatile unsigned char* pixel = destination + column * bytes_per_pixel;
+            unsigned char* pixel = destination + column * bytes_per_pixel;
             pixel[0] = static_cast<unsigned char>(pixel_color);
             pixel[1] = static_cast<unsigned char>(pixel_color >> 8);
             pixel[2] = static_cast<unsigned char>(pixel_color >> 16);
-            if (bytes_per_pixel == 4) {
-                pixel[3] = static_cast<unsigned char>(pixel_color >> 24);
-            }
         }
     }
+}
+
+void present() {
+    present_rect(0, 0, pixel_width, pixel_height);
+}
+
+void present_rect(unsigned int x, unsigned int y, unsigned int rect_width,
+                  unsigned int rect_height) {
+    if (back_buffer == nullptr || display_pointer == nullptr) {
+        return;
+    }
+    if (x >= pixel_width || y >= pixel_height) {
+        return;
+    }
+    if (rect_width > pixel_width - x) {
+        rect_width = pixel_width - x;
+    }
+    if (rect_height > pixel_height - y) {
+        rect_height = pixel_height - y;
+    }
+
+    const unsigned int row_bytes = rect_width * bytes_per_pixel;
+    for (unsigned int row = y; row < y + rect_height; ++row) {
+        const unsigned char* source = back_buffer + row * pitch_bytes + x * bytes_per_pixel;
+        volatile unsigned char* destination =
+            display_pointer + row * pitch_bytes + x * bytes_per_pixel;
+        for (unsigned int offset = 0; offset < row_bytes; ++offset) {
+            destination[offset] = source[offset];
+        }
+    }
+}
+
+bool is_double_buffered() {
+    return back_buffer != nullptr;
+}
+
+unsigned char* buffer() {
+    return back_buffer != nullptr ? back_buffer : display_pointer;
 }
 
 unsigned int width() {

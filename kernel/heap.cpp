@@ -56,7 +56,7 @@ void tally(unsigned int* used, unsigned int* unused) {
 }
 }
 
-namespace kernel::memory {
+namespace kernel::memory::heap {
 
 void initialize(unsigned int reserve_megabytes) {
     if (heap_ready) {
@@ -70,7 +70,7 @@ void initialize(unsigned int reserve_megabytes) {
             break;
         }
         BlockHeader* const block = static_cast<BlockHeader*>(frame);
-        block->size = page_size;
+        block->size = pmm::page_size;
         block->magic = block_magic_free;
         block->previous = previous;
         block->next = nullptr;
@@ -80,7 +80,7 @@ void initialize(unsigned int reserve_megabytes) {
             first_block = block;
         }
         previous = block;
-        collected += page_size;
+        collected += pmm::page_size;
     }
     reserved_bytes = collected;
     heap_ready = first_block != nullptr;

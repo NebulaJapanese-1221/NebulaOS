@@ -17,7 +17,7 @@
 
 #pragma once
 
-namespace kernel::memory {
+namespace kernel::memory::paging {
 
 const unsigned int page_present = 0x1;
 const unsigned int page_writable = 0x2;

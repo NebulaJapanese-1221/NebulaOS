@@ -17,7 +17,7 @@
 
 #pragma once
 
-namespace kernel::memory {
+namespace kernel::memory::pmm {
 
 const unsigned int page_size = 4096;
 
@@ -38,6 +38,10 @@ unsigned int free_frames();
 unsigned long long total_bytes();
 unsigned long long free_bytes();
 unsigned long long managed_bytes();
+
+// Physical memory the boot information reported as available, which may be far
+// below managed_bytes().
+unsigned long long detected_bytes();
 unsigned int highest_managed_address();
 
 }

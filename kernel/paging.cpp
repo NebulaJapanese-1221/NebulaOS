@@ -18,6 +18,8 @@
 #include "paging.hpp"
 #include "pmm.hpp"
 
+namespace kernel::memory::paging {
+
 namespace {
 const unsigned int directory_entries = 1024;
 const unsigned int table_entries = 1024;
@@ -73,8 +75,6 @@ bool table_is_empty(const unsigned int* table) {
 }
 }
 
-namespace kernel::memory {
-
 bool initialize(unsigned int identity_megabytes) {
     if (page_directory != nullptr) {
         return true;
@@ -99,7 +99,7 @@ bool initialize(unsigned int identity_megabytes) {
 
     const unsigned long long span =
         static_cast<unsigned long long>(identity_megabytes) * 1024ULL * 1024ULL;
-    for (unsigned long long address = 0; address < span; address += page_size) {
+    for (unsigned long long address = 0; address < span; address += pmm::page_size) {
         if (!map_page(static_cast<unsigned int>(address),
                       static_cast<unsigned int>(address),
                       page_present | page_writable)) {
@@ -197,11 +197,11 @@ bool map_device_range(unsigned int physical_base, unsigned int length,
     }
 
     const unsigned int base = device_cursor;
-    for (unsigned int address = first_page; address < last_page; address += page_size) {
+    for (unsigned int address = first_page; address < last_page; address += pmm::page_size) {
         if (!map_page(device_cursor, address, page_present | page_writable)) {
             return false;
         }
-        device_cursor += page_size;
+        device_cursor += pmm::page_size;
     }
     if (virtual_base != nullptr) {
         *virtual_base = base;

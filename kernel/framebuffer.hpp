@@ -20,8 +20,17 @@
 namespace kernel::framebuffer {
 
 bool initialize(unsigned int multiboot_info_address, const char** reason = nullptr);
+
+// All drawing targets the back buffer when one could be allocated. Call
+// present() once a frame is complete so the update reaches the screen in one
+// pass instead of tearing as each primitive lands in device memory.
 void clear(unsigned int color);
 void fill_rect(unsigned int x, unsigned int y, unsigned int width, unsigned int height, unsigned int color);
+void present();
+void present_rect(unsigned int x, unsigned int y, unsigned int width, unsigned int height);
+
+bool is_double_buffered();
+unsigned char* buffer();
 unsigned int width();
 unsigned int height();
 

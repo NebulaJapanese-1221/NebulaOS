@@ -109,4 +109,12 @@ unsigned int height() {
     return kernel::framebuffer::height();
 }
 
+void present() {
+    kernel::framebuffer::present();
+}
+
+bool is_double_buffered() {
+    return kernel::framebuffer::is_double_buffered();
+}
+
 }

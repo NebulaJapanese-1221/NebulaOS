@@ -23,6 +23,8 @@ extern unsigned char kernel_image_start[];
 extern unsigned char kernel_image_end[];
 }
 
+namespace kernel::memory::pmm {
+
 namespace {
 const unsigned int maximum_frames =
     static_cast<unsigned int>(managed_ceiling / page_size);
@@ -43,6 +45,7 @@ const unsigned int kernel_margin = 0x10000;
 unsigned int frame_bitmap[bitmap_words];
 unsigned int managed_frames = 0;
 unsigned int allocation_hint = 0;
+unsigned long long detected_extent = 0;
 bool memory_ready = false;
 
 bool within_managed(unsigned long long base, unsigned long long length) {
@@ -51,10 +54,7 @@ bool within_managed(unsigned long long base, unsigned long long length) {
 
 unsigned int clamp_frames(unsigned long long base, unsigned long long length) {
     unsigned long long end = base + length;
-    if (end < end) {
-        end = managed_ceiling;
-    }
-    if (end > managed_ceiling) {
+    if (end < base || end > managed_ceiling) {
         end = managed_ceiling;
     }
     return static_cast<unsigned int>(end / page_size);
@@ -88,6 +88,10 @@ void release_range(unsigned long long base, unsigned long long length) {
     for (unsigned int frame = first; frame < last; ++frame) {
         set_frame_used(frame, false);
     }
+    const unsigned long long extent = static_cast<unsigned long long>(last) * page_size;
+    if (extent > detected_extent) {
+        detected_extent = extent;
+    }
 }
 
 void mark_available_from_map(const kernel::multiboot::Information* info) {
@@ -99,19 +103,23 @@ void mark_available_from_map(const kernel::multiboot::Information* info) {
         return;
     }
 
+    const unsigned int entry_size = sizeof(kernel::multiboot::MapEntry);
     const unsigned char* cursor =
         reinterpret_cast<const unsigned char*>(info->memory_map_address);
     const unsigned char* limit = cursor + info->memory_map_length;
-    while (cursor + sizeof(kernel::multiboot::MapEntry) <= limit) {
+    while (cursor + entry_size <= limit) {
         const kernel::multiboot::MapEntry* entry =
             reinterpret_cast<const kernel::multiboot::MapEntry*>(cursor);
-        if (entry->size < sizeof(kernel::multiboot::MapEntry)) {
+        if (entry->size < 2 * sizeof(unsigned int)) {
             break;
         }
         if (entry->type == kernel::multiboot::map_type_available) {
             release_range(entry->base, entry->length);
         }
-        cursor += entry->size;
+        // Honour an advertised stride only when it is at least the struct the
+        // specification describes. Some loaders under-report this field, and
+        // trusting a short stride would desynchronise the whole walk.
+        cursor += entry->size >= entry_size ? entry->size : entry_size;
     }
 }
 
@@ -135,8 +143,6 @@ void reserve_framebuffer(const kernel::multiboot::Information* info) {
 }
 }
 
-namespace kernel::memory {
-
 bool initialize(unsigned int multiboot_info_address) {
     const kernel::multiboot::Information* info =
         kernel::multiboot::information(multiboot_info_address);
@@ -149,6 +155,7 @@ bool initialize(unsigned int multiboot_info_address) {
     }
 
     managed_frames = maximum_frames;
+    detected_extent = 0;
     mark_available_from_map(info);
 
     // Everything below the kernel is firmware territory, and the kernel image,
@@ -234,6 +241,10 @@ unsigned long long free_bytes() {
 
 unsigned long long managed_bytes() {
     return managed_ceiling;
+}
+
+unsigned long long detected_bytes() {
+    return detected_extent;
 }
 
 unsigned int highest_managed_address() {

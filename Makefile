@@ -25,7 +25,7 @@ CXXFLAGS := -m32 -std=gnu++17 -ffreestanding -fno-exceptions -fno-rtti \
 	-fno-stack-protector -fno-pic -fno-pie -nostdinc++ -Wall -Wextra -O2
 LDFLAGS := -m elf_i386 -T kernel/arch/x86/linker.ld -nostdlib
 
-KERNEL_OBJECTS := kernel_entry.o interrupts_entry.o kernel.o kernel/framebuffer.o kernel/timer.o kernel/arch/x86/interrupts.o drivers/graphics.o drivers/keyboard.o drivers/mouse.o drivers/serial.o shell.o
+KERNEL_OBJECTS := kernel_entry.o interrupts_entry.o kernel.o kernel/framebuffer.o kernel/heap.o kernel/paging.o kernel/pmm.o kernel/timer.o kernel/arch/x86/interrupts.o drivers/graphics.o drivers/keyboard.o drivers/mouse.o drivers/serial.o shell.o
 ISO_ROOT := build/isodir
 QEMU_FLAGS ?= -m 64M
 
@@ -39,10 +39,19 @@ kernel_entry.o: kernel/arch/x86/entry.asm
 interrupts_entry.o: kernel/arch/x86/interrupts.asm
 	$(NASM) -f elf32 $< -o $@
 
-kernel.o: kernel/main.cpp kernel/framebuffer.hpp kernel/timer.hpp kernel/arch/x86/interrupts.hpp drivers/graphics.hpp drivers/keyboard.hpp drivers/mouse.hpp drivers/serial.hpp shell/shell.hpp
+kernel.o: kernel/main.cpp kernel/framebuffer.hpp kernel/heap.hpp kernel/multiboot.hpp kernel/paging.hpp kernel/pmm.hpp kernel/timer.hpp kernel/arch/x86/interrupts.hpp drivers/graphics.hpp drivers/keyboard.hpp drivers/mouse.hpp drivers/serial.hpp shell/shell.hpp
 	$(CXX) $(CXXFLAGS) -I. -c $< -o $@
 
-kernel/framebuffer.o: kernel/framebuffer.cpp kernel/framebuffer.hpp
+kernel/framebuffer.o: kernel/framebuffer.cpp kernel/framebuffer.hpp kernel/heap.hpp kernel/multiboot.hpp kernel/paging.hpp
+	$(CXX) $(CXXFLAGS) -I. -c $< -o $@
+
+kernel/heap.o: kernel/heap.cpp kernel/heap.hpp kernel/pmm.hpp
+	$(CXX) $(CXXFLAGS) -I. -c $< -o $@
+
+kernel/paging.o: kernel/paging.cpp kernel/paging.hpp kernel/pmm.hpp
+	$(CXX) $(CXXFLAGS) -I. -c $< -o $@
+
+kernel/pmm.o: kernel/pmm.cpp kernel/pmm.hpp kernel/multiboot.hpp
 	$(CXX) $(CXXFLAGS) -I. -c $< -o $@
 
 kernel/timer.o: kernel/timer.cpp kernel/timer.hpp
@@ -88,5 +97,5 @@ run-debug: nebulaos.iso
 		-d int,cpu_reset -D build/qemu-debug.log
 
 clean:
-	rm -f kernel_entry.o interrupts_entry.o kernel.o kernel/framebuffer.o kernel/timer.o kernel/arch/x86/interrupts.o drivers/graphics.o drivers/keyboard.o drivers/mouse.o drivers/serial.o shell.o kernel.elf nebulaos.iso
+	rm -f kernel_entry.o interrupts_entry.o kernel.o kernel/framebuffer.o kernel/heap.o kernel/paging.o kernel/pmm.o kernel/timer.o kernel/arch/x86/interrupts.o drivers/graphics.o drivers/keyboard.o drivers/mouse.o drivers/serial.o shell.o kernel.elf nebulaos.iso
 	rm -rf build

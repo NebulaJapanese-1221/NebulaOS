@@ -17,7 +17,7 @@
 
 #pragma once
 
-namespace kernel::memory {
+namespace kernel::memory::heap {
 
 // First-fit allocator backed by frames from the physical page frame manager.
 // Every block is tracked in one doubly linked list so adjacent free blocks can

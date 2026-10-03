@@ -71,7 +71,7 @@ struct __attribute__((packed)) MapEntry {
     unsigned int type;
 };
 
-const Information* information(unsigned int address) {
+inline const Information* information(unsigned int address) {
     if (address == 0) {
         return nullptr;
     }

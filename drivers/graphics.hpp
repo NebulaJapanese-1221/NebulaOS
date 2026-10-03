@@ -23,6 +23,10 @@ bool initialize(unsigned int multiboot_info_address, const char** reason = nullp
 void clear(unsigned int color);
 void fill_rect(unsigned int x, unsigned int y, unsigned int width, unsigned int height, unsigned int color);
 void draw_text(unsigned int x, unsigned int y, const char* text, unsigned int color, unsigned int scale);
+
+// Push the frame that has been drawn so far to the screen in one pass.
+void present();
+bool is_double_buffered();
 unsigned int width();
 unsigned int height();
 
