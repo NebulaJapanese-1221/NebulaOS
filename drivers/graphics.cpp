@@ -18,9 +18,6 @@
 #include "graphics.hpp"
 #include "../kernel/framebuffer.hpp"
 
-typedef int int32_t;
-typedef unsigned int uint32_t;
-
 namespace {
 unsigned char glyph_column(char character, unsigned int column) {
     static const unsigned char glyphs[36][5] = {
@@ -120,32 +117,35 @@ bool is_double_buffered() {
     return kernel::framebuffer::is_double_buffered();
 }
 
-void draw_line(unsigned int x1, unsigned int y1, unsigned int x2, unsigned int y2, unsigned int color) {
-    (void)x2;
-    (void)y2;
-    int32_t dx = static_cast<int32_t>(x2) - static_cast<int32_t>(x1);
-    int32_t dy = static_cast<int32_t>(y2) - static_cast<int32_t>(y1);
-    int32_t steps = dx > 0 ? dx : -dx;
-    int32_t steps_y = dy > 0 ? dy : -dy;
-    if (steps_y > steps) steps = steps_y;
-    
-    if (steps == 0) {
-        kernel::framebuffer::fill_rect(x1, y1, 1, 1, color);
-        return;
-    }
-    
-    float x_inc = static_cast<float>(dx) / steps;
-    float y_inc = static_cast<float>(dy) / steps;
-    float x = static_cast<float>(x1);
-    float y = static_cast<float>(y1);
-    
-    int32_t i = 0;
-    while (i <= steps) {
-        kernel::framebuffer::fill_rect(static_cast<unsigned int>(x + 0.5f), 
-                                       static_cast<unsigned int>(y + 0.5f), 1, 1, color);
-        x += x_inc;
-        y += y_inc;
-        ++i;
+void draw_line(int x0, int y0, int x1, int y1, unsigned int color) {
+    // Bresenham, so the whole thing stays in integer arithmetic. A floating
+    // point version would pull the soft float library into a freestanding
+    // kernel for no gain, and rounding it per step makes steep lines ragged.
+    const int dx = x1 > x0 ? x1 - x0 : x0 - x1;
+    const int dy = y1 > y0 ? y1 - y0 : y0 - y1;
+    const int step_x = x0 < x1 ? 1 : -1;
+    const int step_y = y0 < y1 ? 1 : -1;
+
+    int error = dx - dy;
+    for (;;) {
+        if (x0 >= 0 && y0 >= 0) {
+            kernel::framebuffer::fill_rect(static_cast<unsigned int>(x0),
+                                           static_cast<unsigned int>(y0), 1, 1, color);
+        }
+        if (x0 == x1 && y0 == y1) {
+            return;
+        }
+        // Doubling the error decides whether to step both axes or only one,
+        // which is what keeps a near diagonal from stair stepping.
+        const int doubled = error * 2;
+        if (doubled > -dy) {
+            error -= dy;
+            x0 += step_x;
+        }
+        if (doubled < dx) {
+            error += dx;
+            y0 += step_y;
+        }
     }
 }
 

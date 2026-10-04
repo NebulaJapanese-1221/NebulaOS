@@ -1,4 +1,4 @@
-// Programmable interval timer interface for the NebulaOS x86 kernel.
+// Task state segment for the NebulaOS x86 operating system.
 // Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -17,22 +17,16 @@
 
 #pragma once
 
-namespace kernel::timer {
+namespace kernel::tss {
 
-// The PIT is programmed from this rate, so a hundred ticks make a second.
-const unsigned int ticks_per_second = 100;
-
+// Loads the task state segment into the GDT and into the task register.
+//
+// Without a TSS the CPU has no kernel stack to switch to and no interrupt
+// stack table to fall back on, so an exception raised while the current stack is
+// already unusable becomes a double fault, and a double fault raised for the
+// same reason resets the machine. Giving the faulting vectors a dedicated stack
+// is what keeps a stack overflow one recoverable screen instead of a triple
+// fault.
 void initialize();
-void interrupt_tick();
-unsigned int ticks();
-// Whole seconds since boot, derived from ticks().
-unsigned int seconds();
-void sleep_seconds(unsigned int seconds);
-
-// Hardware timed wait that needs neither the PIT interrupt nor the timer to be
-// running, because it counts through a spare PIT channel and polls for the end
-// of the count. sleep_seconds() cannot be used during boot, since it waits for
-// the interrupts that have not been installed yet and would never return.
-void delay_ms(unsigned int milliseconds);
 
 }

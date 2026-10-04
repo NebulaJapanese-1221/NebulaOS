@@ -40,13 +40,55 @@ const unsigned int status_spacing = 22;
 const unsigned int heap_megabytes = 16;
 const unsigned int maximum_identity_megabytes = 256;
 
-void show_boot_screen() {
+// Every initialisation stage holds the screen this long. The waits go through a
+// polled PIT channel rather than the clock interrupt, because most of the
+// sequence runs before the interrupt controller is installed and waiting on
+// clock ticks there would never return.
+const unsigned int stage_delay_ms = 3000;
+
+void show_text_boot_screen() {
+    drivers::vga::clear();
+    drivers::vga::write_line("==============================================");
+    drivers::vga::write_line("            N E B U L A O S                   ");
+    drivers::vga::write_line("==============================================");
+    drivers::vga::write_line("");
+    drivers::vga::write_line("   32 bit protected mode kernel, booting...");
+    drivers::vga::write_line("");
+}
+
+void show_text_stage(const char* label, const char* state, unsigned char attribute) {
+    const char prefix[] = "  [";
+    drivers::vga::write(prefix);
+    drivers::vga::set_attribute(attribute);
+    drivers::vga::write("....");
+    drivers::vga::set_attribute(0x07);
+    drivers::vga::write("] ");
+    drivers::vga::write(label);
+    drivers::vga::write(" ");
+    drivers::vga::write_line(state);
+    drivers::vga::set_attribute(0x07);
+
+    drivers::serial::write("  ");
+    drivers::serial::write_line(label);
+    drivers::serial::write("    ");
+    drivers::serial::write_line(state);
+}
+
+// Holds the boot screen on a stage for stage_delay_ms so each step is legible
+// before the next one paints over it.
+void run_stage(const char* label, const char* state, unsigned char attribute) {
+    show_text_stage(label, state, attribute);
+    kernel::timer::delay_ms(stage_delay_ms);
+}
+
+void show_graphics_boot_screen() {
     drivers::graphics::clear(0x00000000);
     drivers::graphics::draw_text(24, 24, "NEBULAOS BOOT", boot_text, 2);
     drivers::graphics::draw_text(24, 48, "INITIALIZING SYSTEM COMPONENTS", boot_text, 1);
+    drivers::graphics::present();
 }
 
-void show_status(unsigned int row, const char* text, unsigned int color) {
+void show_graphics_status(unsigned int row, const char* text, unsigned int color) {
     drivers::graphics::draw_text(24, status_top + row * status_spacing, text, color, 1);
     drivers::serial::write("[boot] ");
     drivers::serial::write_line(text);
@@ -82,15 +124,24 @@ unsigned int identity_megabytes_for(unsigned long long detected_bytes) {
 }
 
 extern "C" void kmain(unsigned int boot_magic, unsigned int multiboot_info_address) {
+    drivers::vga::initialize();
+    show_text_boot_screen();
+    kernel::timer::delay_ms(stage_delay_ms);
+
+    // Text mode carries the whole of the hardware bring up, because it is the
+    // only output that exists before a framebuffer has been handed over.
     drivers::serial::initialize();
+    run_stage("SERIAL PORT", "OK", 0x0A);
 
     if (boot_magic != kernel::multiboot::handoff_magic) {
         halt_with_error("INVALID MULTIBOOT HANDOFF");
     }
+    run_stage("MULTIBOOT HANDOFF", "OK", 0x0A);
 
     if (!kernel::memory::pmm::initialize(multiboot_info_address)) {
         halt_with_error("MEMORY MAP UNAVAILABLE");
     }
+    run_stage("PHYSICAL MEMORY MANAGER", "OK", 0x0A);
 
     drivers::serial::write("memory detected ");
     drivers::serial::write_decimal(
@@ -104,6 +155,7 @@ extern "C" void kmain(unsigned int boot_magic, unsigned int multiboot_info_addre
     if (!kernel::memory::paging::initialize(identity_megabytes)) {
         halt_with_error("PAGING TABLES UNAVAILABLE");
     }
+    run_stage("PAGING TABLES", "OK", 0x0A);
 
     // The IDT has to be in place before paging is switched on, otherwise a
     // fault during translation cannot be reported.
@@ -111,11 +163,14 @@ extern "C" void kmain(unsigned int boot_magic, unsigned int multiboot_info_addre
     if (!kernel::memory::paging::enable()) {
         halt_with_error("PAGING COULD NOT BE ENABLED");
     }
+    run_stage("PAGING + FAULT HANDLERS", "OK", 0x0A);
 
     kernel::memory::heap::initialize(heap_megabytes);
     if (!kernel::memory::heap::is_initialized()) {
         halt_with_error("KERNEL HEAP UNAVAILABLE");
     }
+    run_stage("KERNEL HEAP", "OK", 0x0A);
+
     drivers::serial::write("identity map ");
     drivers::serial::write_decimal(identity_megabytes);
     drivers::serial::write(" MB, heap ");
@@ -130,29 +185,41 @@ extern "C" void kmain(unsigned int boot_magic, unsigned int multiboot_info_addre
         halt_with_error(framebuffer_reason == nullptr ? "FRAMEBUFFER UNAVAILABLE"
                                                       : framebuffer_reason);
     }
+    run_stage("FRAMEBUFFER", "OK", 0x0A);
 
     kernel::interrupts::initialize();
+    run_stage("INTERRUPT CONTROLLER", "OK", 0x0A);
 
-    show_boot_screen();
-    show_status(0, "GRUB MULTIBOOT HANDOFF: READY", boot_ok);
-    show_status(1, drivers::graphics::is_double_buffered()
+    // From here the desktop can be drawn, so the remaining stages report into
+    // the framebuffer instead of the text buffer.
+    show_graphics_boot_screen();
+    kernel::timer::delay_ms(stage_delay_ms);
+
+    show_graphics_status(0, "GRUB MULTIBOOT HANDOFF: READY", boot_ok);
+    kernel::timer::delay_ms(stage_delay_ms);
+    show_graphics_status(1, drivers::graphics::is_double_buffered()
                        ? "FRAMEBUFFER + DOUBLE BUFFER: READY"
                        : "FRAMEBUFFER: READY (NO BACK BUFFER)",
-                drivers::graphics::is_double_buffered() ? boot_ok : boot_error);
-    show_status(2, "PHYSICAL MEMORY MANAGER: READY", boot_ok);
-    show_status(3, "PAGING + KERNEL HEAP: READY", boot_ok);
+               drivers::graphics::is_double_buffered() ? boot_ok : boot_error);
+    kernel::timer::delay_ms(stage_delay_ms);
+    show_graphics_status(2, "PHYSICAL MEMORY MANAGER: READY", boot_ok);
+    kernel::timer::delay_ms(stage_delay_ms);
+    show_graphics_status(3, "PAGING + KERNEL HEAP: READY", boot_ok);
+    kernel::timer::delay_ms(stage_delay_ms);
 
-    show_status(4, "PS/2 KEYBOARD: INITIALIZING", boot_text);
+    show_graphics_status(4, "PS/2 KEYBOARD: INITIALIZING", boot_text);
     drivers::keyboard::initialize();
-    show_status(4, "PS/2 KEYBOARD: READY", boot_ok);
+    show_graphics_status(4, "PS/2 KEYBOARD: READY", boot_ok);
+    kernel::timer::delay_ms(stage_delay_ms);
 
-    show_status(5, "PS/2 MOUSE: INITIALIZING", boot_text);
+    show_graphics_status(5, "PS/2 MOUSE: INITIALIZING", boot_text);
     const bool mouse_available = drivers::mouse::initialize(
         drivers::graphics::width(), drivers::graphics::height());
-    show_status(5, mouse_available ? "PS/2 MOUSE: READY" : "PS/2 MOUSE: NOT FOUND",
+    show_graphics_status(5, mouse_available ? "PS/2 MOUSE: READY" : "PS/2 MOUSE: NOT FOUND",
                 mouse_available ? boot_ok : boot_error);
+    kernel::timer::delay_ms(stage_delay_ms);
 
-    show_status(6, "STARTING GRAPHICAL DESKTOP", boot_text);
-    kernel::timer::sleep_seconds(1);
+    show_graphics_status(6, "STARTING GRAPHICAL DESKTOP", boot_text);
+    kernel::timer::delay_ms(stage_delay_ms);
     shell::run();
 }

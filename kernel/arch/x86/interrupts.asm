@@ -80,9 +80,14 @@ isr_spurious:
     jmp isr_common
 
 isr_common:
+    ; The CPU has already pushed, in order, the vector, the error code where the
+    ; exception pushes one, eip, cs and eflags, and then esp and ss if the
+    ; privilege level changed. Everything the panic screen reports is read out
+    ; of that block, so the stub hands the dispatcher a pointer to it rather
+    ; than copying it onto the stack argument by argument.
     pusha
-    mov eax, [esp + 32]      ; vector
-    mov edx, [esp + 36]      ; error_code
+    mov eax, [esp + 32]          ; vector
+    mov edx, [esp + 36]          ; error code
     push ds
     push es
     push fs
@@ -92,18 +97,15 @@ isr_common:
     mov es, bx
     mov fs, bx
     mov gs, bx
-    
-    ; Save all registers for error screen
-    push dword [esp + 32 + 8 + 4]  ; eip (pushed by CPU)
-    push dword [esp + 32 + 8 + 8]  ; cs
-    push dword [esp + 32 + 8 + 12] ; eflags
-    push dword [esp + 32 + 8 + 16] ; esp (user stack pointer if privilege change)
-    push dword [esp + 32 + 8 + 20] ; ss
-    
-    push edx                     ; error_code
-    push eax                     ; vector
+
+    ; Four segment pushes have moved esp down by 16, so the frame the CPU built
+    ; now starts at 32 + 16.
+    lea eax, [esp + 48]
+
+    push edx
+    push eax
     call interrupt_dispatch
-    add esp, 28                  ; clean up 7 pushed args (vector, error_code, eip, cs, eflags, esp, ss)
+    add esp, 8
     pop gs
     pop fs
     pop es

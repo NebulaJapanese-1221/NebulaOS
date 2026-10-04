@@ -26,4 +26,8 @@ void write_line(const char* text);
 void put(char character);
 void backspace();
 
+// Selects the colour and blink bits used for every later character. The boot
+// screen uses it to colour a stage without restarting the line.
+void set_attribute(unsigned char attribute);
+
 }

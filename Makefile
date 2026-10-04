@@ -25,7 +25,7 @@ CXXFLAGS := -m32 -std=gnu++17 -ffreestanding -fno-exceptions -fno-rtti \
 	-fno-stack-protector -fno-pic -fno-pie -nostdinc++ -Wall -Wextra -O2
 LDFLAGS := -m elf_i386 -T kernel/arch/x86/linker.ld -nostdlib
 
-KERNEL_OBJECTS := kernel_entry.o interrupts_entry.o kernel.o kernel/framebuffer.o kernel/heap.o kernel/paging.o kernel/pmm.o kernel/timer.o kernel/arch/x86/interrupts.o drivers/graphics.o drivers/keyboard.o drivers/mouse.o drivers/serial.o drivers/vga.o shell/shell.o shell/apps/console.o shell/window_manager.o
+KERNEL_OBJECTS := kernel_entry.o interrupts_entry.o kernel.o kernel/framebuffer.o kernel/heap.o kernel/paging.o kernel/pmm.o kernel/timer.o kernel/arch/x86/interrupts.o kernel/arch/x86/tss.o drivers/graphics.o drivers/keyboard.o drivers/mouse.o drivers/serial.o drivers/vga.o shell/shell.o shell/apps/console.o shell/window_manager.o
 ISO_ROOT := build/isodir
 QEMU_FLAGS ?= -m 64M
 
@@ -57,7 +57,10 @@ kernel/pmm.o: kernel/pmm.cpp kernel/pmm.hpp kernel/multiboot.hpp
 kernel/timer.o: kernel/timer.cpp kernel/timer.hpp
 	$(CXX) $(CXXFLAGS) -I. -c $< -o $@
 
-kernel/arch/x86/interrupts.o: kernel/arch/x86/interrupts.cpp kernel/arch/x86/interrupts.hpp kernel/timer.hpp drivers/serial.hpp drivers/vga.hpp
+kernel/arch/x86/interrupts.o: kernel/arch/x86/interrupts.cpp kernel/arch/x86/interrupts.hpp kernel/arch/x86/tss.hpp kernel/timer.hpp drivers/serial.hpp drivers/vga.hpp
+	$(CXX) $(CXXFLAGS) -I. -c $< -o $@
+
+kernel/arch/x86/tss.o: kernel/arch/x86/tss.cpp kernel/arch/x86/tss.hpp
 	$(CXX) $(CXXFLAGS) -I. -c $< -o $@
 
 drivers/graphics.o: drivers/graphics.cpp drivers/graphics.hpp kernel/framebuffer.hpp
@@ -106,5 +109,5 @@ run-debug: nebulaos.iso
 		-d int,cpu_reset -D build/qemu-debug.log
 
 clean:
-	rm -f kernel_entry.o interrupts_entry.o kernel.o kernel/framebuffer.o kernel/heap.o kernel/paging.o kernel/pmm.o kernel/timer.o kernel/arch/x86/interrupts.o drivers/graphics.o drivers/keyboard.o drivers/mouse.o drivers/serial.o drivers/vga.o shell/shell.o shell/apps/console.o shell/window_manager.o kernel.elf nebulaos.iso
+	rm -f kernel_entry.o interrupts_entry.o kernel.o kernel/framebuffer.o kernel/heap.o kernel/paging.o kernel/pmm.o kernel/timer.o kernel/arch/x86/interrupts.o kernel/arch/x86/tss.o drivers/graphics.o drivers/keyboard.o drivers/mouse.o drivers/serial.o drivers/vga.o shell/shell.o shell/apps/console.o shell/window_manager.o kernel.elf nebulaos.iso
 	rm -rf build

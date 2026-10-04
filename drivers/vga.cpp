@@ -21,7 +21,7 @@ namespace {
 volatile unsigned short* const buffer = reinterpret_cast<volatile unsigned short*>(0xB8000);
 unsigned int row = 0;
 unsigned int column = 0;
-const unsigned char color = 0x0F;
+unsigned char color = 0x0F;
 
 void newline() {
     column = 0;
@@ -79,6 +79,10 @@ void backspace() {
     }
     --column;
     buffer[row * 80 + column] = static_cast<unsigned short>(color << 8) | ' ';
+}
+
+void set_attribute(unsigned char attribute) {
+    color = attribute;
 }
 
 }

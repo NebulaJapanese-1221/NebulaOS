@@ -125,11 +125,17 @@ _start:
     jmp .halt
 
 section .rodata
+global gdt_tss_descriptor
 align 8
 gdt:
     dq 0
     dq 0x00CF9A000000FFFF
-    dq 0x00CF92000000FFFF
+    dq 0x00CF920000000FFFF
+; Filled in by kernel::tss::initialize once the task state exists, because the
+; descriptor encodes its base address. The task register can only load a
+; descriptor that lives in the GDT, so the slot has to be reserved here.
+gdt_tss_descriptor:
+    dq 0
 gdt_end:
 
 ; Kept for the trampoline, which runs before paging makes the higher half
