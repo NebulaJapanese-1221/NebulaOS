@@ -19,6 +19,7 @@ bits 32
 
 section .text
 extern interrupt_dispatch
+extern syscall_dispatch
 global isr_stub_table
 global isr_spurious
 
@@ -74,6 +75,36 @@ ISR_NO_ERROR irq
 %assign irq irq + 1
 %endrep
 
+; Syscall handler (int 0x80) - dedicated handler for user-mode transitions
+isr_128:
+    ; CPU has already switched to kernel stack (ss0/esp0 from TSS)
+    ; Stack layout: error_code(0), vector(128), eip, cs, eflags, esp, ss
+    pusha
+    push ds
+    push es
+    push fs
+    push gs
+    mov bx, 0x10
+    mov ds, bx
+    mov es, bx
+    mov fs, bx
+    mov gs, bx
+
+    ; Frame pointer is at esp + 20 (pusha=8*4=32, 4 segments=16, total 48 from original esp)
+    ; But we need to point to the user register state
+    lea eax, [esp + 48]
+
+    push eax
+    call syscall_dispatch
+    add esp, 4
+    pop gs
+    pop fs
+    pop es
+    pop ds
+    popa
+    add esp, 8          ; skip error code and vector
+    iretd
+
 isr_spurious:
     push dword 0
     push dword 255
@@ -122,5 +153,6 @@ isr_stub_table:
     dd isr_%+vector
 %assign vector vector + 1
 %endrep
+    dd isr_128
 
 section .note.GNU-stack noalloc noexec nowrite progbits

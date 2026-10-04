@@ -1,4 +1,4 @@
-// Task state segment for the NebulaOS x86 operating system.
+// Syscall interface for the NebulaOS x86 operating system.
 // Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -17,20 +17,8 @@
 
 #pragma once
 
-namespace kernel::tss {
+namespace kernel::syscall {
 
-// Loads the task state segment into the GDT and into the task register.
-//
-// Without a TSS the CPU has no kernel stack to switch to and no interrupt
-// stack table to fall back on, so an exception raised while the current stack is
-// already unusable becomes a double fault, and a double fault raised for the
-// same reason resets the machine. Giving the faulting vectors a dedicated stack
-// is what keeps a stack overflow one recoverable screen instead of a triple
-// fault.
 void initialize();
 
-// User-mode segment selectors (index 4 = 0x20, index 5 = 0x28, both with DPL=3).
-constexpr unsigned short user_code_selector = 0x23;
-constexpr unsigned short user_data_selector = 0x2B;
-
-}
+} // namespace kernel::syscall

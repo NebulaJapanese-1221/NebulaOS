@@ -42,6 +42,10 @@ struct __attribute__((packed)) TaskStateSegment {
 // out of room, so the handler cannot borrow it.
 __attribute__((aligned(16))) unsigned char fault_stack[16384];
 
+// Kernel stack for syscalls and interrupt handlers that need to run from user mode.
+// This is the esp0/ss0 that the CPU loads when transitioning from ring 3 to ring 0.
+__attribute__((aligned(16))) unsigned char syscall_stack[8192];
+
 // Reserved by the GDT in entry.asm, three entries past the null descriptor.
 extern "C" unsigned char gdt_tss_descriptor[8];
 
@@ -62,8 +66,9 @@ void initialize() {
     }
 
     unsigned char* const fault_stack_top = fault_stack + sizeof(fault_stack);
+    unsigned char* const syscall_stack_top = syscall_stack + sizeof(syscall_stack);
     task_state.previous_task_link = 0;
-    task_state.esp0 = 0;
+    task_state.esp0 = static_cast<unsigned short>(reinterpret_cast<unsigned int>(syscall_stack_top) & 0xFFFF);
     task_state.ss0 = kernel_data_selector;
     task_state.ist1_sp = reinterpret_cast<unsigned int>(fault_stack_top);
     task_state.ist1_ss = kernel_data_selector;

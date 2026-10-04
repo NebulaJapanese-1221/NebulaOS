@@ -136,6 +136,11 @@ gdt:
 ; descriptor that lives in the GDT, so the slot has to be reserved here.
 gdt_tss_descriptor:
     dq 0
+; User mode segments (DPL=3)
+gdt_user_code:
+    dq 0x00CFFB000000FFFF
+gdt_user_data:
+    dq 0x00CFF30000000FFFF
 gdt_end:
 
 ; Kept for the trampoline, which runs before paging makes the higher half

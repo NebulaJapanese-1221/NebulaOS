@@ -62,7 +62,7 @@ unsigned int table_index_of(unsigned int virtual_address) {
     return (virtual_address >> 12) & index_mask;
 }
 
-unsigned int* table_for(unsigned int directory_index) {
+unsigned int* table_for(unsigned int directory_index, unsigned int dir_flags) {
     if (page_tables[directory_index] != nullptr) {
         return page_tables[directory_index];
     }
@@ -76,7 +76,7 @@ unsigned int* table_for(unsigned int directory_index) {
     }
     page_tables[directory_index] = table;
     page_directory[directory_index] = reinterpret_cast<unsigned int>(table) |
-                                      page_present | page_writable;
+                                      page_present | page_writable | dir_flags;
     return table;
 }
 
@@ -166,7 +166,8 @@ bool map_page(unsigned int virtual_address, unsigned int physical_address,
     if (page_directory == nullptr) {
         return false;
     }
-    unsigned int* const table = table_for(directory_index_of(virtual_address));
+    unsigned int dir_flags = (flags & page_user) ? page_user : 0;
+    unsigned int* const table = table_for(directory_index_of(virtual_address), dir_flags);
     if (table == nullptr) {
         return false;
     }

@@ -64,6 +64,13 @@ struct __attribute__((packed)) Information {
     unsigned char blue_mask_size;
 };
 
+struct __attribute__((packed)) Module {
+    unsigned int mod_start;
+    unsigned int mod_end;
+    unsigned int cmdline;
+    unsigned int pad;
+};
+
 struct __attribute__((packed)) MapEntry {
     unsigned int size;
     unsigned long long base;

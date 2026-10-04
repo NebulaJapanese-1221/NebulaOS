@@ -22,11 +22,232 @@
 #include "../drivers/vga.hpp"
 #include "../shell/shell.hpp"
 #include "arch/x86/interrupts.hpp"
+#include "arch/x86/tss.hpp"
 #include "heap.hpp"
 #include "multiboot.hpp"
 #include "paging.hpp"
 #include "pmm.hpp"
+#include "syscall.hpp"
 #include "timer.hpp"
+
+// Simple ELF32 loader for userspace programs.
+struct __attribute__((packed)) Elf32_Ehdr {
+    unsigned char ident[16];
+    unsigned short type;
+    unsigned short machine;
+    unsigned int version;
+    unsigned int entry;
+    unsigned int phoff;
+    unsigned int shoff;
+    unsigned int flags;
+    unsigned short ehsize;
+    unsigned short phentsize;
+    unsigned short phnum;
+    unsigned short shentsize;
+    unsigned short shnum;
+    unsigned short shstrndx;
+};
+
+struct __attribute__((packed)) Elf32_Phdr {
+    unsigned int type;
+    unsigned int offset;
+    unsigned int vaddr;
+    unsigned int paddr;
+    unsigned int filesz;
+    unsigned int memsz;
+    unsigned int flags;
+    unsigned int align;
+};
+
+const unsigned int PT_LOAD = 1;
+const unsigned int PT_DYNAMIC = 2;
+const unsigned int PT_INTERP = 3;
+
+const unsigned int ELF_MAGIC = 0x464C457F;
+
+const unsigned int USER_BASE = 0x08048000;
+const unsigned int USER_STACK_TOP = 0xBFFFFFFF;
+
+bool load_elf(const unsigned char* data, unsigned int size,
+              unsigned int* entry_out, unsigned int* stack_top_out) {
+    if (size < sizeof(Elf32_Ehdr)) {
+        return false;
+    }
+    const Elf32_Ehdr* ehdr = reinterpret_cast<const Elf32_Ehdr*>(data);
+    if (ehdr->ident[0] != 0x7F || ehdr->ident[1] != 'E' ||
+        ehdr->ident[2] != 'L' || ehdr->ident[3] != 'F') {
+        return false;
+    }
+    if (ehdr->type != 2 || ehdr->machine != 3) {
+        return false;
+    }
+
+    unsigned int max_vaddr = 0;
+    for (unsigned int i = 0; i < ehdr->phnum; ++i) {
+        const Elf32_Phdr* phdr = reinterpret_cast<const Elf32_Phdr*>(
+            data + ehdr->phoff + i * ehdr->phentsize);
+        if (phdr->type == PT_LOAD) {
+            if (phdr->vaddr + phdr->memsz > max_vaddr) {
+                max_vaddr = phdr->vaddr + phdr->memsz;
+            }
+            // Map the segment
+            for (unsigned int offset = 0; offset < phdr->filesz; offset += 4096) {
+                unsigned int vaddr = phdr->vaddr + offset;
+                void* paddr_ptr = kernel::memory::pmm::allocate_frame();
+                if (paddr_ptr == nullptr) {
+                    return false;
+                }
+                unsigned int paddr = reinterpret_cast<unsigned int>(paddr_ptr);
+                kernel::memory::paging::map_page(vaddr, paddr,
+                    kernel::memory::paging::page_present |
+                    kernel::memory::paging::page_writable |
+                    kernel::memory::paging::page_user);
+                unsigned int copy_size = (offset + 4096 < phdr->filesz) ? 4096 : (phdr->filesz - offset);
+                for (unsigned int j = 0; j < copy_size; ++j) {
+                    *reinterpret_cast<unsigned char*>(vaddr + j) = data[phdr->offset + offset + j];
+                }
+            }
+            // Zero-fill the rest of memsz
+            for (unsigned int offset = phdr->filesz; offset < phdr->memsz; offset += 4096) {
+                unsigned int vaddr = phdr->vaddr + offset;
+                void* paddr_ptr = kernel::memory::pmm::allocate_frame();
+                if (paddr_ptr == nullptr) {
+                    return false;
+                }
+                unsigned int paddr = reinterpret_cast<unsigned int>(paddr_ptr);
+                kernel::memory::paging::map_page(vaddr, paddr,
+                    kernel::memory::paging::page_present |
+                    kernel::memory::paging::page_writable |
+                    kernel::memory::paging::page_user);
+            }
+        }
+    }
+
+    // Map user stack
+    unsigned int stack_pages = 16;
+    for (unsigned int i = 0; i < stack_pages; ++i) {
+        unsigned int vaddr = USER_STACK_TOP - (i + 1) * 4096 + 1;
+        void* paddr_ptr = kernel::memory::pmm::allocate_frame();
+        if (paddr_ptr == nullptr) {
+            return false;
+        }
+        unsigned int paddr = reinterpret_cast<unsigned int>(paddr_ptr);
+        kernel::memory::paging::map_page(vaddr & 0xFFFFF000, paddr,
+            kernel::memory::paging::page_present |
+            kernel::memory::paging::page_writable |
+            kernel::memory::paging::page_user);
+    }
+
+    *entry_out = ehdr->entry;
+    *stack_top_out = USER_STACK_TOP;
+    return true;
+}
+
+bool extract_initrd(const unsigned int multiboot_info_address,
+                    const unsigned char** initrd_data, unsigned int* initrd_size) {
+    const kernel::multiboot::Information* info =
+        kernel::multiboot::information(multiboot_info_address);
+    if (info == nullptr || info->modules_count == 0) {
+        return false;
+    }
+    const kernel::multiboot::Module* modules =
+        reinterpret_cast<const kernel::multiboot::Module*>(info->modules_address);
+    for (unsigned int i = 0; i < info->modules_count; ++i) {
+        unsigned int mod_start = modules[i].mod_start;
+        unsigned int mod_end = modules[i].mod_end;
+        if (mod_end > mod_start) {
+            *initrd_data = reinterpret_cast<const unsigned char*>(mod_start);
+            *initrd_size = mod_end - mod_start;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool find_file_in_cpio(const unsigned char* cpio_data, unsigned int cpio_size,
+                       const char* filename,
+                       const unsigned char** file_data, unsigned int* file_size) {
+    // Simplified: just return the whole cpio as the file (since we only have one file)
+    // In a real implementation, we'd parse the cpio headers.
+    // For now, assume the cpio contains just the console binary at a known offset.
+    // We'll scan for the ELF magic.
+    for (unsigned int i = 0; i + 4 <= cpio_size; ++i) {
+        unsigned int magic = *reinterpret_cast<const unsigned int*>(cpio_data + i);
+        if (magic == ELF_MAGIC) {
+            *file_data = cpio_data + i;
+            // Find the end by looking at the ELF header
+            const Elf32_Ehdr* ehdr = reinterpret_cast<const Elf32_Ehdr*>(cpio_data + i);
+            *file_size = ehdr->phoff + ehdr->phnum * ehdr->phentsize;
+            // Actually need to compute size from program headers
+            unsigned int total_size = 0;
+            for (unsigned int j = 0; j < ehdr->phnum; ++j) {
+                const Elf32_Phdr* phdr = reinterpret_cast<const Elf32_Phdr*>(
+                    cpio_data + i + ehdr->phoff + j * ehdr->phentsize);
+                if (phdr->type == PT_LOAD) {
+                    if (phdr->offset + phdr->filesz > total_size) {
+                        total_size = phdr->offset + phdr->filesz;
+                    }
+                }
+            }
+            *file_size = total_size;
+            return true;
+        }
+    }
+    return false;
+}
+
+void launch_userspace_program(const unsigned int multiboot_info_address) {
+    const unsigned char* initrd_data;
+    unsigned int initrd_size;
+    if (!extract_initrd(multiboot_info_address, &initrd_data, &initrd_size)) {
+        drivers::serial::write_line("[init] No initrd module found");
+        return;
+    }
+    drivers::serial::write("[init] Found initrd: ");
+    drivers::serial::write_decimal(initrd_size);
+    drivers::serial::write(" bytes\n");
+
+    const unsigned char* program_data;
+    unsigned int program_size;
+    if (!find_file_in_cpio(initrd_data, initrd_size, "console",
+                           &program_data, &program_size)) {
+        drivers::serial::write_line("[init] No ELF program found in initrd");
+        return;
+    }
+    drivers::serial::write("[init] Found ELF program: ");
+    drivers::serial::write_decimal(program_size);
+    drivers::serial::write(" bytes\n");
+
+    unsigned int entry, stack_top;
+    if (!load_elf(program_data, program_size, &entry, &stack_top)) {
+        drivers::serial::write_line("[init] Failed to load ELF");
+        return;
+    }
+
+    drivers::serial::write("[init] Launching userspace program at entry 0x");
+    drivers::serial::write_decimal(entry);
+    drivers::serial::write(" with stack 0x");
+    drivers::serial::write_decimal(stack_top);
+    drivers::serial::write("\n");
+
+    // Switch to user mode via iret
+    asm volatile(
+        "mov %0, %%esp\n"
+        "push %1\n"       // user ss
+        "push %2\n"       // user esp
+        "pushfl\n"        // eflags
+        "push %3\n"       // user cs
+        "push %4\n"       // user eip
+        "iret\n"
+        :
+        : "r"(stack_top),
+          "r"(kernel::tss::user_data_selector),
+          "r"(stack_top),
+          "r"(kernel::tss::user_code_selector),
+          "r"(entry)
+        : "memory"
+    );
+}
 
 namespace {
 const unsigned int boot_text = 0x00E6EDF3;
@@ -189,6 +410,11 @@ extern "C" void kmain(unsigned int boot_magic, unsigned int multiboot_info_addre
 
     kernel::interrupts::initialize();
     run_stage("INTERRUPT CONTROLLER", "OK", 0x0A);
+
+    kernel::syscall::initialize();
+    run_stage("SYSCALL INTERFACE", "OK", 0x0A);
+
+    launch_userspace_program(multiboot_info_address);
 
     // From here the desktop can be drawn, so the remaining stages report into
     // the framebuffer instead of the text buffer.
