@@ -20,6 +20,17 @@
 
 namespace kernel::memory::paging {
 
+extern "C" {
+extern unsigned char kernel_image_start[];
+extern unsigned char kernel_image_end[];
+}
+
+// The image is linked to run from here, and every symbol it defines resolves to
+// an address in this range. Mirroring it is what frees the lower 3 GB for user
+// space; the identity mapping below only exists so the boot structures and the
+// page frame allocator can keep using physical addresses directly.
+const unsigned int kernel_virtual_base = 0xC0000000;
+
 namespace {
 const unsigned int directory_entries = 1024;
 const unsigned int table_entries = 1024;
@@ -30,6 +41,10 @@ const unsigned int address_mask = 0xFFFFF000;
 // device windows are placed far above it and can never collide.
 const unsigned int device_window_base = 0xF0000000;
 const unsigned int device_window_limit = 0xF0400000;
+
+// One past the last addressable byte in 32-bit mode. A device range that ends
+// above this cannot be described by a page table entry at all.
+const unsigned long long physical_address_space_top = 0x100000000ULL;
 
 const unsigned int maximum_identity_megabytes = 256;
 
@@ -106,6 +121,19 @@ bool initialize(unsigned int identity_megabytes) {
             return false;
         }
     }
+
+    const unsigned int image_start =
+        reinterpret_cast<unsigned int>(kernel_image_start);
+    const unsigned int image_end =
+        reinterpret_cast<unsigned int>(kernel_image_end);
+    for (unsigned int address = image_start; address < image_end;
+         address += pmm::page_size) {
+        if (!map_page(address + kernel_virtual_base, address,
+                      page_present | page_writable)) {
+            return false;
+        }
+    }
+
     mapped_megabytes = identity_megabytes;
     return true;
 }
@@ -188,17 +216,28 @@ bool map_device_range(unsigned int physical_base, unsigned int length,
     if (page_directory == nullptr || length == 0) {
         return false;
     }
-    const unsigned int first_page = physical_base & address_mask;
-    const unsigned int last_page =
-        (physical_base + length + address_mask) & address_mask;
-    const unsigned int span = last_page - first_page;
+    // The span is computed in 64 bits on purpose. Hardware sitting near the top
+    // of physical memory overflows 32 bits once the length is added, and the
+    // wrapped result masks down to a range that is shorter than the region
+    // instead of rounding it up to the next page boundary. The trailing pages
+    // would then be left unmapped and the first access to them would fault.
+    const unsigned long long first_page = physical_base & address_mask;
+    const unsigned long long last_page =
+        (static_cast<unsigned long long>(physical_base) + length +
+         (pmm::page_size - 1)) & address_mask;
+    const unsigned long long span = last_page - first_page;
+    if (last_page > physical_address_space_top) {
+        return false;
+    }
     if (device_cursor + span > device_window_limit) {
         return false;
     }
 
     const unsigned int base = device_cursor;
-    for (unsigned int address = first_page; address < last_page; address += pmm::page_size) {
-        if (!map_page(device_cursor, address, page_present | page_writable)) {
+    for (unsigned long long address = first_page; address < last_page;
+         address += pmm::page_size) {
+        if (!map_page(device_cursor, static_cast<unsigned int>(address),
+                      page_present | page_writable)) {
             return false;
         }
         device_cursor += pmm::page_size;

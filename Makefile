@@ -25,7 +25,7 @@ CXXFLAGS := -m32 -std=gnu++17 -ffreestanding -fno-exceptions -fno-rtti \
 	-fno-stack-protector -fno-pic -fno-pie -nostdinc++ -Wall -Wextra -O2
 LDFLAGS := -m elf_i386 -T kernel/arch/x86/linker.ld -nostdlib
 
-KERNEL_OBJECTS := kernel_entry.o interrupts_entry.o kernel.o kernel/framebuffer.o kernel/heap.o kernel/paging.o kernel/pmm.o kernel/timer.o kernel/arch/x86/interrupts.o drivers/graphics.o drivers/keyboard.o drivers/mouse.o drivers/serial.o shell.o
+KERNEL_OBJECTS := kernel_entry.o interrupts_entry.o kernel.o kernel/framebuffer.o kernel/heap.o kernel/paging.o kernel/pmm.o kernel/timer.o kernel/arch/x86/interrupts.o drivers/graphics.o drivers/keyboard.o drivers/mouse.o drivers/serial.o drivers/vga.o shell/shell.o shell/apps/console.o shell/window_manager.o
 ISO_ROOT := build/isodir
 QEMU_FLAGS ?= -m 64M
 
@@ -39,7 +39,7 @@ kernel_entry.o: kernel/arch/x86/entry.asm
 interrupts_entry.o: kernel/arch/x86/interrupts.asm
 	$(NASM) -f elf32 $< -o $@
 
-kernel.o: kernel/main.cpp kernel/framebuffer.hpp kernel/heap.hpp kernel/multiboot.hpp kernel/paging.hpp kernel/pmm.hpp kernel/timer.hpp kernel/arch/x86/interrupts.hpp drivers/graphics.hpp drivers/keyboard.hpp drivers/mouse.hpp drivers/serial.hpp shell/shell.hpp
+kernel.o: kernel/main.cpp kernel/framebuffer.hpp kernel/heap.hpp kernel/multiboot.hpp kernel/paging.hpp kernel/pmm.hpp kernel/timer.hpp kernel/arch/x86/interrupts.hpp drivers/graphics.hpp drivers/keyboard.hpp drivers/mouse.hpp drivers/serial.hpp drivers/vga.hpp shell/shell.hpp
 	$(CXX) $(CXXFLAGS) -I. -c $< -o $@
 
 kernel/framebuffer.o: kernel/framebuffer.cpp kernel/framebuffer.hpp kernel/heap.hpp kernel/multiboot.hpp kernel/paging.hpp
@@ -57,7 +57,7 @@ kernel/pmm.o: kernel/pmm.cpp kernel/pmm.hpp kernel/multiboot.hpp
 kernel/timer.o: kernel/timer.cpp kernel/timer.hpp
 	$(CXX) $(CXXFLAGS) -I. -c $< -o $@
 
-kernel/arch/x86/interrupts.o: kernel/arch/x86/interrupts.cpp kernel/arch/x86/interrupts.hpp kernel/timer.hpp drivers/serial.hpp
+kernel/arch/x86/interrupts.o: kernel/arch/x86/interrupts.cpp kernel/arch/x86/interrupts.hpp kernel/timer.hpp drivers/serial.hpp drivers/vga.hpp
 	$(CXX) $(CXXFLAGS) -I. -c $< -o $@
 
 drivers/graphics.o: drivers/graphics.cpp drivers/graphics.hpp kernel/framebuffer.hpp
@@ -72,7 +72,16 @@ drivers/mouse.o: drivers/mouse.cpp drivers/mouse.hpp
 drivers/serial.o: drivers/serial.cpp drivers/serial.hpp
 	$(CXX) $(CXXFLAGS) -I. -c $< -o $@
 
-shell.o: shell/shell.cpp shell/shell.hpp drivers/graphics.hpp drivers/keyboard.hpp drivers/mouse.hpp
+drivers/vga.o: drivers/vga.cpp drivers/vga.hpp
+	$(CXX) $(CXXFLAGS) -I. -c $< -o $@
+
+shell/shell.o: shell/shell.cpp shell/shell.hpp shell/apps/console.hpp shell/window_manager.hpp drivers/graphics.hpp drivers/keyboard.hpp drivers/mouse.hpp kernel/heap.hpp kernel/paging.hpp kernel/pmm.hpp kernel/timer.hpp
+	$(CXX) $(CXXFLAGS) -I. -c $< -o $@
+
+shell/apps/console.o: shell/apps/console.cpp shell/apps/console.hpp drivers/graphics.hpp
+	$(CXX) $(CXXFLAGS) -I. -c $< -o $@
+
+shell/window_manager.o: shell/window_manager.cpp shell/window_manager.hpp shell/apps/console.hpp drivers/graphics.hpp drivers/mouse.hpp kernel/heap.hpp
 	$(CXX) $(CXXFLAGS) -I. -c $< -o $@
 
 kernel.elf: $(KERNEL_OBJECTS) kernel/arch/x86/linker.ld
@@ -97,5 +106,5 @@ run-debug: nebulaos.iso
 		-d int,cpu_reset -D build/qemu-debug.log
 
 clean:
-	rm -f kernel_entry.o interrupts_entry.o kernel.o kernel/framebuffer.o kernel/heap.o kernel/paging.o kernel/pmm.o kernel/timer.o kernel/arch/x86/interrupts.o drivers/graphics.o drivers/keyboard.o drivers/mouse.o drivers/serial.o shell.o kernel.elf nebulaos.iso
+	rm -f kernel_entry.o interrupts_entry.o kernel.o kernel/framebuffer.o kernel/heap.o kernel/paging.o kernel/pmm.o kernel/timer.o kernel/arch/x86/interrupts.o drivers/graphics.o drivers/keyboard.o drivers/mouse.o drivers/serial.o drivers/vga.o shell/shell.o shell/apps/console.o shell/window_manager.o kernel.elf nebulaos.iso
 	rm -rf build

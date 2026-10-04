@@ -41,6 +41,21 @@ unsigned int align_up(unsigned int bytes) {
     return (bytes + alignment - 1) & ~(alignment - 1);
 }
 
+// Merges a free block with every free block that directly follows it. The heap
+// is handed out one frame at a time, so without this a request larger than a
+// single frame can never be satisfied no matter how much memory is free.
+unsigned int coalesce_forward(BlockHeader* block) {
+    while (block->next != nullptr && block->next->magic == block_magic_free) {
+        BlockHeader* const absorbed = block->next;
+        block->size += absorbed->size;
+        block->next = absorbed->next;
+        if (absorbed->next != nullptr) {
+            absorbed->next->previous = block;
+        }
+    }
+    return block->size;
+}
+
 void tally(unsigned int* used, unsigned int* unused) {
     unsigned int used_total = 0;
     unsigned int free_total = 0;
@@ -101,7 +116,10 @@ void* allocate(unsigned int bytes) {
     const unsigned int required = wanted + sizeof(BlockHeader);
 
     for (BlockHeader* block = first_block; block != nullptr; block = block->next) {
-        if (block->magic != block_magic_free || block->size < required) {
+        if (block->magic != block_magic_free) {
+            continue;
+        }
+        if (coalesce_forward(block) < required) {
             continue;
         }
         const unsigned int remainder = block->size - required;
@@ -135,14 +153,7 @@ void release(void* pointer) {
     }
     block->magic = block_magic_free;
 
-    BlockHeader* const following = block->next;
-    if (following != nullptr && following->magic == block_magic_free) {
-        block->size += following->size;
-        block->next = following->next;
-        if (following->next != nullptr) {
-            following->next->previous = block;
-        }
-    }
+    coalesce_forward(block);
 
     BlockHeader* const preceding = block->previous;
     if (preceding != nullptr && preceding->magic == block_magic_free) {

@@ -21,7 +21,8 @@ namespace kernel::memory::heap {
 
 // First-fit allocator backed by frames from the physical page frame manager.
 // Every block is tracked in one doubly linked list so adjacent free blocks can
-// be merged on release.
+// be merged, both when a block is released and while an allocation is being
+// satisfied.
 void initialize(unsigned int reserve_megabytes);
 bool is_initialized();
 

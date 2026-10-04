@@ -34,9 +34,9 @@ const unsigned int bitmap_words = (maximum_frames + 31) / 32;
 // structures, so it is never available to the allocator.
 const unsigned long long low_reserved_boundary = 0x100000ULL;
 
-// entry.asm parks the boot stack directly below this address.
-const unsigned int stack_base = 0x80000;
-const unsigned int stack_top = 0x90000;
+// The boot stack and the boot page directory now live in the kernel image
+// itself, so they fall inside the reserved image range and need no separate
+// entry here.
 
 // Slop covering sections the linker script places outside the tracked image
 // range, such as .eh_frame.
@@ -165,7 +165,6 @@ bool initialize(unsigned int multiboot_info_address) {
     const unsigned int kernel_start = reinterpret_cast<unsigned int>(kernel_image_start);
     const unsigned int kernel_end = reinterpret_cast<unsigned int>(kernel_image_end);
     reserve(kernel_start, kernel_end - kernel_start + kernel_margin);
-    reserve(stack_base, stack_top - stack_base);
     reserve_framebuffer(info);
 
     allocation_hint = static_cast<unsigned int>(low_reserved_boundary / page_size);

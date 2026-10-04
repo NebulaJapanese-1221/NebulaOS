@@ -1,4 +1,4 @@
-// Graphical shell interface for the NebulaOS x86 operating system.
+// Desktop shell for the NebulaOS x86 operating system.
 // Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -19,6 +19,10 @@
 
 namespace shell {
 
-[[noreturn]] void run(bool mouse_available);
+// Height of the bar across the top of the desktop. The console is laid out
+// underneath it, so the shell reports this before initialising the console.
+const unsigned int taskbar_height = 40;
+
+void run();
 
 }

@@ -19,6 +19,7 @@
 #include "../drivers/keyboard.hpp"
 #include "../drivers/mouse.hpp"
 #include "../drivers/serial.hpp"
+#include "../drivers/vga.hpp"
 #include "../shell/shell.hpp"
 #include "arch/x86/interrupts.hpp"
 #include "heap.hpp"
@@ -52,23 +53,12 @@ void show_status(unsigned int row, const char* text, unsigned int color) {
     drivers::graphics::present();
 }
 
-void write_vga_line(const char* prefix, const char* message) {
-    volatile unsigned short* const text_buffer =
-        reinterpret_cast<volatile unsigned short*>(0xB8000);
-    unsigned int index = 0;
-    for (unsigned int letter = 0; prefix[letter] != '\0' && index < 80; ++letter) {
-        text_buffer[index] = static_cast<unsigned short>(0x4F00 | prefix[letter]);
-        ++index;
-    }
-    for (unsigned int letter = 0; message[letter] != '\0' && index < 80; ++letter) {
-        text_buffer[index] = static_cast<unsigned short>(0x4F00 | message[letter]);
-        ++index;
-    }
-}
-
+// The VGA text buffer is the only output that exists before the framebuffer is
+// up, so fatal errors are mirrored there as well as to the serial port.
 [[noreturn]] void halt_with_error(const char* message) {
     const char prefix[] = "NEBULAOS BOOT ERROR: ";
-    write_vga_line(prefix, message);
+    drivers::vga::write_line(prefix);
+    drivers::vga::write_line(message);
     drivers::serial::write_line(prefix);
     drivers::serial::write_line(message);
     for (;;) {
@@ -102,6 +92,13 @@ extern "C" void kmain(unsigned int boot_magic, unsigned int multiboot_info_addre
         halt_with_error("MEMORY MAP UNAVAILABLE");
     }
 
+    drivers::serial::write("memory detected ");
+    drivers::serial::write_decimal(
+        static_cast<unsigned int>(kernel::memory::pmm::detected_bytes() / (1024 * 1024)));
+    drivers::serial::write(" MB, free frames ");
+    drivers::serial::write_decimal(kernel::memory::pmm::free_frames());
+    drivers::serial::write_newline();
+
     const unsigned int identity_megabytes =
         identity_megabytes_for(kernel::memory::pmm::detected_bytes());
     if (!kernel::memory::paging::initialize(identity_megabytes)) {
@@ -119,6 +116,13 @@ extern "C" void kmain(unsigned int boot_magic, unsigned int multiboot_info_addre
     if (!kernel::memory::heap::is_initialized()) {
         halt_with_error("KERNEL HEAP UNAVAILABLE");
     }
+    drivers::serial::write("identity map ");
+    drivers::serial::write_decimal(identity_megabytes);
+    drivers::serial::write(" MB, heap ");
+    drivers::serial::write_decimal(kernel::memory::heap::total_bytes() / 1024);
+    drivers::serial::write(" KB, free frames ");
+    drivers::serial::write_decimal(kernel::memory::pmm::free_frames());
+    drivers::serial::write_newline();
 
     const char* framebuffer_reason = nullptr;
     if (!drivers::graphics::initialize(multiboot_info_address,
@@ -150,5 +154,5 @@ extern "C" void kmain(unsigned int boot_magic, unsigned int multiboot_info_addre
 
     show_status(6, "STARTING GRAPHICAL DESKTOP", boot_text);
     kernel::timer::sleep_seconds(1);
-    shell::run(mouse_available);
+    shell::run();
 }

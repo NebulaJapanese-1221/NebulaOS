@@ -81,8 +81,8 @@ isr_spurious:
 
 isr_common:
     pusha
-    mov eax, [esp + 32]
-    mov edx, [esp + 36]
+    mov eax, [esp + 32]      ; vector
+    mov edx, [esp + 36]      ; error_code
     push ds
     push es
     push fs
@@ -92,10 +92,18 @@ isr_common:
     mov es, bx
     mov fs, bx
     mov gs, bx
-    push edx
-    push eax
+    
+    ; Save all registers for error screen
+    push dword [esp + 32 + 8 + 4]  ; eip (pushed by CPU)
+    push dword [esp + 32 + 8 + 8]  ; cs
+    push dword [esp + 32 + 8 + 12] ; eflags
+    push dword [esp + 32 + 8 + 16] ; esp (user stack pointer if privilege change)
+    push dword [esp + 32 + 8 + 20] ; ss
+    
+    push edx                     ; error_code
+    push eax                     ; vector
     call interrupt_dispatch
-    add esp, 8
+    add esp, 28                  ; clean up 7 pushed args (vector, error_code, eip, cs, eflags, esp, ss)
     pop gs
     pop fs
     pop es

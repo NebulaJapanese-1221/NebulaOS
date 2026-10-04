@@ -53,11 +53,15 @@ unsigned int ticks() {
 }
 
 void sleep_seconds(unsigned int seconds) {
-    const unsigned int duration = seconds * 100;
+    const unsigned int duration = seconds * ticks_per_second;
     const unsigned int start = ticks();
     while (static_cast<unsigned int>(ticks() - start) < duration) {
         asm volatile("sti; hlt" : : : "memory");
     }
+}
+
+unsigned int seconds() {
+    return ticks() / ticks_per_second;
 }
 
 }

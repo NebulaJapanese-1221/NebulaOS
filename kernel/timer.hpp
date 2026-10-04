@@ -19,9 +19,14 @@
 
 namespace kernel::timer {
 
+// The PIT is programmed from this rate, so a hundred ticks make a second.
+const unsigned int ticks_per_second = 100;
+
 void initialize();
 void interrupt_tick();
 unsigned int ticks();
+// Whole seconds since boot, derived from ticks().
+unsigned int seconds();
 void sleep_seconds(unsigned int seconds);
 
 }

@@ -1,16 +1,16 @@
 // IDT, PIC, and interrupt dispatch for the NebulaOS x86 operating system.
 // Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
-//
+// 
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
-//
+// 
 // This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU General Public License for more details.
-//
+// 
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 // See LICENCE for the full license text.
@@ -18,6 +18,7 @@
 #include "interrupts.hpp"
 #include "../../timer.hpp"
 #include "../../../drivers/serial.hpp"
+#include "../../../drivers/vga.hpp"
 
 namespace {
 struct __attribute__((packed)) IdtEntry {
@@ -74,6 +75,198 @@ void remap_pic() {
     write_port(0x21, 0xFE);
     write_port(0xA1, 0xFF);
 }
+
+const char* exception_names[32] = {
+    "Division by Zero",
+    "Debug",
+    "Non-Maskable Interrupt",
+    "Breakpoint",
+    "Overflow",
+    "Bound Range Exceeded",
+    "Invalid Opcode",
+    "Device Not Available",
+    "Double Fault",
+    "Coprocessor Segment Overrun",
+    "Invalid TSS",
+    "Segment Not Present",
+    "Stack Segment Fault",
+    "General Protection Fault",
+    "Page Fault",
+    "Reserved",
+    "x87 FPU Error",
+    "Alignment Check",
+    "Machine Check",
+    "SIMD FPU Error",
+    "Virtualization Exception",
+    "Control Protection Exception",
+    "Reserved",
+    "Reserved",
+    "Reserved",
+    "Reserved",
+    "Reserved",
+    "Reserved",
+    "Reserved",
+    "Reserved",
+    "Reserved",
+    "Security Exception"
+};
+
+void write_hex_32(unsigned int value) {
+    const char* hex = "0123456789ABCDEF";
+    char buffer[9];
+    for (int i = 7; i >= 0; --i) {
+        buffer[7 - i] = hex[value & 0xF];
+        value >>= 4;
+    }
+    buffer[8] = '\0';
+    drivers::vga::write(buffer);
+    drivers::serial::write(buffer);
+}
+
+void write_dec(unsigned int value) {
+    if (value == 0) {
+        drivers::vga::put('0');
+        drivers::serial::write("0");
+        return;
+    }
+    char buffer[11];
+    int pos = 10;
+    buffer[pos] = '\0';
+    while (value > 0) {
+        buffer[--pos] = '0' + (value % 10);
+        value /= 10;
+    }
+    drivers::vga::write(&buffer[pos]);
+    drivers::serial::write(&buffer[pos]);
+}
+
+void error_screen(unsigned int vector, unsigned int error_code, unsigned int eip, unsigned int cs, unsigned int eflags, unsigned int esp, unsigned int ss) {
+    asm volatile("cli");
+    
+    drivers::vga::clear();
+    
+    drivers::vga::write_line("========================================");
+    drivers::vga::write_line("         NEBULAOS KERNEL PANIC          ");
+    drivers::vga::write_line("========================================");
+    drivers::vga::write_line("");
+    
+    if (vector < 32) {
+        drivers::vga::write("Exception: ");
+        drivers::vga::write(exception_names[vector]);
+        drivers::vga::write(" (Vector ");
+        write_dec(vector);
+        drivers::vga::write(")");
+        drivers::vga::write_line("");
+    } else {
+        drivers::vga::write("Interrupt: Vector ");
+        write_dec(vector);
+        drivers::vga::write_line("");
+    }
+    
+    drivers::vga::write_line("");
+    drivers::vga::write("Error Code: 0x");
+    write_hex_32(error_code);
+    drivers::vga::write_line("");
+    
+    drivers::vga::write("EIP: 0x");
+    write_hex_32(eip);
+    drivers::vga::write_line("");
+    
+    drivers::vga::write("CS:  0x");
+    write_hex_32(cs);
+    drivers::vga::write_line("");
+    
+    drivers::vga::write("EFLAGS: 0x");
+    write_hex_32(eflags);
+    drivers::vga::write_line("");
+    
+    drivers::vga::write("ESP: 0x");
+    write_hex_32(esp);
+    drivers::vga::write_line("");
+    
+    drivers::vga::write("SS:  0x");
+    write_hex_32(ss);
+    drivers::vga::write_line("");
+    
+    if (vector == 14) {
+        unsigned int cr2 = 0;
+        asm volatile("mov %%cr2, %0" : "=r"(cr2));
+        drivers::vga::write_line("");
+        drivers::vga::write("CR2 (Fault Address): 0x");
+        write_hex_32(cr2);
+        drivers::vga::write_line("");
+    }
+    
+    drivers::vga::write_line("");
+    drivers::vga::write_line("========================================");
+    drivers::vga::write_line("System halted. Press reset to restart.");
+    drivers::vga::write_line("========================================");
+    
+    drivers::serial::write_line("");
+    drivers::serial::write_line("========================================");
+    drivers::serial::write_line("         NEBULAOS KERNEL PANIC          ");
+    drivers::serial::write_line("========================================");
+    drivers::serial::write_line("");
+    
+    if (vector < 32) {
+        drivers::serial::write("Exception: ");
+        drivers::serial::write(exception_names[vector]);
+        drivers::serial::write(" (Vector ");
+        char vec_str[4];
+        vec_str[0] = '0' + (vector / 10);
+        vec_str[1] = '0' + (vector % 10);
+        vec_str[2] = ')';
+        vec_str[3] = '\0';
+        drivers::serial::write(vec_str);
+        drivers::serial::write_newline();
+    } else {
+        drivers::serial::write("Interrupt: Vector ");
+        drivers::serial::write_hex(vector);
+        drivers::serial::write_newline();
+    }
+    
+    drivers::serial::write_line("");
+    drivers::serial::write("Error Code: 0x");
+    drivers::serial::write_hex(error_code);
+    drivers::serial::write_newline();
+    
+    drivers::serial::write("EIP: 0x");
+    drivers::serial::write_hex(eip);
+    drivers::serial::write_newline();
+    
+    drivers::serial::write("CS: 0x");
+    drivers::serial::write_hex(cs);
+    drivers::serial::write_newline();
+    
+    drivers::serial::write("EFLAGS: 0x");
+    drivers::serial::write_hex(eflags);
+    drivers::serial::write_newline();
+    
+    drivers::serial::write("ESP: 0x");
+    drivers::serial::write_hex(esp);
+    drivers::serial::write_newline();
+    
+    drivers::serial::write("SS: 0x");
+    drivers::serial::write_hex(ss);
+    drivers::serial::write_newline();
+    
+    if (vector == 14) {
+        unsigned int cr2 = 0;
+        asm volatile("mov %%cr2, %0" : "=r"(cr2));
+        drivers::serial::write("CR2 (Fault Address): 0x");
+        drivers::serial::write_hex(cr2);
+        drivers::serial::write_newline();
+    }
+    
+    drivers::serial::write_line("");
+    drivers::serial::write_line("========================================");
+    drivers::serial::write_line("System halted. Press reset to restart.");
+    drivers::serial::write_line("========================================");
+    
+    for (;;) {
+        asm volatile("cli; hlt");
+    }
+}
 }
 
 namespace kernel::interrupts {
@@ -116,68 +309,15 @@ void disable() {
 
 }
 
-namespace {
-unsigned int fault_address() {
-    unsigned int address = 0;
-    asm volatile("mov %%cr2, %0" : "=r"(address));
-    return address;
-}
-
-void report_page_fault(unsigned int error_code) {
-    const unsigned int address = fault_address();
-
-    volatile unsigned short* const text =
-        reinterpret_cast<volatile unsigned short*>(0xB8000);
-    const char message[] = "NEBULAOS PAGE FAULT";
-    for (unsigned int index = 0; message[index] != '\0'; ++index) {
-        text[index] = static_cast<unsigned short>(0x4F00 | message[index]);
-    }
-
-    drivers::serial::write_line("NEBULAOS PAGE FAULT");
-    drivers::serial::write("address ");
-    drivers::serial::write_hex(address);
-    drivers::serial::write(" error ");
-    drivers::serial::write_hex(error_code);
-    drivers::serial::write_newline();
-}
-}
-
-extern "C" void interrupt_dispatch(unsigned int vector, unsigned int error_code) {
+extern "C" void interrupt_dispatch(unsigned int vector, unsigned int error_code, unsigned int eip, unsigned int cs, unsigned int eflags, unsigned int esp, unsigned int ss) {
     if (vector == 14) {
         kernel::interrupts::disable();
-        report_page_fault(error_code);
-        for (;;) {
-            asm volatile("cli; hlt");
-        }
+        error_screen(vector, error_code, eip, cs, eflags, esp, ss);
     }
 
     if (vector < 32) {
         kernel::interrupts::disable();
-        volatile unsigned short* const text =
-            reinterpret_cast<volatile unsigned short*>(0xB8000);
-        const char message[] = "NEBULAOS CPU EXCEPTION";
-        for (unsigned int index = 0; message[index] != '\0'; ++index) {
-            text[index] = static_cast<unsigned short>(0x4F00 | message[index]);
-        }
-        text[24] = static_cast<unsigned short>(0x4F00 | ('0' + (vector / 10)));
-        text[25] = static_cast<unsigned short>(0x4F00 | ('0' + (vector % 10)));
-        text[27] = static_cast<unsigned short>(0x4F00 | 'E');
-        text[28] = static_cast<unsigned short>(0x4F00 | 'R');
-        text[29] = static_cast<unsigned short>(0x4F00 | 'R');
-        text[30] = static_cast<unsigned short>(0x4F00 | ' ');
-        text[31] = static_cast<unsigned short>(0x4F00 | ('0' + ((error_code / 1000) % 10)));
-        text[32] = static_cast<unsigned short>(0x4F00 | ('0' + ((error_code / 100) % 10)));
-        text[33] = static_cast<unsigned short>(0x4F00 | ('0' + ((error_code / 10) % 10)));
-        text[34] = static_cast<unsigned short>(0x4F00 | ('0' + (error_code % 10)));
-        drivers::serial::write_line("NEBULAOS CPU EXCEPTION");
-        drivers::serial::write("vector ");
-        drivers::serial::write_hex(vector);
-        drivers::serial::write(" error ");
-        drivers::serial::write_hex(error_code);
-        drivers::serial::write_newline();
-        for (;;) {
-            asm volatile("cli; hlt");
-        }
+        error_screen(vector, error_code, eip, cs, eflags, esp, ss);
     }
 
     if (vector == 32) {

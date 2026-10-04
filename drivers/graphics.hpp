@@ -23,6 +23,7 @@ bool initialize(unsigned int multiboot_info_address, const char** reason = nullp
 void clear(unsigned int color);
 void fill_rect(unsigned int x, unsigned int y, unsigned int width, unsigned int height, unsigned int color);
 void draw_text(unsigned int x, unsigned int y, const char* text, unsigned int color, unsigned int scale);
+void draw_line(unsigned int x1, unsigned int y1, unsigned int x2, unsigned int y2, unsigned int color);
 
 // Push the frame that has been drawn so far to the screen in one pass.
 void present();
