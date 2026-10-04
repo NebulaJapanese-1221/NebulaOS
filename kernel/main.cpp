@@ -378,12 +378,13 @@ extern "C" void kmain(unsigned int boot_magic, unsigned int multiboot_info_addre
     }
     run_stage("PAGING TABLES", "OK", 0x0A);
 
-    // The IDT has to be in place before paging is switched on, otherwise a
-    // fault during translation cannot be reported.
-    kernel::interrupts::install_handlers();
+    // Enable paging with the new page directory first, then install IDT/TSS
+    // so they use virtual addresses valid in the new page directory.
     if (!kernel::memory::paging::enable()) {
         halt_with_error("PAGING COULD NOT BE ENABLED");
     }
+    kernel::tss::reset_for_reinit();
+    kernel::interrupts::install_handlers();
     run_stage("PAGING + FAULT HANDLERS", "OK", 0x0A);
 
     kernel::memory::heap::initialize(heap_megabytes);

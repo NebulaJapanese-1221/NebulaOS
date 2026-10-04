@@ -28,6 +28,8 @@ namespace kernel::tss {
 // is what keeps a stack overflow one recoverable screen instead of a triple
 // fault.
 void initialize();
+void update_descriptor();
+void reset_for_reinit();
 
 // User-mode segment selectors (index 4 = 0x20, index 5 = 0x28, both with DPL=3).
 constexpr unsigned short user_code_selector = 0x23;

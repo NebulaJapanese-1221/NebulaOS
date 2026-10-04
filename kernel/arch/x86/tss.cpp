@@ -60,6 +60,10 @@ const unsigned short kernel_data_selector = 0x10;
 
 namespace kernel::tss {
 
+void reset_for_reinit() {
+    loaded = false;
+}
+
 void initialize() {
     if (loaded) {
         return;
@@ -93,6 +97,29 @@ void initialize() {
     asm volatile("ltr %0" : : "r"(selector));
 
     loaded = true;
+}
+
+void update_descriptor() {
+    const unsigned int base = reinterpret_cast<unsigned int>(&task_state);
+    const unsigned int limit = sizeof(TaskStateSegment) - 1;
+    for (unsigned int index = 0; index < 8; ++index) {
+        gdt_tss_descriptor[index] = 0;
+    }
+    gdt_tss_descriptor[0] = static_cast<unsigned char>(limit & 0xFF);
+    gdt_tss_descriptor[1] = static_cast<unsigned char>((limit >> 8) & 0xFF);
+    gdt_tss_descriptor[2] = static_cast<unsigned char>(base & 0xFF);
+    gdt_tss_descriptor[3] = static_cast<unsigned char>((base >> 8) & 0xFF);
+    gdt_tss_descriptor[4] = static_cast<unsigned char>((base >> 16) & 0xFF);
+    gdt_tss_descriptor[5] = 0x89;
+    gdt_tss_descriptor[6] = 0;
+    gdt_tss_descriptor[7] = static_cast<unsigned char>((base >> 24) & 0xFF);
+
+    unsigned char* const fault_stack_top = fault_stack + sizeof(fault_stack);
+    unsigned char* const syscall_stack_top = syscall_stack + sizeof(syscall_stack);
+    task_state.esp0 = static_cast<unsigned short>(reinterpret_cast<unsigned int>(syscall_stack_top) & 0xFFFF);
+    task_state.ist1_sp = reinterpret_cast<unsigned int>(fault_stack_top);
+
+    asm volatile("ltr %0" : : "r"(tss_selector));
 }
 
 }
