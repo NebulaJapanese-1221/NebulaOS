@@ -21,4 +21,21 @@ namespace kernel::syscall {
 
 void initialize();
 
+// Registers a new file descriptor backed by a userspace buffer. Used by the
+// userspace runtime to expose the framebuffer and the serial port without
+// requiring a real filesystem in the kernel.
+int open_device(const char* name, unsigned int buffer, unsigned int length);
+void close_device(int fd);
+
+// Fills the userspace struct with the current framebuffer geometry so a
+// graphical userspace program can draw straight into the shared buffer.
+bool get_framebuffer_info(void* info);
+
+// Returns the number of whole seconds since boot and the tick count.
+unsigned long long get_time_seconds();
+unsigned int get_ticks();
+
+// Yields the calling thread for the given number of ticks.
+void sleep_ticks(unsigned int ticks);
+
 } // namespace kernel::syscall

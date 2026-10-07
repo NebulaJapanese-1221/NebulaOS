@@ -26,9 +26,18 @@ typedef unsigned char uint8_t;
 typedef char int8_t;
 typedef unsigned long size_t;
 
-#define SYS_WRITE   1
-#define SYS_EXIT    60
-#define SYS_GETPID  20
+typedef __builtin_va_list va_list;
+#define va_start(ap, last) __builtin_va_start(ap, last)
+#define va_end(ap) __builtin_va_end(ap)
+#define va_arg(ap, type) __builtin_va_arg(ap, type)
+
+#define SYS_WRITE           1
+#define SYS_EXIT            60
+#define SYS_GETPID          20
+#define SYS_OPEN_DEVICE     200
+#define SYS_GET_FB_INFO     201
+#define SYS_GET_TIME        202
+#define SYS_GET_TICKS       203
 
 static inline uint32_t syscall1(uint32_t num, uint32_t arg1) {
     uint32_t ret;
@@ -54,6 +63,26 @@ static inline void _exit(int status) {
 
 static inline int getpid(void) {
     return syscall1(SYS_GETPID, 0);
+}
+
+static inline int open_device(const char* name, uint32_t buffer, uint32_t length) {
+    return syscall3(SYS_OPEN_DEVICE, (uint32_t)name, buffer, length);
+}
+
+static inline int get_framebuffer_info(int fd, void* info) {
+    return syscall3(SYS_GET_FB_INFO, fd, (uint32_t)info, 0);
+}
+
+static inline unsigned int get_time_seconds(void) {
+    return syscall1(SYS_GET_TIME, 0);
+}
+
+static inline unsigned int get_ticks(void) {
+    return syscall1(SYS_GET_TICKS, 0);
+}
+
+static inline int read(int fd, void* buf, uint32_t count) {
+    return syscall3(SYS_WRITE, fd, (uint32_t)buf, count);
 }
 
 #endif

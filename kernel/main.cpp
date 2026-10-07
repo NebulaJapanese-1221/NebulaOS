@@ -23,6 +23,7 @@
 #include "../shell/shell.hpp"
 #include "arch/x86/interrupts.hpp"
 #include "arch/x86/tss.hpp"
+#include "cpio.hpp"
 #include "heap.hpp"
 #include "multiboot.hpp"
 #include "paging.hpp"
@@ -167,33 +168,12 @@ bool extract_initrd(const unsigned int multiboot_info_address,
 bool find_file_in_cpio(const unsigned char* cpio_data, unsigned int cpio_size,
                        const char* filename,
                        const unsigned char** file_data, unsigned int* file_size) {
-    // Simplified: just return the whole cpio as the file (since we only have one file)
-    // In a real implementation, we'd parse the cpio headers.
-    // For now, assume the cpio contains just the console binary at a known offset.
-    // We'll scan for the ELF magic.
-    for (unsigned int i = 0; i + 4 <= cpio_size; ++i) {
-        unsigned int magic = *reinterpret_cast<const unsigned int*>(cpio_data + i);
-        if (magic == ELF_MAGIC) {
-            *file_data = cpio_data + i;
-            // Find the end by looking at the ELF header
-            const Elf32_Ehdr* ehdr = reinterpret_cast<const Elf32_Ehdr*>(cpio_data + i);
-            *file_size = ehdr->phoff + ehdr->phnum * ehdr->phentsize;
-            // Actually need to compute size from program headers
-            unsigned int total_size = 0;
-            for (unsigned int j = 0; j < ehdr->phnum; ++j) {
-                const Elf32_Phdr* phdr = reinterpret_cast<const Elf32_Phdr*>(
-                    cpio_data + i + ehdr->phoff + j * ehdr->phentsize);
-                if (phdr->type == PT_LOAD) {
-                    if (phdr->offset + phdr->filesz > total_size) {
-                        total_size = phdr->offset + phdr->filesz;
-                    }
-                }
-            }
-            *file_size = total_size;
-            return true;
-        }
+    const unsigned char* data = kernel::cpio::find_file(cpio_data, cpio_size, filename, file_size);
+    if (data == nullptr) {
+        return false;
     }
-    return false;
+    *file_data = data;
+    return true;
 }
 
 void launch_userspace_program(const unsigned int multiboot_info_address) {

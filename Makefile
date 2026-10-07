@@ -36,10 +36,13 @@ all: nebulaos.iso
 
 initrd: $(INITRD)
 
-$(INITRD): userspace/bin/console userspace/lib/crt0.o
+$(INITRD): userspace/bin/console userspace/bin/settings userspace/lib/crt0.o
 	cd initrd && find . -print0 | cpio --null -o --format=newc > ../$@
 
-userspace/bin/console: userspace/lib/crt0.o userspace/bin/console.c userspace/lib/syscalls.h userspace/linker.ld
+userspace/bin/console: userspace/lib/crt0.o userspace/lib/libc.o userspace/bin/console.c userspace/lib/syscalls.h userspace/linker.ld
+	cd userspace && ./build.sh
+
+userspace/bin/settings: userspace/lib/crt0.o userspace/lib/libc.o userspace/bin/settings.c userspace/lib/syscalls.h userspace/linker.ld
 	cd userspace && ./build.sh
 
 kernel_entry.o: kernel/arch/x86/entry.asm
@@ -124,3 +127,4 @@ run-debug: nebulaos.iso
 clean:
 	rm -f kernel_entry.o interrupts_entry.o kernel.o kernel/framebuffer.o kernel/heap.o kernel/paging.o kernel/pmm.o kernel/timer.o kernel/syscall.o kernel/arch/x86/interrupts.o kernel/arch/x86/tss.o drivers/graphics.o drivers/keyboard.o drivers/mouse.o drivers/serial.o drivers/vga.o shell/shell.o shell/apps/console.o shell/window_manager.o kernel.elf nebulaos.iso $(INITRD)
 	rm -rf build
+	rm -f userspace/lib/crt0.o userspace/lib/libc.o userspace/bin/console.o userspace/bin/settings.o

@@ -24,16 +24,6 @@ static void puts(const char* s) {
     }
 }
 
-static void puthex(uint32_t val) {
-    const char* hex = "0123456789ABCDEF";
-    char buf[9];
-    for (int i = 7; i >= 0; i--) {
-        buf[7-i] = hex[(val >> (i*4)) & 0xF];
-    }
-    buf[8] = '\0';
-    puts(buf);
-}
-
 static void putdec(uint32_t val) {
     char buf[11];
     int i = 10;
