@@ -3,8 +3,8 @@
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// the Free Software Foundation, either version 3 of the License, or (at your
+// option) any later version.
 //
 // This program is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -37,5 +37,46 @@ unsigned int get_ticks();
 
 // Yields the calling thread for the given number of ticks.
 void sleep_ticks(unsigned int ticks);
+
+// ---- Window manager syscalls ----
+
+// Window lifecycle
+int wm_create_window(const char* title, int x, int y, int w, int h);
+void wm_destroy_window(int window_id);
+void wm_show_window(int window_id);
+void wm_hide_window(int window_id);
+
+// Window state
+void wm_set_title(int window_id, const char* title);
+void wm_move_window(int window_id, int x, int y);
+void wm_resize_window(int window_id, int w, int h);
+void wm_minimize_window(int window_id);
+void wm_maximize_window(int window_id);
+void wm_restore_window(int window_id);
+
+// Window drawing
+void wm_clear_window(int window_id, unsigned int color);
+void wm_fill_rect(int window_id, int x, int y, int w, int h, unsigned int color);
+void wm_draw_text(int window_id, int x, int y, const char* text, unsigned int color, unsigned int scale);
+void wm_present_window(int window_id);
+
+// Window buffer access
+unsigned int wm_get_buffer(int window_id);
+unsigned int wm_get_buffer_width(int window_id);
+unsigned int wm_get_buffer_height(int window_id);
+
+// Event handling
+int wm_poll_event(int window_id, void* event);
+int wm_wait_event(int window_id, void* event, unsigned int timeout_ticks);
+
+// Window info
+bool wm_get_window_info(int window_id, void* info);
+
+// Desktop / screen info
+void wm_get_screen_info(void* info);
+
+// Mouse / keyboard input for focused window
+bool wm_poll_mouse(void* state);
+bool wm_poll_keyboard(void* event);
 
 } // namespace kernel::syscall
