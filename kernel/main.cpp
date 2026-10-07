@@ -210,20 +210,35 @@ void launch_userspace_program(const unsigned int multiboot_info_address) {
     drivers::serial::write_decimal(stack_top);
     drivers::serial::write("\n");
 
-    // Switch to user mode via iret
+    // Copy the program name onto the user stack so the argv pointer is
+    // valid in user space. The kernel can write here because load_elf already
+    // mapped the user stack pages into the kernel page directory.
+    const char prog_name[] = "console";
+    const unsigned int prog_name_len = sizeof(prog_name);
+    unsigned int name_addr = stack_top - 64;
+    for (unsigned int i = 0; i < prog_name_len; ++i) {
+        *reinterpret_cast<unsigned char*>(name_addr + i) = prog_name[i];
+    }
+
+    // Push argc, argv[0], and the NULL argv terminator onto the user stack,
+    // then switch to user mode via iret. The crt0 entry point expects argc at
+    // [esp] and argv at [esp+4].
+    unsigned int user_esp;
     asm volatile(
-        "mov %0, %%esp\n"
-        "push %1\n"       // user ss
-        "push %2\n"       // user esp
-        "pushfl\n"        // eflags
-        "push %3\n"       // user cs
-        "push %4\n"       // user eip
+        "mov %1, %%esp\n"           // switch to the user stack
+        "pushl $0\n"                // NULL argv terminator
+        "pushl %2\n"                // argv[0] = program name address
+        "pushl %3\n"                // argc = 1
+        "mov %%esp, %0\n"           // capture user esp (points to argc)
+        "pushl %4\n"                // user ss
+        "pushl %0\n"                // user esp
+        "pushfl\n"                  // eflags
+        "pushl %5\n"                // user cs
+        "pushl %6\n"                // entry (eip)
         "iret\n"
-        :
-        : "r"(stack_top),
-          "r"(kernel::tss::user_data_selector),
-          "r"(stack_top),
-          "r"(kernel::tss::user_code_selector),
+        : "=r"(user_esp)
+        : "r"(stack_top), "r"(name_addr), "r"(1),
+          "r"(kernel::tss::user_data_selector), "r"(kernel::tss::user_code_selector),
           "r"(entry)
         : "memory"
     );

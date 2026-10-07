@@ -68,6 +68,7 @@ void* calloc(unsigned int count, unsigned int size);
 void* realloc(void* ptr, unsigned int size);
 void abort(void);
 void exit(int status);
+int atexit(void (*func)(void));
 int abs(int n);
 long labs(long n);
 

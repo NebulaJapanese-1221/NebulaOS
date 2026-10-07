@@ -596,10 +596,6 @@ void abort(void) {
     for (;;) asm volatile("hlt");
 }
 
-void exit(int status) {
-    _exit(status);
-}
-
 int abs(int n) {
     return n < 0 ? -n : n;
 }

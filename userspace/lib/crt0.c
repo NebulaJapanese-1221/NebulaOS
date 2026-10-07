@@ -21,13 +21,37 @@ extern int main(int argc, char** argv);
 extern void _init(void);
 extern void _fini(void);
 
-void _start(int argc, char** argv) {
-    if (main(argc, argv) == 0) {
-        _exit(0);
+// atexit handler table
+#define ATEXIT_MAX 32
+static void (*atexit_handlers[ATEXIT_MAX])(void);
+static int atexit_count = 0;
+
+int atexit(void (*func)(void)) {
+    if (atexit_count >= ATEXIT_MAX) {
+        return -1;
     }
-    _exit(1);
+    atexit_handlers[atexit_count++] = func;
+    return 0;
 }
 
-// Dummy init/fini
+void exit(int status) {
+    // Run atexit handlers in reverse order.
+    while (atexit_count > 0) {
+        atexit_handlers[--atexit_count]();
+    }
+    // Run the fini section.
+    _fini();
+    _exit(status);
+}
+
+void _start_c(int argc, char** argv) {
+    // Run the init section first.
+    _init();
+
+    int result = main(argc, argv);
+    exit(result);
+}
+
+// Dummy init/fini (overridden by linker section markers if present).
 void _init(void) {}
 void _fini(void) {}
