@@ -1,4 +1,4 @@
-// Physical page frame allocator for the NebulaOS x86 kernel.
+// Physical Memory Manager Implementation for NebulaOS
 // Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -15,8 +15,9 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 // See LICENCE for the full license text.
 
-#include "pmm.hpp"
+#include "pmm_new.hpp"
 #include "multiboot.hpp"
+#include <cstring>
 
 extern "C" {
 extern unsigned char kernel_image_start[];
@@ -26,100 +27,140 @@ extern unsigned char kernel_image_end[];
 namespace kernel::memory::pmm {
 
 namespace {
-const unsigned int maximum_frames =
-    static_cast<unsigned int>(managed_ceiling / page_size);
-const unsigned int bitmap_words = (maximum_frames + 31) / 32;
 
-// The low megabyte holds BIOS data, VGA windows and the boot information
-// structures, so it is never available to the allocator.
-const unsigned long long low_reserved_boundary = 0x100000ULL;
+// Bitmap for tracking frame allocation
+// Each bit represents one 4 KiB frame
+constexpr std::size_t BITMAP_WORDS = (MAX_FRAMES + 31) / 32;
 
-// The boot stack and the boot page directory now live in the kernel image
-// itself, so they fall inside the reserved image range and need no separate
-// entry here.
+alignas(16) std::uint32_t frame_bitmap[BITMAP_WORDS];
 
-// Slop covering sections the linker script places outside the tracked image
-// range, such as .eh_frame.
-const unsigned int kernel_margin = 0x10000;
+// Statistics
+std::size_t total_frame_count = 0;
+std::size_t free_frame_count = 0;
+std::uintptr_t highest_addr = 0;
+bool pmm_ready = false;
 
-unsigned int frame_bitmap[bitmap_words];
-unsigned int managed_frames = 0;
-unsigned int allocation_hint = 0;
-unsigned long long detected_extent = 0;
-bool memory_ready = false;
+// Memory regions from multiboot
+MemoryRegion regions[64];
+std::size_t region_count = 0;
 
-bool within_managed(unsigned long long base, unsigned long long length) {
-    return base < managed_ceiling && length != 0;
+// First-fit hint for faster allocation
+std::size_t allocation_hint = 0;
+
+// Low reserved boundary (BIOS, VGA, bootloader data)
+constexpr std::uintptr_t LOW_RESERVED = 0x100000; // 1 MiB
+
+// Kernel margin for alignment slack
+constexpr std::uintptr_t KERNEL_MARGIN = 0x10000; // 64 KiB
+
+inline bool frame_is_valid(std::size_t frame) noexcept {
+    return frame < total_frame_count;
 }
 
-unsigned int clamp_frames(unsigned long long base, unsigned long long length) {
-    unsigned long long end = base + length;
-    if (end < base || end > managed_ceiling) {
-        end = managed_ceiling;
-    }
-    return static_cast<unsigned int>(end / page_size);
-}
-
-void set_frame_used(unsigned int frame, bool used) {
-    if (frame >= managed_frames) {
-        return;
-    }
-    const unsigned int mask = 1U << (frame % 32);
-    if (used) {
-        frame_bitmap[frame / 32] |= mask;
-    } else {
-        frame_bitmap[frame / 32] &= ~mask;
-    }
-}
-
-bool frame_is_free(unsigned int frame) {
-    if (frame >= managed_frames) {
+inline bool frame_is_free(std::size_t frame) noexcept {
+    if (!frame_is_valid(frame)) {
         return false;
     }
-    return (frame_bitmap[frame / 32] & (1U << (frame % 32))) == 0;
+    const std::uint32_t mask = 1U << (frame % 32);
+    return (frame_bitmap[frame / 32] & mask) == 0;
 }
 
-void release_range(unsigned long long base, unsigned long long length) {
-    if (!within_managed(base, length)) {
+inline void frame_set_free(std::size_t frame, bool is_free) noexcept {
+    if (!frame_is_valid(frame)) {
         return;
     }
-    const unsigned int last = clamp_frames(base, length);
-    const unsigned int first = static_cast<unsigned int>(base / page_size);
-    for (unsigned int frame = first; frame < last; ++frame) {
-        set_frame_used(frame, false);
-    }
-    const unsigned long long extent = static_cast<unsigned long long>(last) * page_size;
-    if (extent > detected_extent) {
-        detected_extent = extent;
+    const std::uint32_t mask = 1U << (frame % 32);
+    if (is_free) {
+        frame_bitmap[frame / 32] &= ~mask;
+    } else {
+        frame_bitmap[frame / 32] |= mask;
     }
 }
 
-void mark_available_from_map(const kernel::multiboot::Information* info) {
+inline std::size_t frame_from_address(std::uintptr_t addr) noexcept {
+    return addr / PAGE_SIZE;
+}
+
+inline std::uintptr_t address_from_frame(std::size_t frame) noexcept {
+    return frame * PAGE_SIZE;
+}
+
+void mark_range(std::uintptr_t base, std::size_t size, bool is_free) {
+    if (size == 0 || base >= MAX_PHYS_ADDR) {
+        return;
+    }
+    const std::uintptr_t aligned_base = base & PAGE_MASK;
+    const std::uintptr_t end = (base + size + PAGE_SIZE - 1) & PAGE_MASK;
+    const std::uintptr_t clamped_end = end > MAX_PHYS_ADDR ? MAX_PHYS_ADDR : end;
+
+    for (std::uintptr_t addr = aligned_base; addr < clamped_end; addr += PAGE_SIZE) {
+        const std::size_t frame = frame_from_address(addr);
+        const bool was_free = frame_is_free(frame);
+        frame_set_free(frame, is_free);
+        if (is_free && !was_free) {
+            ++free_frame_count;
+        } else if (!is_free && was_free) {
+            --free_frame_count;
+        }
+    }
+}
+
+void parse_memory_map(const kernel::multiboot::Information* info) {
+    region_count = 0;
+
     if ((info->flags & kernel::multiboot::flag_memory_map) == 0 ||
         info->memory_map_address == 0 || info->memory_map_length == 0) {
-        // No map: fall back to the coarse memory_lower/memory_upper report.
-        release_range(0x100000ULL, static_cast<unsigned long long>(info->memory_upper) * 1024ULL);
-        release_range(0x10000ULL, static_cast<unsigned long long>(info->memory_lower) * 1024ULL);
+        // Fallback to coarse memory_lower/memory_upper report
+        if (info->memory_lower > 0) {
+            regions[region_count++] = {0x0, static_cast<std::size_t>(info->memory_lower) * 1024, MemoryRegion::Type::AVAILABLE};
+        }
+        if (info->memory_upper > 0) {
+            regions[region_count++] = {0x100000, static_cast<std::size_t>(info->memory_upper) * 1024, MemoryRegion::Type::AVAILABLE};
+        }
         return;
     }
 
-    const unsigned int entry_size = sizeof(kernel::multiboot::MapEntry);
-    const unsigned char* cursor =
-        reinterpret_cast<const unsigned char*>(info->memory_map_address);
-    const unsigned char* limit = cursor + info->memory_map_length;
-    while (cursor + entry_size <= limit) {
-        const kernel::multiboot::MapEntry* entry =
-            reinterpret_cast<const kernel::multiboot::MapEntry*>(cursor);
-        if (entry->size < 2 * sizeof(unsigned int)) {
+    const std::uintptr_t cursor_start = info->memory_map_address;
+    const std::uintptr_t cursor_end = cursor_start + info->memory_map_length;
+    std::uintptr_t cursor = cursor_start;
+
+    while (cursor + sizeof(kernel::multiboot::MapEntry) <= cursor_end) {
+        const auto* entry = reinterpret_cast<const kernel::multiboot::MapEntry*>(cursor);
+        if (entry->size < 2 * sizeof(std::uint32_t)) {
             break;
         }
-        if (entry->type == kernel::multiboot::map_type_available) {
-            release_range(entry->base, entry->length);
+
+        MemoryRegion region;
+        region.base = static_cast<std::uintptr_t>(entry->base);
+        region.size = static_cast<std::size_t>(entry->length);
+
+        switch (entry->type) {
+            case kernel::multiboot::map_type_available:
+                region.type = MemoryRegion::Type::AVAILABLE;
+                break;
+            case 2:
+                region.type = MemoryRegion::Type::RESERVED;
+                break;
+            case 3:
+                region.type = MemoryRegion::Type::ACPI;
+                break;
+            case 4:
+                region.type = MemoryRegion::Type::NVS;
+                break;
+            default:
+                region.type = MemoryRegion::Type::BAD;
+                break;
         }
-        // Honour an advertised stride only when it is at least the struct the
-        // specification describes. Some loaders under-report this field, and
-        // trusting a short stride would desynchronise the whole walk.
-        cursor += entry->size >= entry_size ? entry->size : entry_size;
+
+        if (region_count < sizeof(regions) / sizeof(regions[0])) {
+            regions[region_count++] = region;
+        }
+
+        // Honour advertised stride, but fall back to struct size
+        const std::size_t stride = entry->size >= sizeof(kernel::multiboot::MapEntry)
+                                        ? entry->size
+                                        : sizeof(kernel::multiboot::MapEntry);
+        cursor += stride;
     }
 }
 
@@ -128,126 +169,215 @@ void reserve_framebuffer(const kernel::multiboot::Information* info) {
         return;
     }
     if (info->framebuffer_address == 0 ||
-        info->framebuffer_address >= managed_ceiling) {
+        info->framebuffer_address >= MAX_PHYS_ADDR) {
         return;
     }
     if (info->framebuffer_pitch == 0 || info->framebuffer_height == 0) {
         return;
     }
-    const unsigned long long base = info->framebuffer_address;
-    const unsigned long long length =
-        static_cast<unsigned long long>(info->framebuffer_pitch) * info->framebuffer_height;
-    if (within_managed(base, length)) {
-        reserve(static_cast<unsigned int>(base), static_cast<unsigned int>(length));
+    const std::uintptr_t base = static_cast<std::uintptr_t>(info->framebuffer_address);
+    const std::size_t size = static_cast<std::size_t>(info->framebuffer_pitch) * info->framebuffer_height;
+    if (base + size <= MAX_PHYS_ADDR) {
+        reserve_range(base, size);
     }
 }
-}
 
-bool initialize(unsigned int multiboot_info_address) {
-    const kernel::multiboot::Information* info =
-        kernel::multiboot::information(multiboot_info_address);
+} // namespace
+
+bool initialize(std::uintptr_t multiboot_info_addr) {
+    const auto* info = kernel::multiboot::information(multiboot_info_addr);
     if (info == nullptr) {
         return false;
     }
 
-    for (unsigned int word = 0; word < bitmap_words; ++word) {
-        frame_bitmap[word] = 0xFFFFFFFFU;
+    // Initialize bitmap: all frames marked as used (not free)
+    for (std::size_t i = 0; i < BITMAP_WORDS; ++i) {
+        frame_bitmap[i] = 0xFFFFFFFFU;
     }
 
-    managed_frames = maximum_frames;
-    detected_extent = 0;
-    mark_available_from_map(info);
+    total_frame_count = MAX_FRAMES;
+    free_frame_count = 0;
+    highest_addr = 0;
 
-    // Everything below the kernel is firmware territory, and the kernel image,
-    // its boot stack and any framebuffer living in low memory are handed to the
-    // kernel already in use.
-    reserve(0, static_cast<unsigned int>(low_reserved_boundary));
-    const unsigned int kernel_start = reinterpret_cast<unsigned int>(kernel_image_start);
-    const unsigned int kernel_end = reinterpret_cast<unsigned int>(kernel_image_end);
-    reserve(kernel_start, kernel_end - kernel_start + kernel_margin);
+    // Parse memory map and mark available regions
+    parse_memory_map(info);
+    for (std::size_t i = 0; i < region_count; ++i) {
+        if (regions[i].type == MemoryRegion::Type::AVAILABLE) {
+            const std::uintptr_t region_end = regions[i].base + regions[i].size;
+            if (region_end > highest_addr && region_end <= MAX_PHYS_ADDR) {
+                highest_addr = region_end;
+            }
+            // Only mark as free if it's above the low reserved area
+            if (regions[i].base + regions[i].size > LOW_RESERVED) {
+                const std::uintptr_t free_base = regions[i].base > LOW_RESERVED
+                                                    ? regions[i].base
+                                                    : LOW_RESERVED;
+                const std::size_t free_size = regions[i].size - (free_base - regions[i].base);
+                mark_range(free_base, free_size, true);
+            }
+        }
+    }
+
+    // Reserve the low megabyte (BIOS, VGA, bootloader data)
+    reserve_range(0, LOW_RESERVED);
+
+    // Reserve the kernel image
+    const std::uintptr_t kernel_start = reinterpret_cast<std::uintptr_t>(kernel_image_start);
+    const std::uintptr_t kernel_end = reinterpret_cast<std::uintptr_t>(kernel_image_end);
+    if (kernel_end > kernel_start) {
+        reserve_range(kernel_start, kernel_end - kernel_start + KERNEL_MARGIN);
+    }
+
+    // Reserve the framebuffer
     reserve_framebuffer(info);
 
-    allocation_hint = static_cast<unsigned int>(low_reserved_boundary / page_size);
-    memory_ready = true;
-    return true;
+    allocation_hint = frame_from_address(LOW_RESERVED);
+    pmm_ready = (free_frame_count > 0);
+    return pmm_ready;
 }
 
-bool is_initialized() {
-    return memory_ready;
+bool is_initialized() noexcept {
+    return pmm_ready;
 }
 
-void reserve(unsigned int physical_base, unsigned int length) {
-    const unsigned int last =
-        clamp_frames(physical_base, static_cast<unsigned long long>(length));
-    const unsigned int first = physical_base / page_size;
-    for (unsigned int frame = first; frame < last; ++frame) {
-        set_frame_used(frame, true);
+FrameResult allocate_frame(FrameFlags flags) {
+    if (!pmm_ready) {
+        return {0, false};
     }
-}
 
-void* allocate_frame() {
-    if (!memory_ready) {
-        return nullptr;
-    }
-    for (unsigned int offset = 0; offset < managed_frames; ++offset) {
-        const unsigned int frame = (allocation_hint + offset) % managed_frames;
+    const std::size_t start_hint = allocation_hint;
+    for (std::size_t offset = 0; offset < total_frame_count; ++offset) {
+        const std::size_t frame = (start_hint + offset) % total_frame_count;
         if (frame_is_free(frame)) {
-            set_frame_used(frame, true);
-            allocation_hint = (frame + 1) % managed_frames;
-            return reinterpret_cast<void*>(frame * page_size);
+            frame_set_free(frame, false);
+            --free_frame_count;
+            allocation_hint = (frame + 1) % total_frame_count;
+
+            std::uintptr_t addr = address_from_frame(frame);
+            if ((flags & FrameFlags::ZEROED) != FrameFlags::NONE) {
+                std::memset(reinterpret_cast<void*>(addr), 0, PAGE_SIZE);
+            }
+            return {addr, true};
         }
     }
-    return nullptr;
+
+    return {0, false};
 }
 
-bool release_frame(void* frame) {
-    if (!memory_ready || frame == nullptr) {
-        return false;
+FrameResult allocate_frames(std::size_t count, FrameFlags flags) {
+    if (!pmm_ready || count == 0) {
+        return {0, false};
     }
-    const unsigned int address = reinterpret_cast<unsigned int>(frame);
-    if ((address % page_size) != 0) {
-        return false;
-    }
-    const unsigned int index = address / page_size;
-    if (index >= managed_frames) {
-        return false;
-    }
-    set_frame_used(index, false);
-    return true;
-}
 
-unsigned int total_frames() {
-    return managed_frames;
-}
+    // Scan for contiguous free frames
+    std::size_t consecutive = 0;
+    std::size_t start_frame = 0;
 
-unsigned int free_frames() {
-    unsigned int count = 0;
-    for (unsigned int frame = 0; frame < managed_frames; ++frame) {
+    for (std::size_t frame = 0; frame < total_frame_count; ++frame) {
         if (frame_is_free(frame)) {
-            ++count;
+            if (consecutive == 0) {
+                start_frame = frame;
+            }
+            ++consecutive;
+            if (consecutive == count) {
+                // Mark all as used
+                for (std::size_t i = 0; i < count; ++i) {
+                    frame_set_free(start_frame + i, false);
+                }
+                free_frame_count -= count;
+                allocation_hint = (start_frame + count) % total_frame_count;
+
+                std::uintptr_t addr = address_from_frame(start_frame);
+                if ((flags & FrameFlags::ZEROED) != FrameFlags::NONE) {
+                    std::memset(reinterpret_cast<void*>(addr), 0, count * PAGE_SIZE);
+                }
+                return {addr, true};
+            }
+        } else {
+            consecutive = 0;
         }
     }
-    return count;
+
+    return {0, false};
 }
 
-unsigned long long total_bytes() {
-    return static_cast<unsigned long long>(managed_frames) * page_size;
+void free_frame(std::uintptr_t physical_addr) {
+    if (!pmm_ready || physical_addr == 0) {
+        return;
+    }
+    if ((physical_addr % PAGE_SIZE) != 0) {
+        return;
+    }
+    const std::size_t frame = frame_from_address(physical_addr);
+    if (!frame_is_valid(frame)) {
+        return;
+    }
+    if (!frame_is_free(frame)) {
+        frame_set_free(frame, true);
+        ++free_frame_count;
+    }
 }
 
-unsigned long long free_bytes() {
-    return static_cast<unsigned long long>(free_frames()) * page_size;
+void free_frames(std::uintptr_t physical_addr, std::size_t count) {
+    if (!pmm_ready || count == 0) {
+        return;
+    }
+    for (std::size_t i = 0; i < count; ++i) {
+        free_frame(physical_addr + i * PAGE_SIZE);
+    }
 }
 
-unsigned long long managed_bytes() {
-    return managed_ceiling;
+void reserve_range(std::uintptr_t base, std::size_t size) {
+    if (!pmm_ready) {
+        return;
+    }
+    mark_range(base, size, false);
 }
 
-unsigned long long detected_bytes() {
-    return detected_extent;
+void release_range(std::uintptr_t base, std::size_t size) {
+    if (!pmm_ready) {
+        return;
+    }
+    mark_range(base, size, true);
 }
 
-unsigned int highest_managed_address() {
-    return managed_frames * page_size;
+std::size_t total_frames() noexcept {
+    return total_frame_count;
 }
 
+std::size_t free_frames() noexcept {
+    return free_frame_count;
 }
+
+std::size_t used_frames() noexcept {
+    return total_frame_count - free_frame_count;
+}
+
+std::uintptr_t total_bytes() noexcept {
+    return total_frame_count * PAGE_SIZE;
+}
+
+std::uintptr_t free_bytes() noexcept {
+    return free_frame_count * PAGE_SIZE;
+}
+
+std::uintptr_t used_bytes() noexcept {
+    return (total_frame_count - free_frame_count) * PAGE_SIZE;
+}
+
+std::uintptr_t highest_managed_address() noexcept {
+    return highest_addr;
+}
+
+std::size_t get_memory_map(MemoryRegion* out_regions, std::size_t max_regions) noexcept {
+    if (out_regions == nullptr || max_regions == 0) {
+        return 0;
+    }
+    const std::size_t copy_count = region_count < max_regions ? region_count : max_regions;
+    for (std::size_t i = 0; i < copy_count; ++i) {
+        out_regions[i] = regions[i];
+    }
+    return copy_count;
+}
+
+} // namespace kernel::memory::pmm

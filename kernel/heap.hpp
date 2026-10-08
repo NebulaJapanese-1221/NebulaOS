@@ -1,4 +1,4 @@
-// Kernel heap interface for the NebulaOS x86 operating system.
+// Kernel Heap Allocator for NebulaOS
 // Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -17,20 +17,83 @@
 
 #pragma once
 
+#include <cstdint>
+#include <cstddef>
+#include <new>
+
 namespace kernel::memory::heap {
 
-// First-fit allocator backed by frames from the physical page frame manager.
-// Every block is tracked in one doubly linked list so adjacent free blocks can
-// be merged, both when a block is released and while an allocation is being
-// satisfied.
-void initialize(unsigned int reserve_megabytes);
-bool is_initialized();
+// Alignment for heap allocations
+constexpr std::size_t ALIGNMENT = 16;
 
-void* allocate(unsigned int bytes);
-void release(void* pointer);
+// Block header structure
+// Magic numbers for debugging
+constexpr std::uint32_t MAGIC_USED = 0xC0DE0001;
+constexpr std::uint32_t MAGIC_FREE = 0xFEEE0002;
+constexpr std::uint32_t MAGIC_POISONED = 0xDEADBEEF;
 
-unsigned int total_bytes();
-unsigned int used_bytes();
-unsigned int free_bytes();
+struct BlockHeader {
+    BlockHeader* prev;      // Previous block in list
+    BlockHeader* next;      // Next block in list
+    std::size_t size;        // Size of the payload (not including header)
+    std::uint32_t magic;     // Magic for validation
+};
 
+// Initialize the heap with a reserve of memory
+bool initialize(std::size_t reserve_bytes);
+
+// Check if heap is initialized
+bool is_initialized() noexcept;
+
+// Allocate memory
+void* allocate(std::size_t bytes);
+
+// Free memory
+void release(void* ptr);
+
+// Reallocate memory
+void* reallocate(void* ptr, std::size_t new_size);
+
+// Allocate zeroed memory
+void* allocate_zeroed(std::size_t bytes);
+
+// Statistics
+std::size_t total_bytes() noexcept;
+std::size_t used_bytes() noexcept;
+std::size_t free_bytes() noexcept;
+std::size_t block_count() noexcept;
+std::size_t free_block_count() noexcept;
+std::size_t largest_free_block() noexcept;
+
+// Validate heap integrity (for debugging)
+bool validate() noexcept;
+
+// Get the heap base address
+std::uintptr_t base_address() noexcept;
+
+// C++ operator new/delete for kernel
+inline void* operator new(std::size_t size) {
+    return allocate(size);
 }
+
+inline void* operator new[](std::size_t size) {
+    return allocate(size);
+}
+
+inline void operator delete(void* ptr) noexcept {
+    release(ptr);
+}
+
+inline void operator delete[](void* ptr) noexcept {
+    release(ptr);
+}
+
+inline void operator delete(void* ptr, std::size_t) noexcept {
+    release(ptr);
+}
+
+inline void operator delete[](void* ptr, std::size_t) noexcept {
+    release(ptr);
+}
+
+} // namespace kernel::memory::heap

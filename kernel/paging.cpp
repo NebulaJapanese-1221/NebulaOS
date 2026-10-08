@@ -1,4 +1,4 @@
-// x86 4 KiB paging for the NebulaOS x86 kernel.
+// Virtual Memory Manager Implementation for NebulaOS
 // Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -15,238 +15,320 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 // See LICENCE for the full license text.
 
-#include "paging.hpp"
-#include "pmm.hpp"
-
-namespace kernel::memory::paging {
+#include "paging_new.hpp"
+#include "pmm_new.hpp"
+#include "../drivers/serial.hpp"
 
 extern "C" {
 extern unsigned char kernel_image_start[];
 extern unsigned char kernel_image_end[];
 }
 
-// The image is linked to run from here, and every symbol it defines resolves to
-// an address in this range. Mirroring it is what frees the lower 3 GB for user
-// space; the identity mapping below only exists so the boot structures and the
-// page frame allocator can keep using physical addresses directly.
-const unsigned int kernel_virtual_base = 0xC0000000;
+namespace kernel::memory::paging {
 
 namespace {
-const unsigned int directory_entries = 1024;
-const unsigned int table_entries = 1024;
-const unsigned int index_mask = 0x3FF;
-const unsigned int address_mask = 0xFFFFF000;
 
-// The kernel and every heap allocation live in the low identity mapping, so
-// device windows are placed far above it and can never collide.
-const unsigned int device_window_base = 0xF0000000;
-const unsigned int device_window_limit = 0xF0400000;
+// Page directory for kernel space
+alignas(PAGE_SIZE) std::uint32_t kernel_page_directory[1024];
 
-// One past the last addressable byte in 32-bit mode. A device range that ends
-// above this cannot be described by a page table entry at all.
-const unsigned long long physical_address_space_top = 0x100000000ULL;
+// Track allocated page tables (physical addresses)
+std::uint32_t* page_tables[1024];
 
-const unsigned int maximum_identity_megabytes = 256;
+// State
+std::size_t identity_mib = 0;
+bool paging_enabled = false;
+std::uintptr_t device_cursor = layout::DEVICE_WINDOW_BASE;
 
-unsigned int* page_directory = nullptr;
-unsigned int* page_tables[directory_entries];
-unsigned int mapped_megabytes = 0;
-unsigned int device_cursor = device_window_base;
-bool paging_active = false;
+// Page fault handler
+PageFaultHandler fault_handler = nullptr;
 
-unsigned int directory_index_of(unsigned int virtual_address) {
-    return (virtual_address >> 22) & index_mask;
+// Page table entry counts for statistics
+std::size_t mapped_pages = 0;
+
+// Helper: get directory index from virtual address
+inline std::size_t directory_index(std::uintptr_t vaddr) noexcept {
+    return (vaddr >> 22) & 0x3FF;
 }
 
-unsigned int table_index_of(unsigned int virtual_address) {
-    return (virtual_address >> 12) & index_mask;
+// Helper: get table index from virtual address
+inline std::size_t table_index(std::uintptr_t vaddr) noexcept {
+    return (vaddr >> 12) & 0x3FF;
 }
 
-unsigned int* table_for(unsigned int directory_index, unsigned int dir_flags) {
-    if (page_tables[directory_index] != nullptr) {
-        return page_tables[directory_index];
-    }
-    void* const frame = pmm::allocate_frame();
-    if (frame == nullptr) {
-        return nullptr;
-    }
-    unsigned int* const table = static_cast<unsigned int*>(frame);
-    for (unsigned int index = 0; index < table_entries; ++index) {
-        table[index] = 0;
-    }
-    page_tables[directory_index] = table;
-    page_directory[directory_index] = reinterpret_cast<unsigned int>(table) |
-                                      page_present | page_writable | dir_flags;
-    return table;
-}
-
-bool table_is_empty(const unsigned int* table) {
-    for (unsigned int index = 0; index < table_entries; ++index) {
-        if ((table[index] & page_present) != 0) {
+// Helper: check if a table is empty
+bool table_is_empty(const std::uint32_t* table) noexcept {
+    for (std::size_t i = 0; i < 1024; ++i) {
+        if ((table[i] & PAGE_PRESENT) != 0) {
             return false;
         }
     }
     return true;
 }
+
+// Helper: get or create a page table for a directory entry
+std::uint32_t* get_or_create_table(std::size_t dir_index,
+                                       std::uint32_t dir_flags) {
+    if (page_tables[dir_index] != nullptr) {
+        return page_tables[dir_index];
+    }
+
+    // Allocate a new page table frame
+    const auto frame = pmm::allocate_frame(pmm::FrameFlags::ZEROED);
+    if (!frame.ok) {
+        return nullptr;
+    }
+
+    auto* table = reinterpret_cast<std::uint32_t*>(frame.value);
+    // Zero the table
+    for (std::size_t i = 0; i < 1024; ++i) {
+        table[i] = 0;
+    }
+
+    page_tables[dir_index] = table;
+    kernel_page_directory[dir_index] = frame.value | dir_flags | PAGE_PRESENT;
+    return table;
 }
 
-bool initialize(unsigned int identity_megabytes) {
-    if (page_directory != nullptr) {
-        return true;
+// Helper: extract flags from a page table entry
+inline std::uint32_t extract_flags(std::uint32_t entry) noexcept {
+    return entry & 0xFFF;
+}
+
+} // namespace
+
+bool initialize(std::size_t identity_mib) {
+    if (identity_mib == 0) {
+        identity_mib = 1;
     }
-    if (identity_megabytes == 0) {
-        identity_megabytes = 1;
-    }
-    if (identity_megabytes > maximum_identity_megabytes) {
-        identity_megabytes = maximum_identity_megabytes;
+    // Cap at 256 MiB for safety
+    if (identity_mib > 256) {
+        identity_mib = 256;
     }
 
-    void* const directory_frame = pmm::allocate_frame();
-    if (directory_frame == nullptr) {
-        return false;
+    // Clear the kernel page directory
+    for (std::size_t i = 0; i < 1024; ++i) {
+        kernel_page_directory[i] = 0;
+        page_tables[i] = nullptr;
     }
-    page_directory = static_cast<unsigned int*>(directory_frame);
-    for (unsigned int index = 0; index < directory_entries; ++index) {
-        page_directory[index] = 0;
-        page_tables[index] = nullptr;
-    }
-    device_cursor = device_window_base;
 
-    const unsigned long long span =
-        static_cast<unsigned long long>(identity_megabytes) * 1024ULL * 1024ULL;
-    for (unsigned long long address = 0; address < span; address += pmm::page_size) {
-        if (!map_page(static_cast<unsigned int>(address),
-                      static_cast<unsigned int>(address),
-                      page_present | page_writable)) {
+    device_cursor = layout::DEVICE_WINDOW_BASE;
+    mapped_pages = 0;
+
+    // Identity map the low memory
+    const std::uintptr_t span = static_cast<std::uintptr_t>(identity_mib) * 1024 * 1024;
+    for (std::uintptr_t addr = 0; addr < span; addr += PAGE_SIZE) {
+        if (!map_page(addr, addr, PAGE_PRESENT | PAGE_WRITABLE)) {
             return false;
         }
     }
 
-    const unsigned int image_start =
-        reinterpret_cast<unsigned int>(kernel_image_start);
-    const unsigned int image_end =
-        reinterpret_cast<unsigned int>(kernel_image_end);
-    for (unsigned int address = image_start; address < image_end;
-         address += pmm::page_size) {
-        if (!map_page(address + kernel_virtual_base, address,
-                      page_present | page_writable)) {
+    // Mirror the kernel image at KERNEL_BASE
+    const std::uintptr_t image_start = reinterpret_cast<std::uintptr_t>(kernel_image_start);
+    const std::uintptr_t image_end = reinterpret_cast<std::uintptr_t>(kernel_image_end);
+    for (std::uintptr_t addr = image_start; addr < image_end; addr += PAGE_SIZE) {
+        if (!map_page(addr + layout::KERNEL_BASE, addr,
+                      PAGE_PRESENT | PAGE_WRITABLE)) {
             return false;
         }
     }
 
-    mapped_megabytes = identity_megabytes;
+    identity_mib = identity_mib;
     return true;
 }
 
 bool enable() {
-    if (page_directory == nullptr) {
-        return false;
-    }
-    unsigned int control = 0;
-    asm volatile("mov %0, %%cr3" : : "r"(reinterpret_cast<unsigned int>(page_directory)));
-    asm volatile("mov %%cr0, %0" : "=r"(control));
-    if ((control & (1U << 31)) == 0) {
-        control |= 1U << 31;
-        asm volatile("mov %0, %%cr0" : : "r"(control));
-    }
-    paging_active = true;
+    // Set CR3 to the kernel page directory
+    const std::uintptr_t pd_phys = reinterpret_cast<std::uintptr_t>(kernel_page_directory);
+    asm volatile("mov %0, %%cr3" : : "r"(pd_phys));
+
+    // Enable paging (PG bit) and write protection (WP bit)
+    std::uintptr_t cr0 = 0;
+    asm volatile("mov %%cr0, %0" : "=r"(cr0));
+    cr0 |= (1U << 31) | (1U << 16);
+    asm volatile("mov %0, %%cr0" : : "r"(cr0));
+
+    paging_enabled = true;
     return true;
 }
 
-bool is_enabled() {
-    return paging_active;
+bool is_enabled() noexcept {
+    return paging_enabled;
 }
 
-unsigned int identity_megabytes() {
-    return mapped_megabytes;
+std::size_t identity_megabytes() noexcept {
+    return identity_mib;
 }
 
-bool map_page(unsigned int virtual_address, unsigned int physical_address,
-              unsigned int flags) {
-    if (page_directory == nullptr) {
-        return false;
+Result<AddressSpace> create_address_space() {
+    // Allocate a new page directory
+    const auto frame = pmm::allocate_frame(pmm::FrameFlags::ZEROED);
+    if (!frame.ok) {
+        return {{}, false};
     }
-    unsigned int dir_flags = (flags & page_user) ? page_user : 0;
-    unsigned int* const table = table_for(directory_index_of(virtual_address), dir_flags);
+
+    AddressSpace space;
+    space.page_directory_phys = frame.value;
+    space.kernel_cr3 = reinterpret_cast<std::uintptr_t>(kernel_page_directory);
+
+    auto* dir = reinterpret_cast<std::uint32_t*>(frame.value);
+    // Copy kernel mappings from the kernel page directory
+    // (entries 768-1023 cover the high half)
+    for (std::size_t i = 768; i < 1024; ++i) {
+        dir[i] = kernel_page_directory[i];
+    }
+
+    return {space, true};
+}
+
+void destroy_address_space(AddressSpace& space) {
+    if (space.page_directory_phys == 0) {
+        return;
+    }
+    // Free the page directory frame
+    pmm::free_frame(space.page_directory_phys);
+    space.page_directory_phys = 0;
+}
+
+void switch_address_space(const AddressSpace& space) {
+    asm volatile("mov %0, %%cr3" : : "r"(space.page_directory_phys));
+}
+
+bool map_page(std::uintptr_t virtual_addr, std::uintptr_t physical_addr,
+              std::uint32_t flags) {
+    const std::size_t dir_idx = directory_index(virtual_addr);
+    const std::size_t tbl_idx = table_index(virtual_addr);
+
+    // Determine directory flags (user bit propagates)
+    const std::uint32_t dir_flags = (flags & PAGE_USER) ? PAGE_USER : 0;
+
+    std::uint32_t* table = nullptr;
+    if (paging_enabled) {
+        // If paging is enabled, we're modifying the active directory
+        table = get_or_create_table(dir_idx, dir_flags);
+    } else {
+        // Before paging is enabled, only kernel directory exists
+        table = get_or_create_table(dir_idx, dir_flags);
+    }
+
     if (table == nullptr) {
         return false;
     }
-    table[table_index_of(virtual_address)] =
-        (physical_address & address_mask) | flags | page_present;
+
+    // Check if this page was previously unmapped
+    const bool was_mapped = (table[tbl_idx] & PAGE_PRESENT) != 0;
+
+    table[tbl_idx] = (physical_addr & PAGE_MASK) | flags | PAGE_PRESENT;
+
+    if (!was_mapped) {
+        ++mapped_pages;
+    }
+
+    // Invalidate the TLB entry for this address
+    asm volatile("invlpg (%0)" : : "r"(virtual_addr) : "memory");
+
     return true;
 }
 
-bool unmap_page(unsigned int virtual_address) {
-    if (page_directory == nullptr) {
-        return false;
-    }
-    const unsigned int directory_index = directory_index_of(virtual_address);
-    unsigned int* const table = page_tables[directory_index];
+bool unmap_page(std::uintptr_t virtual_addr) {
+    const std::size_t dir_idx = directory_index(virtual_addr);
+    const std::size_t tbl_idx = table_index(virtual_addr);
+
+    std::uint32_t* table = page_tables[dir_idx];
     if (table == nullptr) {
         return false;
     }
-    table[table_index_of(virtual_address)] = 0;
+
+    const bool was_mapped = (table[tbl_idx] & PAGE_PRESENT) != 0;
+    table[tbl_idx] = 0;
+
+    if (was_mapped) {
+        --mapped_pages;
+    }
+
+    // If the table is now empty, free it
     if (table_is_empty(table)) {
-        page_directory[directory_index] = 0;
-        page_tables[directory_index] = nullptr;
-        pmm::release_frame(table);
+        kernel_page_directory[dir_idx] = 0;
+        page_tables[dir_idx] = nullptr;
+        pmm::free_frame(reinterpret_cast<std::uintptr_t>(table));
     }
+
+    asm volatile("invlpg (%0)" : : "r"(virtual_addr) : "memory");
     return true;
 }
 
-unsigned int translate(unsigned int virtual_address) {
-    if (page_directory == nullptr) {
+std::uintptr_t translate(std::uintptr_t virtual_addr) noexcept {
+    const std::size_t dir_idx = directory_index(virtual_addr);
+    const std::size_t tbl_idx = table_index(virtual_addr);
+
+    const std::uint32_t dir_entry = kernel_page_directory[dir_idx];
+    if ((dir_entry & PAGE_PRESENT) == 0) {
         return 0;
     }
-    const unsigned int directory_index = directory_index_of(virtual_address);
-    const unsigned int directory_entry = page_directory[directory_index];
-    if ((directory_entry & page_present) == 0) {
+
+    const auto* table = reinterpret_cast<const std::uint32_t*>(dir_entry & PAGE_MASK);
+    const std::uint32_t entry = table[tbl_idx];
+    if ((entry & PAGE_PRESENT) == 0) {
         return 0;
     }
-    const unsigned int* const table =
-        reinterpret_cast<const unsigned int*>(directory_entry & address_mask);
-    const unsigned int entry = table[table_index_of(virtual_address)];
-    if ((entry & page_present) == 0) {
-        return 0;
-    }
-    return (entry & address_mask) | (virtual_address & ~address_mask);
+
+    return (entry & PAGE_MASK) | (virtual_addr & ~PAGE_MASK);
 }
 
-bool map_device_range(unsigned int physical_base, unsigned int length,
-                      unsigned int* virtual_base) {
-    if (page_directory == nullptr || length == 0) {
-        return false;
-    }
-    // The span is computed in 64 bits on purpose. Hardware sitting near the top
-    // of physical memory overflows 32 bits once the length is added, and the
-    // wrapped result masks down to a range that is shorter than the region
-    // instead of rounding it up to the next page boundary. The trailing pages
-    // would then be left unmapped and the first access to them would fault.
-    const unsigned long long first_page = physical_base & address_mask;
-    const unsigned long long last_page =
-        (static_cast<unsigned long long>(physical_base) + length +
-         (pmm::page_size - 1)) & address_mask;
-    const unsigned long long span = last_page - first_page;
-    if (last_page > physical_address_space_top) {
-        return false;
-    }
-    if (device_cursor + span > device_window_limit) {
+bool map_device_range(std::uintptr_t physical_base, std::size_t length,
+                      std::uintptr_t* virtual_base) {
+    if (length == 0) {
         return false;
     }
 
-    const unsigned int base = device_cursor;
-    for (unsigned long long address = first_page; address < last_page;
-         address += pmm::page_size) {
-        if (!map_page(device_cursor, static_cast<unsigned int>(address),
-                      page_present | page_writable)) {
+    // Compute page-aligned span
+    const std::uintptr_t first_page = physical_base & PAGE_MASK;
+    const std::uintptr_t last_page = (physical_base + length + PAGE_SIZE - 1) & PAGE_MASK;
+    const std::uintptr_t span = last_page - first_page;
+
+    if (last_page > 0x100000000ULL) {
+        return false;
+    }
+    if (device_cursor + span > layout::DEVICE_WINDOW_LIMIT) {
+        return false;
+    }
+
+    const std::uintptr_t base = device_cursor;
+    for (std::uintptr_t addr = first_page; addr < last_page; addr += PAGE_SIZE) {
+        if (!map_page(device_cursor, addr,
+                      PAGE_PRESENT | PAGE_WRITABLE | PAGE_NO_CACHE)) {
             return false;
         }
-        device_cursor += pmm::page_size;
+        device_cursor += PAGE_SIZE;
     }
+
     if (virtual_base != nullptr) {
         *virtual_base = base;
     }
     return true;
 }
 
+bool map_range(std::uintptr_t virtual_base, std::size_t length,
+               std::uintptr_t physical_base, std::uint32_t flags) {
+    const std::uintptr_t end = virtual_base + length;
+    std::uintptr_t phys = physical_base;
+
+    for (std::uintptr_t addr = virtual_base; addr < end; addr += PAGE_SIZE) {
+        if (!map_page(addr, phys, flags)) {
+            return false;
+        }
+        phys += PAGE_SIZE;
+    }
+    return true;
 }
+
+void handle_page_fault(const PageFaultInfo& fault) {
+    if (fault_handler != nullptr) {
+        fault_handler(fault);
+    }
+}
+
+void set_page_fault_handler(PageFaultHandler handler) {
+    fault_handler = handler;
+}
+
+} // namespace kernel::memory::paging
