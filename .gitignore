@@ -2,3 +2,4 @@
 *.elf
 build/
 *.iso
+*.cpio
