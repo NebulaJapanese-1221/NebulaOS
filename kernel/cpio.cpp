@@ -1,5 +1,5 @@
 #include "cpio.hpp"
-#include "serial.hpp"
+#include "../drivers/serial.hpp"
 
 namespace kernel::cpio {
 

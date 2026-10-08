@@ -21,7 +21,7 @@
 #include <cstddef>
 #include "scheduler.hpp"
 #include "ipc.hpp"
-#include "../memory/paging_new.hpp"
+#include "paging.hpp"
 
 namespace kernel::process {
 

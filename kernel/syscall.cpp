@@ -17,8 +17,8 @@
 
 #include "syscall.hpp"
 #include "../drivers/serial.hpp"
-#include "../kernel/framebuffer.hpp"
-#include "../kernel/timer.hpp"
+#include "framebuffer.hpp"
+#include "timer.hpp"
 
 namespace kernel::syscall {
 

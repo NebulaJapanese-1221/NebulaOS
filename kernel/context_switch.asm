@@ -15,187 +15,135 @@
 ; along with this program. If not, see <https://www.gnu.org/licenses/>.
 ; See LICENCE for the full license text.
 
+; ThreadContext layout (offset from the start of the context):
+;   +0  edi, +4  esi, +8  ebp, +12 esp
+;   +16 ebx, +20 edx, +24 ecx, +28 eax
+;   +32 ds,   +36 es,   +40 fs,   +44 gs
+;   +48 cr3,  +52 kernel_esp, +56 user_esp
+;   +60 eip,  +64 eflags
+;
+; ThreadContext begins at offset 16 within Thread, so every
+; offset below is the field offset plus 16.
+
+%define CONTEXT_OFFSET 16
+
+%define CT_EDI        (CONTEXT_OFFSET + 0)
+%define CT_ESI        (CONTEXT_OFFSET + 4)
+%define CT_EBP        (CONTEXT_OFFSET + 8)
+%define CT_ESP        (CONTEXT_OFFSET + 12)
+%define CT_EBX        (CONTEXT_OFFSET + 16)
+%define CT_EDX        (CONTEXT_OFFSET + 20)
+%define CT_ECX        (CONTEXT_OFFSET + 24)
+%define CT_EAX        (CONTEXT_OFFSET + 28)
+%define CT_DS         (CONTEXT_OFFSET + 32)
+%define CT_ES         (CONTEXT_OFFSET + 36)
+%define CT_FS         (CONTEXT_OFFSET + 40)
+%define CT_GS         (CONTEXT_OFFSET + 44)
+%define CT_CR3        (CONTEXT_OFFSET + 48)
+%define CT_KERNEL_ESP (CONTEXT_OFFSET + 52)
+%define CT_USER_ESP   (CONTEXT_OFFSET + 56)
+%define CT_EIP        (CONTEXT_OFFSET + 60)
+%define CT_EFLAGS     (CONTEXT_OFFSET + 64)
+
 bits 32
 
 section .text
 
 ; void context_switch(Thread* old_thread, Thread* new_thread)
-; Saves the current context into old_thread->context and
-; restores new_thread->context.
 ;
-; Layout of ThreadContext (32-byte aligned):
-;   +0  edi, +4  esi, +8  ebp, +12 esp (unused, saved via stack)
-;   +16 ebx, +20 edx, +24 ecx, +28 eax
-;   +32 ds, +36 es, +40 fs, +44 gs
-;   +48 cr3 (only for user threads)
-;   +52 kernel_esp
-;   +56 user_esp
-;   +60 eip
-;   +64 eflags
-
+; The C calling convention has already pushed the arguments on the
+; stack. Callee-saved registers are restored on return, so only the
+; registers that the ThreadContext tracks need to be moved here.
 global context_switch
-extern scheduler_current
-
 context_switch:
-    ; Save callee-saved registers
-    pushad
-    push ds
-    push es
-    push fs
-    push gs
+    push ebx
+    push esi
+    push edi
+    push ebp
 
-    ; Get old_thread pointer from stack (first argument)
-    ; At this point, stack layout is:
-    ;   [esp+0]  = return address
-    ;   [esp+4]  = old_thread
-    ;   [esp+8]  = new_thread
-    mov eax, [esp + 4 + 16]   ; old_thread (pushad = 16 bytes)
+    ; Arguments, accounting for the four pushes above.
+    mov esi, [esp + 16 + 4]     ; old_thread
+    mov edi, [esp + 16 + 8]     ; new_thread
 
+    ; Save the live callee-saved registers into the old context.
+    test esi, esi
+    jz .skip_save
+    mov [esi + CT_EBX], ebx
+    mov [esi + CT_ESI], esi
+    mov [esi + CT_EDI], edi
+    mov [esi + CT_EBP], ebp
+    ; The stack pointer of this frame is the old thread's kernel
+    ; stack pointer at the moment of the switch.
+    lea eax, [esp + 16]
+    mov [esi + CT_KERNEL_ESP], eax
+.skip_save:
+
+    test edi, edi
+    jz .done
+
+    ; Restore the segment selectors first so the data accesses
+    ; below stay in the kernel data segment.
+    mov ax, [edi + CT_DS]
+    test ax, ax
+    jz .skip_ds
+    mov ds, ax
+.skip_ds:
+    mov ax, [edi + CT_ES]
+    test ax, ax
+    jz .skip_es
+    mov es, ax
+.skip_es:
+    mov ax, [edi + CT_FS]
+    test ax, ax
+    jz .skip_fs
+    mov fs, ax
+.skip_fs:
+    mov ax, [edi + CT_GS]
+    test ax, ax
+    jz .skip_gs
+    mov gs, ax
+.skip_gs:
+
+    ; Switch the address space. A zero cr3 would fault, so a
+    ; thread that has no address space of its own keeps the
+    ; current one.
+    mov eax, [edi + CT_CR3]
     test eax, eax
-    jz .no_old
-
-    ; Save the current stack pointer into old_thread
-    mov ebx, eax
-    ; Compute the address of the saved register block
-    ; The register block is at the top of the kernel stack
-    ; We save the current esp into the context
-    mov ecx, [ebx + 52]        ; kernel_esp field offset
-    ; We need to save the current esp to the old thread's context
-    ; The context is at old_thread + offsetof(Thread, context)
-    ; offsetof(Thread, context) is after the other fields
-    ; For simplicity, we assume context is at a fixed offset
-    ; We'll use a simpler approach: store esp directly
-
-    ; Save registers to old_thread->context
-    ; First, get pointer to context
-    ; Thread structure layout:
-    ;   id (4), state (1), policy (1), priority (1), time_slice (4)
-    ;   total_time (4) = 12 bytes of padding
-    ;   context (ThreadContext) starts at offset 20
-    ;   But we need to know the exact offset
-    ;
-    ; Let's just save the register block pointer
-    mov [ebx + 12], esp        ; Save current esp as kernel_esp
-
-.no_old:
-    ; Load new_thread
-    mov eax, [esp + 4 + 20]   ; new_thread (pushad = 16 bytes, +4 for old_thread)
-
-    ; Restore registers from new_thread->context
-    mov ebx, eax
-
-    ; Restore segment registers
-    mov ax, [ebx + 32]        ; ds
-    mov ds, ax
-    mov ax, [ebx + 36]        ; es
-    mov es, ax
-    mov ax, [ebx + 40]        ; fs
-    mov fs, ax
-    mov ax, [ebx + 44]        ; gs
-    mov gs, ax
-
-    ; Restore CR3 (page directory)
-    mov eax, [ebx + 48]       ; cr3
+    jz .skip_cr3
     mov cr3, eax
+.skip_cr3:
 
-    ; Restore general purpose registers
-    ; We need to restore in reverse order
-    ; First, restore the stack pointer
-    mov esp, [ebx + 12]       ; kernel_esp
+    ; Restore the callee-saved registers from the new context.
+    mov ebx, [edi + CT_EBX]
+    mov esi, [edi + CT_ESI]
+    mov edi, [edi + CT_EDI]
+    mov ebp, [edi + CT_EBP]
 
-    ; Restore the register block from the stack
-    pop gs
-    pop fs
-    pop es
-    pop ds
-    popad
+    ; The new thread resumes on its own kernel stack. The saved
+    ; kernel_esp points at the frame that context_switch itself
+    ; pushed for the previous switch, so restoring it here and
+    ; returning through the saved frame is what makes the switch
+    ; transparent to the caller.
+    mov eax, [edi + CT_KERNEL_ESP]
+    test eax, eax
+    jz .done
 
+    ; Drop the saved registers and return through the restored
+    ; stack. The pops below unwind the four pushes from the top of
+    ; this function, so the return address is the one the new
+    ; thread was entered with.
+    mov esp, eax
+    pop ebp
+    pop edi
+    pop esi
+    pop ebx
     ret
 
-; Alternative: save to a known location in the thread structure
-global save_context
-save_context:
-    pushad
-    push ds
-    push es
-    push fs
-    push gs
-
-    ; Get thread pointer
-    mov eax, [esp + 4 + 16]   ; thread pointer
-
-    ; Save registers
-    mov ebx, eax
-    mov [ebx + 0], edi        ; context.edi
-    mov [ebx + 4], esi        ; context.esi
-    mov [ebx + 8], ebp        ; context.ebp
-    ; esp is saved separately
-    mov [ebx + 16], ebx       ; context.ebx (temporary)
-    mov [ebx + 20], edx       ; context.edx
-    mov [ebx + 24], ecx       ; context.ecx
-    mov [ebx + 28], eax       ; context.eax
-
-    ; Save segment registers
-    mov ax, ds
-    mov [ebx + 32], ax        ; context.ds
-    mov ax, es
-    mov [ebx + 36], ax        ; context.es
-    mov ax, fs
-    mov [ebx + 40], ax        ; context.fs
-    mov ax, gs
-    mov [ebx + 44], ax        ; context.gs
-
-    ; Save stack pointer
-    mov [ebx + 12], esp       ; kernel_esp
-
-    pop gs
-    pop fs
-    pop es
-    pop ds
-    popad
-    ret
-
-global restore_context
-restore_context:
-    ; Get thread pointer
-    mov ebx, [esp + 4]
-
-    ; Restore segment registers
-    mov ax, [ebx + 32]
-    mov ds, ax
-    mov ax, [ebx + 36]
-    mov es, ax
-    mov ax, [ebx + 40]
-    mov fs, ax
-    mov ax, [ebx + 44]
-    mov gs, ax
-
-    ; Restore CR3
-    mov eax, [ebx + 48]
-    mov cr3, eax
-
-    ; Restore stack pointer
-    mov esp, [ebx + 12]
-
-    ; Restore general purpose registers
-    mov edi, [ebx + 0]
-    mov esi, [ebx + 4]
-    mov ebp, [ebx + 8]
-    ; ebx, edx, ecx, eax are restored by popad
-    ; But we need to set them first
-
-    ; Push the register values for popad
-    push dword [ebx + 28]     ; eax
-    push dword [ebx + 24]     ; ecx
-    push dword [ebx + 20]     ; edx
-    push dword [ebx + 16]     ; ebx
-    push dword [ebx + 8]      ; ebp (original esp slot, unused)
-    push dword [ebx + 8]      ; ebp
-    push dword [ebx + 4]      ; esi
-    push dword [ebx + 0]      ; edi
-
-    popad
-
+.done:
+    pop ebp
+    pop edi
+    pop esi
+    pop ebx
     ret
 
 section .note.GNU-stack noalloc noexec nowrite progbits

@@ -16,9 +16,9 @@
 // See LICENCE for the full license text.
 
 #include "elf.hpp"
-#include "paging_new.hpp"
-#include "pmm_new.hpp"
-#include "heap_new.hpp"
+#include "paging.hpp"
+#include "pmm.hpp"
+#include "heap.hpp"
 #include "../drivers/serial.hpp"
 #include <cstring>
 

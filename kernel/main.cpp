@@ -28,6 +28,15 @@
 #include "multiboot.hpp"
 #include "paging.hpp"
 #include "pmm.hpp"
+#include "scheduler.hpp"
+#include "process.hpp"
+#include "ipc.hpp"
+#include "compositor.hpp"
+#include "wm.hpp"
+#include "elf.hpp"
+#include "pci.hpp"
+#include "vfs.hpp"
+#include "fs/initramfs.hpp"
 #include "syscall.hpp"
 #include "timer.hpp"
 
@@ -69,6 +78,18 @@ const unsigned int ELF_MAGIC = 0x464C457F;
 const unsigned int USER_BASE = 0x08048000;
 const unsigned int USER_STACK_TOP = 0xBFFFFFFF;
 
+// Allocates a frame and maps it at the given virtual address with the
+// given flags. Returns false when the allocator is out of frames.
+bool map_frame_at(unsigned int vaddr, std::uint32_t flags) {
+    const kernel::memory::pmm::FrameResult frame =
+        kernel::memory::pmm::allocate_frame(
+            kernel::memory::pmm::FrameFlags::ZEROED);
+    if (!frame) {
+        return false;
+    }
+    return kernel::memory::paging::map_page(vaddr, frame.value, flags);
+}
+
 bool load_elf(const unsigned char* data, unsigned int size,
               unsigned int* entry_out, unsigned int* stack_top_out) {
     if (size < sizeof(Elf32_Ehdr)) {
@@ -83,6 +104,11 @@ bool load_elf(const unsigned char* data, unsigned int size,
         return false;
     }
 
+    const std::uint32_t user_flags =
+        kernel::memory::paging::PAGE_PRESENT |
+        kernel::memory::paging::PAGE_WRITABLE |
+        kernel::memory::paging::PAGE_USER;
+
     unsigned int max_vaddr = 0;
     for (unsigned int i = 0; i < ehdr->phnum; ++i) {
         const Elf32_Phdr* phdr = reinterpret_cast<const Elf32_Phdr*>(
@@ -91,35 +117,30 @@ bool load_elf(const unsigned char* data, unsigned int size,
             if (phdr->vaddr + phdr->memsz > max_vaddr) {
                 max_vaddr = phdr->vaddr + phdr->memsz;
             }
-            // Map the segment
-            for (unsigned int offset = 0; offset < phdr->filesz; offset += 4096) {
+            // Map and copy the file-backed part of the segment.
+            for (unsigned int offset = 0; offset < phdr->filesz;
+                 offset += 4096) {
                 unsigned int vaddr = phdr->vaddr + offset;
-                void* paddr_ptr = kernel::memory::pmm::allocate_frame();
-                if (paddr_ptr == nullptr) {
+                if (!map_frame_at(vaddr & 0xFFFFF000, user_flags)) {
                     return false;
                 }
-                unsigned int paddr = reinterpret_cast<unsigned int>(paddr_ptr);
-                kernel::memory::paging::map_page(vaddr, paddr,
-                    kernel::memory::paging::page_present |
-                    kernel::memory::paging::page_writable |
-                    kernel::memory::paging::page_user);
-                unsigned int copy_size = (offset + 4096 < phdr->filesz) ? 4096 : (phdr->filesz - offset);
+                unsigned int copy_size =
+                    (offset + 4096 < phdr->filesz)
+                        ? 4096 : (phdr->filesz - offset);
                 for (unsigned int j = 0; j < copy_size; ++j) {
-                    *reinterpret_cast<unsigned char*>(vaddr + j) = data[phdr->offset + offset + j];
+                    *reinterpret_cast<unsigned char*>(vaddr + j) =
+                        data[phdr->offset + offset + j];
                 }
             }
-            // Zero-fill the rest of memsz
-            for (unsigned int offset = phdr->filesz; offset < phdr->memsz; offset += 4096) {
+            // Zero-fill the rest of memsz. The frames are already
+            // zeroed by the ZEROED flag, so only the pages that were
+            // not touched above need to be mapped here.
+            for (unsigned int offset = phdr->filesz;
+                 offset < phdr->memsz; offset += 4096) {
                 unsigned int vaddr = phdr->vaddr + offset;
-                void* paddr_ptr = kernel::memory::pmm::allocate_frame();
-                if (paddr_ptr == nullptr) {
+                if (!map_frame_at(vaddr & 0xFFFFF000, user_flags)) {
                     return false;
                 }
-                unsigned int paddr = reinterpret_cast<unsigned int>(paddr_ptr);
-                kernel::memory::paging::map_page(vaddr, paddr,
-                    kernel::memory::paging::page_present |
-                    kernel::memory::paging::page_writable |
-                    kernel::memory::paging::page_user);
             }
         }
     }
@@ -128,15 +149,9 @@ bool load_elf(const unsigned char* data, unsigned int size,
     unsigned int stack_pages = 16;
     for (unsigned int i = 0; i < stack_pages; ++i) {
         unsigned int vaddr = USER_STACK_TOP - (i + 1) * 4096 + 1;
-        void* paddr_ptr = kernel::memory::pmm::allocate_frame();
-        if (paddr_ptr == nullptr) {
+        if (!map_frame_at(vaddr & 0xFFFFF000, user_flags)) {
             return false;
         }
-        unsigned int paddr = reinterpret_cast<unsigned int>(paddr_ptr);
-        kernel::memory::paging::map_page(vaddr & 0xFFFFF000, paddr,
-            kernel::memory::paging::page_present |
-            kernel::memory::paging::page_writable |
-            kernel::memory::paging::page_user);
     }
 
     *entry_out = ehdr->entry;
@@ -410,6 +425,43 @@ extern "C" void kmain(unsigned int boot_magic, unsigned int multiboot_info_addre
     kernel::syscall::initialize();
     run_stage("SYSCALL INTERFACE", "OK", 0x0A);
 
+    // The virtual filesystem has to be up before the initramfs is
+    // mounted, and the initramfs has to be mounted before the first
+    // program is loaded, because the loader now resolves its files
+    // through the VFS.
+    if (!kernel::vfs::initialize()) {
+        halt_with_error("VIRTUAL FILE SYSTEM UNAVAILABLE");
+    }
+    run_stage("VIRTUAL FILE SYSTEM", "OK", 0x0A);
+
+    const unsigned char* initrd_data = nullptr;
+    unsigned int initrd_size = 0;
+    if (extract_initrd(multiboot_info_address, &initrd_data,
+                           &initrd_size)) {
+        if (kernel::initramfs::mount(initrd_data, initrd_size, "/") == 0) {
+            run_stage("INITRAMFS MOUNTED", "OK", 0x0A);
+        } else {
+            run_stage("INITRAMFS MOUNT FAILED", "WARN", 0x0E);
+        }
+    } else {
+        run_stage("NO INITRAMFS", "WARN", 0x0E);
+    }
+
+    // The dynamic linker, the scheduler, and the process table are
+    // brought up before the first program runs, so that exec can
+    // create a process and the scheduler can run it.
+    kernel::elf::initialize();
+    run_stage("DYNAMIC LINKER", "OK", 0x0A);
+
+    kernel::scheduler::initialize();
+    run_stage("SCHEDULER", "OK", 0x0A);
+
+    kernel::process::initialize();
+    run_stage("PROCESS MANAGEMENT", "OK", 0x0A);
+
+    kernel::pci::initialize();
+    run_stage("PCI BUS", "OK", 0x0A);
+
     launch_userspace_program(multiboot_info_address);
 
     // From here the desktop can be drawn, so the remaining stages report into
@@ -440,8 +492,56 @@ extern "C" void kmain(unsigned int boot_magic, unsigned int multiboot_info_addre
     show_graphics_status(5, mouse_available ? "PS/2 MOUSE: READY" : "PS/2 MOUSE: NOT FOUND",
                 mouse_available ? boot_ok : boot_error);
     kernel::timer::delay_ms(stage_delay_ms);
-
     show_graphics_status(6, "STARTING GRAPHICAL DESKTOP", boot_text);
     kernel::timer::delay_ms(stage_delay_ms);
+
+    // The compositor and the window manager own the desktop, so
+    // they are brought up before the shell draws into it. Both
+    // are configured from the framebuffer the boot stages
+    // already set up.
+    kernel::compositor::Config compositor_config = {};
+    compositor_config.screen_width = drivers::graphics::width();
+    compositor_config.screen_height = drivers::graphics::height();
+    compositor_config.screen_bpp = 32;
+    compositor_config.background_color = 0x00000000;
+    compositor_config.double_buffering = true;
+    compositor_config.vsync = false;
+    compositor_config.damage_tracking = true;
+    compositor_config.alpha_blending = true;
+    compositor_config.shadows = false;
+    compositor_config.cursor_x =
+        drivers::graphics::width() / 2;
+    compositor_config.cursor_y =
+        drivers::graphics::height() / 2;
+    compositor_config.cursor_visible = true;
+    compositor_config.cursor_surface = nullptr;
+    kernel::compositor::initialize(compositor_config);
+
+    kernel::wm::Config wm_config = {};
+    wm_config.active_border_color = 0x00E6EDF3;
+    wm_config.inactive_border_color = 0x007A8A99;
+    wm_config.active_titlebar_color = 0x002A3A4A;
+    wm_config.inactive_titlebar_color = 0x001A2A3A;
+    wm_config.active_titlebar_text_color = 0x00FFFFFF;
+    wm_config.inactive_titlebar_text_color = 0x00A0A0A0;
+    wm_config.close_button_color = 0x00FF7777;
+    wm_config.maximize_button_color = 0x0088E0A0;
+    wm_config.minimize_button_color = 0x00E6E060;
+    wm_config.button_text_color = 0x00FFFFFF;
+    wm_config.background_color = 0x00000000;
+    wm_config.border_width = 2;
+    wm_config.titlebar_height = 20;
+    wm_config.button_size = 14;
+    wm_config.resize_handle_size = 6;
+    wm_config.min_window_width = 64;
+    wm_config.min_window_height = 48;
+    wm_config.focus_follows_mouse = true;
+    wm_config.raise_on_focus = true;
+    wm_config.snap_to_edges = false;
+    wm_config.snap_distance = 10;
+    wm_config.double_click_maximize = true;
+    wm_config.double_click_time = 400;
+    kernel::wm::initialize(wm_config);
+
     shell::run();
 }

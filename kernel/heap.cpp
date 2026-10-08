@@ -15,8 +15,8 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 // See LICENCE for the full license text.
 
-#include "heap_new.hpp"
-#include "pmm_new.hpp"
+#include "heap.hpp"
+#include "pmm.hpp"
 #include <cstring>
 
 namespace kernel::memory::heap {

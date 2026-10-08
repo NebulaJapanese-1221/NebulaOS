@@ -15,8 +15,8 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 // See LICENCE for the full license text.
 
-#include "wm_new.hpp"
-#include "heap_new.hpp"
+#include "wm.hpp"
+#include "heap.hpp"
 #include "../drivers/serial.hpp"
 #include <cstring>
 

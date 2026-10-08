@@ -16,8 +16,8 @@
 // See LICENCE for the full license text.
 
 #include "scheduler.hpp"
-#include "pmm_new.hpp"
-#include "heap_new.hpp"
+#include "pmm.hpp"
+#include "heap.hpp"
 #include "timer.hpp"
 #include <cstring>
 

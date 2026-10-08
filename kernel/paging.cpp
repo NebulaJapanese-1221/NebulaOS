@@ -15,8 +15,8 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 // See LICENCE for the full license text.
 
-#include "paging_new.hpp"
-#include "pmm_new.hpp"
+#include "paging.hpp"
+#include "pmm.hpp"
 #include "../drivers/serial.hpp"
 
 extern "C" {

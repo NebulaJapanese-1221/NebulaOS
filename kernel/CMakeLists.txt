@@ -27,6 +27,16 @@ set(KERNEL_SOURCES
     heap.cpp
     pmm.cpp
     framebuffer.cpp
+    scheduler.cpp
+    ipc.cpp
+    process.cpp
+    compositor.cpp
+    wm.cpp
+    elf.cpp
+    pci.cpp
+    vfs.cpp
+    context_switch.asm
+    fs/initramfs.cpp
 )
 
 set(KERNEL_HEADERS
@@ -38,6 +48,15 @@ set(KERNEL_HEADERS
     pmm.hpp
     framebuffer.hpp
     multiboot.hpp
+    scheduler.hpp
+    ipc.hpp
+    process.hpp
+    compositor.hpp
+    wm.hpp
+    elf.hpp
+    pci.hpp
+    vfs.hpp
+    fs/initramfs.hpp
 )
 
 # Architecture-specific sources
@@ -58,20 +77,11 @@ set(KERNEL_ASM_SOURCES
     arch/x86/interrupts.asm
 )
 
-# Window manager sources
-set(WM_SOURCES
-    wm/wm.cpp
-)
-
-set(WM_HEADERS
-    wm/wm.hpp
-)
-
 # =============================================================================
 # Kernel Objects
 # =============================================================================
 # Assembly objects
-foreach(asm_src ${KERNEL_ASM_SOURCES})
+foreach(asm_src ${KERNEL_ASM_SOURCES} context_switch.asm)
     get_filename_component(obj_name ${asm_src} NAME_WE)
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/kernel/${obj_name}.o
@@ -83,20 +93,16 @@ foreach(asm_src ${KERNEL_ASM_SOURCES})
 endforeach()
 
 # C++ objects
-foreach(cpp_src ${KERNEL_SOURCES} ${KERNEL_ARCH_SOURCES} ${WM_SOURCES})
-    get_filename_component(obj_name ${cpp_src} NAME_WE)
-    # Determine include directories based on path
-    if(cpp_src MATCHES "^arch/")
-        set(inc_dirs ${KERNEL_DIR})
-    elseif(cpp_src MATCHES "^wm/")
-        set(inc_dirs ${KERNEL_DIR})
-    else()
-        set(inc_dirs ${KERNEL_DIR})
+foreach(cpp_src ${KERNEL_SOURCES} ${KERNEL_ARCH_SOURCES})
+    # Skip assembly sources listed in KERNEL_SOURCES
+    if(cpp_src MATCHES "\\.asm$")
+        continue()
     endif()
+    get_filename_component(obj_name ${cpp_src} NAME_WE)
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/kernel/${obj_name}.o
-        COMMAND ${CMAKE_CXX_COMPILER} ${KERNEL_CXX_FLAGS} -I${KERNEL_DIR} -I${CMAKE_SOURCE_DIR} ${KERNEL_DIR}/${cpp_src} -c -o ${CMAKE_BINARY_DIR}/kernel/${obj_name}.o
-        DEPENDS ${KERNEL_DIR}/${cpp_src} ${KERNEL_HEADERS} ${KERNEL_ARCH_HEADERS} ${WM_HEADERS}
+        COMMAND ${CMAKE_CXX_COMPILER} ${KERNEL_CXX_FLAGS} -I${KERNEL_DIR} -I${CMAKE_SOURCE_DIR} -I${CMAKE_SOURCE_DIR}/drivers ${KERNEL_DIR}/${cpp_src} -c -o ${CMAKE_BINARY_DIR}/kernel/${obj_name}.o
+        DEPENDS ${KERNEL_DIR}/${cpp_src} ${KERNEL_HEADERS} ${KERNEL_ARCH_HEADERS}
         COMMENT "Compiling ${cpp_src}"
     )
     list(APPEND KERNEL_OBJS ${CMAKE_BINARY_DIR}/kernel/${obj_name}.o)

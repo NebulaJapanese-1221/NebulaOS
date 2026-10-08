@@ -16,7 +16,7 @@
 // See LICENCE for the full license text.
 
 #include "vfs.hpp"
-#include "heap_new.hpp"
+#include "heap.hpp"
 #include "../drivers/serial.hpp"
 #include <cstring>
 

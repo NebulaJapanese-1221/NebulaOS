@@ -16,10 +16,10 @@
 // See LICENCE for the full license text.
 
 #include "compositor.hpp"
-#include "heap_new.hpp"
-#include "pmm_new.hpp"
+#include "heap.hpp"
+#include "pmm.hpp"
+#include "framebuffer.hpp"
 #include "../drivers/serial.hpp"
-#include "../framebuffer.hpp"
 #include <cstring>
 
 namespace kernel::compositor {

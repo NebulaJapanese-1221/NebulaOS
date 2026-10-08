@@ -3,3 +3,7 @@
 build/
 *.iso
 *.cpio
+*.log
+qemu.log
+isodir/
+initrd_root/

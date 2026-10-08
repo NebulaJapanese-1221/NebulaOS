@@ -17,13 +17,11 @@
 
 set(SHELL_SOURCES
     shell.cpp
-    window_manager.cpp
     apps/console.cpp
 )
 
 set(SHELL_HEADERS
     shell.hpp
-    window_manager.hpp
     apps/console.hpp
 )
 

@@ -16,10 +16,10 @@
 // See LICENCE for the full license text.
 
 #include "ipc.hpp"
-#include "heap_new.hpp"
+#include "heap.hpp"
 #include "scheduler.hpp"
-#include "paging_new.hpp"
-#include "pmm_new.hpp"
+#include "paging.hpp"
+#include "pmm.hpp"
 #include <cstring>
 
 namespace kernel::ipc {

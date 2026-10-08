@@ -20,7 +20,10 @@
 # =============================================================================
 set(LIBC_SOURCES
     lib/crt0.c
-    lib/libc.c
+)
+
+set(LIBC_CXX_SOURCES
+    lib/libc.cpp
 )
 
 set(LIBC_HEADERS
@@ -52,6 +55,18 @@ foreach(c_src ${LIBC_SOURCES})
         COMMAND ${CMAKE_C_COMPILER} ${USER_C_FLAGS} -I${USERSPACE_DIR} ${USERSPACE_DIR}/${c_src} -c -o ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o
         DEPENDS ${USERSPACE_DIR}/${c_src} ${LIBC_HEADERS}
         COMMENT "Compiling userspace ${c_src}"
+    )
+    list(APPEND LIBC_OBJS ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o)
+endforeach()
+
+# C++ objects for libc
+foreach(cxx_src ${LIBC_CXX_SOURCES})
+    get_filename_component(obj_name ${cxx_src} NAME_WE)
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o
+        COMMAND ${CMAKE_CXX_COMPILER} ${USER_CXX_FLAGS} -I${USERSPACE_DIR} ${USERSPACE_DIR}/${cxx_src} -c -o ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o
+        DEPENDS ${USERSPACE_DIR}/${cxx_src} ${LIBC_HEADERS}
+        COMMENT "Compiling userspace ${cxx_src}"
     )
     list(APPEND LIBC_OBJS ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o)
 endforeach()

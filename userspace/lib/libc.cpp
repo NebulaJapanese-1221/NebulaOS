@@ -15,7 +15,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 // See LICENCE for the full license text.
 
-#include "libc_new.h"
+#include "libc.h"
 #include "syscalls.h"
 #include <cstdarg>
 

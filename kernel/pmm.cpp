@@ -15,7 +15,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 // See LICENCE for the full license text.
 
-#include "pmm_new.hpp"
+#include "pmm.hpp"
 #include "multiboot.hpp"
 #include <cstring>
 

@@ -16,8 +16,8 @@
 // See LICENCE for the full license text.
 
 #include "process.hpp"
-#include "heap_new.hpp"
-#include "pmm_new.hpp"
+#include "heap.hpp"
+#include "pmm.hpp"
 #include "../drivers/serial.hpp"
 #include <cstring>
 
