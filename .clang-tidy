@@ -1,0 +1,54 @@
+# NebulaOS clang-tidy configuration
+# Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+# See LICENCE for the full license text.
+
+Checks: >
+  -*,
+  bugprone-*,
+  clang-analyzer-*,
+  concurrency-*,
+  cppcoreguidelines-*,
+  modernize-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -cppcoreguidelines-pro-type-reinterpret-cast,
+  -cppcoreguidelines-pro-type-cstyle-cast,
+  -modernize-use-trailing-return-type,
+  -readability-magic-numbers,
+  -readability-identifier-length,
+  -hicpp-signed-bitwise,
+  -android-cloexec-*
+
+WarningsAsErrors: '*'
+
+HeaderFilterRegex: '.*'
+
+CheckOptions:
+  - key: readability-identifier-length.MinimumVariableNameLength
+    value: '2'
+  - key: readability-function-size.LineThreshold
+    value: '100'
+  - key: readability-function-size.ParameterThreshold
+    value: '6'
+  - key: cppcoreguidelines-pro-bounds-constant-array-index.GslHeader
+    value: 'gsl/gsl'
+  - key: modernize-use-nullptr.NullMacros
+    value: 'NULL'
+  - key: bugprone-exception-escape.CheckNoexcept
+    value: 'true'
