@@ -26,6 +26,18 @@ On Debian or Ubuntu, the tools can be installed with:
 sudo apt install build-essential nasm grub-pc-bin xorriso qemu-system-x86
 ```
 
+On Arch Linux, the tools can be installed with:
+
+```sh
+sudo pacman -S base-devel nasm grub xorriso qemu-system-x86
+```
+
+On Fedora, the tools can be installed with:
+
+```sh
+sudo dnf install gcc gcc-c++ make nasm grub2 xorriso qemu-system-x86
+```
+
 ## Build and run
 
 ```sh
