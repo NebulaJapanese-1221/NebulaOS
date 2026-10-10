@@ -38,6 +38,30 @@ unsigned int get_ticks();
 // Yields the calling thread for the given number of ticks.
 void sleep_ticks(unsigned int ticks);
 
+// Kernel logging (syslog / dmesg)
+struct LogEntry {
+    unsigned char level;
+    unsigned int timestamp_sec;
+    unsigned int timestamp_nsec;
+    char message[256];
+};
+
+// Read kernel log entries. Returns number of entries read.
+// If buffer is null, returns total available entries.
+int syslog_read(LogEntry* buffer, int count, int level_filter);
+
+// Clear the kernel log ring buffer.
+void syslog_clear();
+
+// Get log statistics.
+struct LogStats {
+    unsigned int total_written;
+    unsigned int dropped;
+    unsigned int buffer_size;
+    unsigned int available_now;
+};
+void syslog_stats(LogStats* stats);
+
 // ---- Window manager syscalls ----
 
 // Window lifecycle
@@ -78,5 +102,30 @@ void wm_get_screen_info(void* info);
 // Mouse / keyboard input for focused window
 bool wm_poll_mouse(void* state);
 bool wm_poll_keyboard(void* event);
+
+// System info syscall
+struct SysInfo {
+    // Memory
+    unsigned int total_memory_mb;
+    unsigned int free_memory_mb;
+    unsigned int used_memory_mb;
+    
+    // Uptime
+    unsigned int uptime_seconds;
+    
+    // CPU info
+    unsigned int cpu_count;
+    unsigned int cpu_frequency_mhz;
+    char cpu_vendor[13];  // 12 chars + null
+    char cpu_model[49];   // 48 chars + null
+    
+    // Kernel info
+    char kernel_version[64];
+    char build_date[32];
+    char build_sha[32];
+};
+
+// Get system information
+void sysinfo(SysInfo* info);
 
 } // namespace kernel::syscall

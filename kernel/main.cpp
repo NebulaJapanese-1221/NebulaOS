@@ -25,6 +25,7 @@
 #include "arch/x86/tss.hpp"
 #include "cpio.hpp"
 #include "heap.hpp"
+#include "log.hpp"
 #include "multiboot.hpp"
 #include "paging.hpp"
 #include "pmm.hpp"
@@ -39,6 +40,22 @@
 #include "fs/initramfs.hpp"
 #include "syscall.hpp"
 #include "timer.hpp"
+#include "assert.hpp"
+
+// NebulaOS version
+constexpr const char* NEBULAOS_VERSION = "0.0.1";
+constexpr const char* NEBULAOS_CODENAME = "Alpha";
+
+// Build metadata, embedded at link time so it can be reported at boot.
+extern "C" {
+    extern const char git_build_date[];
+    extern const char git_build_sha[];
+}
+
+namespace {
+    const char* build_date() { return git_build_date; }
+    const char* build_sha() { return git_build_sha; }
+}
 
 // Simple ELF32 loader for userspace programs.
 struct __attribute__((packed)) Elf32_Ehdr {
@@ -362,6 +379,8 @@ extern "C" void kmain(unsigned int boot_magic, unsigned int multiboot_info_addre
     // Text mode carries the whole of the hardware bring up, because it is the
     // only output that exists before a framebuffer has been handed over.
     drivers::serial::initialize();
+    kernel::log::initialize();
+    kernel::log::info("NebulaOS kernel logging initialized");
     run_stage("SERIAL PORT", "OK", 0x0A);
 
     if (boot_magic != kernel::multiboot::handoff_magic) {
@@ -461,6 +480,29 @@ extern "C" void kmain(unsigned int boot_magic, unsigned int multiboot_info_addre
 
     kernel::pci::initialize();
     run_stage("PCI BUS", "OK", 0x0A);
+
+    // Report build metadata and kernel statistics to the log buffer so
+    // a later dmesg dump shows the exact build that is running.
+    {
+        char buf[128];
+        const char* prefix = "NebulaOS built ";
+        std::size_t n = 0;
+        for (const char* p = prefix; *p && n < sizeof(buf) - 1; ++p) {
+            buf[n++] = *p;
+        }
+        for (const char* p = build_date(); *p && n < sizeof(buf) - 1; ++p) {
+            buf[n++] = *p;
+        }
+        const char* sha_prefix = " sha=";
+        for (const char* p = sha_prefix; *p && n < sizeof(buf) - 1; ++p) {
+            buf[n++] = *p;
+        }
+        for (const char* p = build_sha(); *p && n < sizeof(buf) - 1; ++p) {
+            buf[n++] = *p;
+        }
+        buf[n] = '\0';
+        kernel::log::info(buf);
+    }
 
     launch_userspace_program(multiboot_info_address);
 

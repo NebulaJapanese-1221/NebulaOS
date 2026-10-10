@@ -25,8 +25,8 @@ set(CMAKE_SYSTEM_PROCESSOR i386)
 set(TARGET_TRIPLET i686-elf)
 
 # Compiler locations - can be overridden via environment or cache
-set(CMAKE_C_COMPILER   ${TARGET_TRIPLET}-gcc   CACHE PATH "C compiler")
-set(CMAKE_CXX_COMPILER ${TARGET_TRIPLET}-g++   CACHE PATH "C++ compiler")
+set(CMAKE_C_COMPILER   gcc   CACHE PATH "C compiler")
+set(CMAKE_CXX_COMPILER g++   CACHE PATH "C++ compiler")
 set(CMAKE_ASM_COMPILER nasm                   CACHE PATH "Assembler")
 set(CMAKE_AR           ${TARGET_TRIPLET}-ar    CACHE PATH "Archiver")
 set(CMAKE_RANLIB       ${TARGET_TRIPLET}-ranlib CACHE PATH "Ranlib")

@@ -19,6 +19,7 @@
 #include "../drivers/serial.hpp"
 #include "framebuffer.hpp"
 #include "timer.hpp"
+#include "log.hpp"
 
 namespace kernel::syscall {
 
@@ -123,6 +124,43 @@ unsigned int sys_get_ticks(RegisterState* regs) {
     return kernel::timer::ticks();
 }
 
+// Syslog syscalls
+unsigned int sys_syslog_read(RegisterState* regs) {
+    // EBX = buffer pointer (LogEntry*)
+    // ECX = count
+    // EDX = level filter (optional, -1 for all)
+    kernel::log::LogEntry* buffer = reinterpret_cast<kernel::log::LogEntry*>(regs->ebx);
+    int count = static_cast<int>(regs->ecx);
+    int level_filter = static_cast<int>(regs->edx);
+    
+    if (buffer == nullptr) {
+        // Return total available entries
+        return static_cast<unsigned int>(kernel::log::syslog_read(nullptr, count, level_filter));
+    }
+    
+    return static_cast<unsigned int>(kernel::log::syslog_read(buffer, count, level_filter));
+}
+
+unsigned int sys_syslog_clear(RegisterState* regs) {
+    (void)regs;
+    kernel::log::syslog_clear();
+    return 0;
+}
+
+unsigned int sys_syslog_stats(RegisterState* regs) {
+    // EBX = LogStats*
+    kernel::log::LogStats* stats = reinterpret_cast<kernel::log::LogStats*>(regs->ebx);
+    if (stats == nullptr) {
+        return 0xFFFFFFFF;
+    }
+    kernel::log::LogStats s = kernel::log::syslog_stats();
+    stats->total_written = static_cast<unsigned int>(s.total_written);
+    stats->dropped = static_cast<unsigned int>(s.dropped);
+    stats->buffer_size = static_cast<unsigned int>(s.buffer_size);
+    stats->available_now = static_cast<unsigned int>(s.available_now);
+    return 0;
+}
+
 } // namespace
 
 void initialize() {
@@ -137,6 +175,9 @@ void initialize() {
     handlers[201] = sys_get_framebuffer_info; // get_framebuffer_info
     handlers[202] = sys_get_time;             // get_time_seconds
     handlers[203] = sys_get_ticks;            // get_ticks
+    handlers[210] = sys_syslog_read;          // syslog_read
+    handlers[211] = sys_syslog_clear;         // syslog_clear
+    handlers[212] = sys_syslog_stats;         // syslog_stats
 }
 
 extern "C" unsigned int syscall_dispatch(void* register_state) {

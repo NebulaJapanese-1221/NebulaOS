@@ -46,37 +46,42 @@ typedef __builtin_va_list va_list;
 #define SYS_GET_TIME        202
 #define SYS_GET_TICKS       203
 
+// Kernel logging syscalls
+#define SYS_SYSLOG_READ     210
+#define SYS_SYSLOG_CLEAR    211
+#define SYS_SYSLOG_STATS    212
+
 // New syscall numbers for POSIX compatibility
-#define SYS_OPEN            210
-#define SYS_CLOSE           211
-#define SYS_READ            212
-#define SYS_WRITE_NEW       213
-#define SYS_LSEEK           214
-#define SYS_FSTAT           215
-#define SYS_STAT            216
-#define SYS_LSTAT           217
-#define SYS_ACCESS          218
-#define SYS_DUP             219
-#define SYS_DUP2            220
-#define SYS_PIPE            221
-#define SYS_ISATTY          222
-#define SYS_TRUNCATE        223
-#define SYS_FTRUNCATE       224
-#define SYS_READLINK        225
-#define SYS_SYMLINK         226
-#define SYS_LINK            227
-#define SYS_UNLINK          228
-#define SYS_RMDIR           229
-#define SYS_MKDIR           230
-#define SYS_CHDIR           231
-#define SYS_FCHDIR          232
-#define SYS_GETCWD          233
-#define SYS_CHROOT          234
-#define SYS_FSYNC           235
-#define SYS_FDATASYNC       236
-#define SYS_GETPPID         237
-#define SYS_NANOSLEEP       238
-#define SYS_PRESENT         239
+#define SYS_OPEN            220
+#define SYS_CLOSE           221
+#define SYS_READ            222
+#define SYS_WRITE_NEW       223
+#define SYS_LSEEK           224
+#define SYS_FSTAT           225
+#define SYS_STAT            226
+#define SYS_LSTAT           227
+#define SYS_ACCESS          228
+#define SYS_DUP             229
+#define SYS_DUP2            230
+#define SYS_PIPE            231
+#define SYS_ISATTY          232
+#define SYS_TRUNCATE        233
+#define SYS_FTRUNCATE       234
+#define SYS_READLINK        235
+#define SYS_SYMLINK         236
+#define SYS_LINK            237
+#define SYS_UNLINK          238
+#define SYS_RMDIR           239
+#define SYS_MKDIR           240
+#define SYS_CHDIR           241
+#define SYS_FCHDIR          242
+#define SYS_GETCWD          243
+#define SYS_CHROOT          244
+#define SYS_FSYNC           245
+#define SYS_FDATASYNC       246
+#define SYS_GETPPID         247
+#define SYS_NANOSLEEP       248
+#define SYS_PRESENT         249
 
 static inline uint32_t syscall0(uint32_t num) {
     uint32_t ret;
@@ -146,6 +151,33 @@ static inline unsigned int get_ticks(void) {
 
 static inline int read(int fd, void* buf, uint32_t count) {
     return syscall3(SYS_WRITE, fd, (uint32_t)buf, count);
+}
+
+// Kernel logging (syslog/dmesg) syscalls
+typedef struct {
+    uint8_t level;
+    uint32_t timestamp_sec;
+    uint32_t timestamp_nsec;
+    char message[256];
+} log_entry_t;
+
+typedef struct {
+    uint32_t total_written;
+    uint32_t dropped;
+    uint32_t buffer_size;
+    uint32_t available_now;
+} log_stats_t;
+
+static inline int syslog_read(log_entry_t* buffer, int count, int level_filter) {
+    return syscall3(SYS_SYSLOG_READ, (uint32_t)buffer, (uint32_t)count, (uint32_t)level_filter);
+}
+
+static inline void syslog_clear(void) {
+    syscall0(SYS_SYSLOG_CLEAR);
+}
+
+static inline int syslog_stats(log_stats_t* stats) {
+    return syscall1(SYS_SYSLOG_STATS, (uint32_t)stats);
 }
 
 // New syscall wrappers for POSIX compatibility

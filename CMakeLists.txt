@@ -46,6 +46,30 @@ endif()
 # =============================================================================
 # Compiler Flags
 # =============================================================================
+# Build metadata (date + git sha) embedded in the kernel at link time.
+execute_process(
+    COMMAND date -u +%Y-%m-%dT%H:%M:%SZ
+    OUTPUT_VARIABLE NEBULA_BUILD_DATE
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(NOT NEBULA_BUILD_DATE)
+    set(NEBULA_BUILD_DATE "unknown")
+endif()
+
+execute_process(
+    COMMAND git rev-parse --short HEAD
+    OUTPUT_VARIABLE NEBULA_BUILD_SHA
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(NOT NEBULA_BUILD_SHA)
+    set(NEBULA_BUILD_SHA "unknown")
+endif()
+
+message(STATUS "NebulaOS build date: ${NEBULA_BUILD_DATE}")
+message(STATUS "NebulaOS build sha:   ${NEBULA_BUILD_SHA}")
+
 # Kernel flags (freestanding, no standard library)
 set(KERNEL_C_FLAGS
     "-m32"
@@ -63,6 +87,8 @@ set(KERNEL_C_FLAGS
     "-O2"
     "-pipe"
     "-fdiagnostics-color=always"
+    "-DNEBULA_BUILD_DATE=\"${NEBULA_BUILD_DATE}\""
+    "-DNEBULA_BUILD_SHA=\"${NEBULA_BUILD_SHA}\""
 )
 
 set(KERNEL_CXX_FLAGS "${KERNEL_C_FLAGS} -std=gnu++17")

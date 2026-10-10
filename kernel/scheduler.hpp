@@ -47,7 +47,18 @@ constexpr std::uint8_t PRIORITY_MAX = 255;
 // Default time slice in milliseconds
 constexpr std::uint32_t DEFAULT_TIME_SLICE_MS = 10;
 
-// Thread context (saved during context switch)
+// FPU/SSE state size: fxsave/fxrstor layout is 512 bytes.
+constexpr std::size_t FPU_STATE_SIZE = 512;
+
+// Thread context (saved during context switch).
+//
+// Layout is deliberately kept stable for the hand-written assembler in
+// context_switch.asm. Offsets:
+//   +0  edi, +4  esi, +8  ebp, +12 esp
+//   +16 ebx, +20 edx, +24 ecx, +28 eax
+//   +32 ds,   +36 es,   +40 fs,   +44 gs
+//   +48 cr3,  +52 kernel_esp, +56 user_esp
+//   +60 eip,  +64 eflags
 struct ThreadContext {
     // General purpose registers
     std::uint32_t edi;
@@ -65,7 +76,7 @@ struct ThreadContext {
     std::uint32_t fs;
     std::uint32_t gs;
 
-    // Control registers (for FPU/SSE state)
+    // Control registers
     std::uint32_t cr3;  // Page directory base
 
     // Stack pointers
@@ -89,11 +100,19 @@ struct Thread {
     // Context
     ThreadContext context;
 
+    // FPU/SSE state, kept separate from the context so the asm switch
+    // path stays simple. The buffer is 16-byte aligned for fxsave.
+    alignas(16) unsigned char fpu_state[FPU_STATE_SIZE];
+    bool fpu_used;  // Whether this thread has used the FPU
+
     // Stack information
     std::uintptr_t kernel_stack_base;
     std::uintptr_t kernel_stack_top;
     std::uintptr_t user_stack_base;
     std::uintptr_t user_stack_top;
+
+    // Guard page below the kernel stack (unmapped, traps overflow)
+    std::uintptr_t kernel_guard_page;
 
     // Process affiliation
     std::uint32_t process_id;
@@ -126,6 +145,11 @@ bool initialize();
 
 // Yield the current thread
 void yield();
+
+// Called from the timer interrupt to decrement the running thread's
+// time slice and force a yield when it expires. This is what makes
+// the scheduler preemptive.
+void tick();
 
 // Schedule a thread (mark as ready)
 void schedule(Thread* thread);
@@ -168,5 +192,9 @@ std::uint32_t time_slice() noexcept;
 // Register a thread exit handler
 using ExitHandler = void (*)(Thread*);
 void set_exit_handler(ExitHandler handler);
+
+// Enable or disable preemption. Returns the previous state.
+bool set_preemption(bool enabled) noexcept;
+bool preempt_enabled() noexcept;
 
 } // namespace kernel::scheduler

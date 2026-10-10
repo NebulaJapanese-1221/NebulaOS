@@ -20,6 +20,7 @@ bits 32
 section .text
 extern interrupt_dispatch
 extern syscall_dispatch
+extern scheduler_fpu_exception
 global isr_stub_table
 global isr_spurious
 
@@ -43,7 +44,13 @@ ISR_NO_ERROR 3
 ISR_NO_ERROR 4
 ISR_NO_ERROR 5
 ISR_NO_ERROR 6
-ISR_NO_ERROR 7
+; Vector 7 (Device Not Available / #NM) - special handler for lazy FPU
+isr_7:
+    push dword 0
+    push dword 7
+    call scheduler_fpu_exception
+    add esp, 8
+    iretd
 ISR_ERROR 8
 ISR_NO_ERROR 9
 ISR_ERROR 10
@@ -52,8 +59,8 @@ ISR_ERROR 12
 ISR_ERROR 13
 ISR_ERROR 14
 ISR_NO_ERROR 15
-ISR_NO_ERROR 16
-ISR_ERROR 17
+ISR_ERROR 16
+ISR_NO_ERROR 17
 ISR_NO_ERROR 18
 ISR_NO_ERROR 19
 ISR_NO_ERROR 20

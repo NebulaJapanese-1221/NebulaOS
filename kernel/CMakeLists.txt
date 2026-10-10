@@ -35,8 +35,11 @@ set(KERNEL_SOURCES
     elf.cpp
     pci.cpp
     vfs.cpp
+    log.cpp
+    buildinfo.cpp
     context_switch.asm
     fs/initramfs.cpp
+    assert.cpp
 )
 
 set(KERNEL_HEADERS
@@ -56,6 +59,8 @@ set(KERNEL_HEADERS
     elf.hpp
     pci.hpp
     vfs.hpp
+    log.hpp
+    assert.hpp
     fs/initramfs.hpp
 )
 

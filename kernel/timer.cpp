@@ -16,6 +16,7 @@
 // See LICENCE for the full license text.
 
 #include "timer.hpp"
+#include "scheduler.hpp"
 
 namespace {
 
@@ -126,6 +127,9 @@ void initialize() {
 void interrupt_tick() {
     ++system_ticks;
     boot_ns += nanoseconds_per_second / ticks_per_second;
+    
+    // Call scheduler tick for preemptive multitasking
+    kernel::scheduler::tick();
 }
 
 std::uint32_t ticks() {

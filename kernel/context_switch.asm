@@ -24,8 +24,11 @@
 ;
 ; ThreadContext begins at offset 16 within Thread, so every
 ; offset below is the field offset plus 16.
+; FPU state is at offset 80 in Thread (after context + fpu_state array)
 
 %define CONTEXT_OFFSET 16
+%define FPU_STATE_OFFSET 80
+%define FPU_USED_OFFSET 592  ; FPU_STATE_OFFSET + 512
 
 %define CT_EDI        (CONTEXT_OFFSET + 0)
 %define CT_ESI        (CONTEXT_OFFSET + 4)
@@ -76,6 +79,12 @@ context_switch:
     ; stack pointer at the moment of the switch.
     lea eax, [esp + 16]
     mov [esi + CT_KERNEL_ESP], eax
+    
+    ; Save FPU state if the old thread used the FPU
+    cmp byte [esi + FPU_USED_OFFSET], 0
+    je .skip_fpu_save
+    fxsave [esi + FPU_STATE_OFFSET]
+.skip_fpu_save:
 .skip_save:
 
     test edi, edi
@@ -118,6 +127,12 @@ context_switch:
     mov esi, [edi + CT_ESI]
     mov edi, [edi + CT_EDI]
     mov ebp, [edi + CT_EBP]
+
+    ; Restore FPU state if the new thread used the FPU
+    cmp byte [edi + FPU_USED_OFFSET], 0
+    je .skip_fpu_restore
+    fxrstor [edi + FPU_STATE_OFFSET]
+.skip_fpu_restore:
 
     ; The new thread resumes on its own kernel stack. The saved
     ; kernel_esp points at the frame that context_switch itself

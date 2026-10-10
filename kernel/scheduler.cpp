@@ -52,6 +52,9 @@ ExitHandler exit_handler = nullptr;
 // Next thread ID
 std::uint32_t next_thread_id = 1;
 
+// Preemption state
+bool preemption_enabled = true;
+
 // Allocate a kernel stack for a thread
 std::uintptr_t allocate_kernel_stack(std::size_t size) {
     const std::size_t pages = (size + pmm::PAGE_SIZE - 1) / pmm::PAGE_SIZE;
@@ -159,6 +162,7 @@ bool initialize() {
     scheduler_stats = {};
     current_time_slice = DEFAULT_TIME_SLICE_MS;
     exit_handler = nullptr;
+    preemption_enabled = true;
 
     // Create the idle thread
     idle_thread = create_thread(idle_entry, nullptr,
@@ -222,6 +226,30 @@ void yield() {
     }
 
     context_switch(old, next);
+}
+
+// Called from the timer interrupt to implement preemptive multitasking.
+// Decrements the current thread's time slice and forces a yield when expired.
+void tick() {
+    if (current == nullptr) {
+        return;
+    }
+
+    // Update statistics
+    ++scheduler_stats.system_time;
+
+    // Only preempt if preemption is enabled and we're not in the idle thread
+    if (!preemption_enabled || current == idle_thread) {
+        return;
+    }
+
+    if (current->time_slice > 0) {
+        --current->time_slice;
+        if (current->time_slice == 0) {
+            // Time slice expired - force yield
+            yield();
+        }
+    }
 }
 
 void schedule(Thread* thread) {
@@ -320,19 +348,26 @@ Thread* create_thread(void (*entry)(void*), void* arg,
 
     std::memset(thread, 0, sizeof(Thread));
 
-    // Allocate kernel stack (8 KiB)
+    // Allocate kernel stack (8 KiB + 1 guard page)
     const std::size_t kernel_stack_size = 8 * 1024;
-    const std::uintptr_t kernel_base = allocate_kernel_stack(kernel_stack_size);
-    if (kernel_base == 0) {
+    const std::size_t guard_page_size = pmm::PAGE_SIZE;
+    const std::size_t total_stack_pages = (kernel_stack_size + guard_page_size + pmm::PAGE_SIZE - 1) / pmm::PAGE_SIZE;
+    const auto frame = pmm::allocate_frames(total_stack_pages, pmm::FrameFlags::ZEROED);
+    if (!frame.ok) {
         heap::release(thread);
         return nullptr;
     }
 
+    std::uintptr_t stack_base = frame.value;
+    std::uintptr_t guard_page = stack_base;
+    std::uintptr_t kernel_stack_actual = stack_base + guard_page_size;
+
     // Allocate user stack (8 KiB)
     const std::size_t user_stack_size = 8 * 1024;
-    const std::uintptr_t user_base = allocate_user_stack(user_stack_size);
-    if (user_base == 0) {
-        pmm::free_frames(kernel_base, kernel_stack_size / pmm::PAGE_SIZE);
+    const std::size_t user_stack_pages = (user_stack_size + pmm::PAGE_SIZE - 1) / pmm::PAGE_SIZE;
+    const auto user_frame = pmm::allocate_frames(user_stack_pages, pmm::FrameFlags::ZEROED);
+    if (!user_frame.ok) {
+        pmm::free_frames(stack_base, total_stack_pages);
         heap::release(thread);
         return nullptr;
     }
@@ -345,16 +380,18 @@ Thread* create_thread(void (*entry)(void*), void* arg,
     thread->time_slice = current_time_slice;
     thread->total_time = 0;
 
-    thread->kernel_stack_base = kernel_base;
-    thread->kernel_stack_top = kernel_base + kernel_stack_size;
-    thread->user_stack_base = user_base;
-    thread->user_stack_top = user_base + user_stack_size;
+    thread->kernel_stack_base = kernel_stack_actual;
+    thread->kernel_stack_top = kernel_stack_actual + kernel_stack_size;
+    thread->user_stack_base = user_frame.value;
+    thread->user_stack_top = user_frame.value + user_stack_size;
+    thread->kernel_guard_page = guard_page;
 
     thread->process_id = 0;
     thread->next = nullptr;
     thread->prev = nullptr;
     thread->wait_queue = nullptr;
     thread->exit_code = 0;
+    thread->fpu_used = false;
 
     // Set up initial context
     std::memset(&thread->context, 0, sizeof(ThreadContext));
@@ -408,9 +445,11 @@ void destroy_thread(Thread* thread) {
 
     // Free stacks
     const std::size_t kernel_pages = (thread->kernel_stack_top - thread->kernel_stack_base) / pmm::PAGE_SIZE;
+    const std::size_t guard_pages = pmm::PAGE_SIZE / pmm::PAGE_SIZE;  // 1 page
     const std::size_t user_pages = (thread->user_stack_top - thread->user_stack_base) / pmm::PAGE_SIZE;
 
     pmm::free_frames(thread->kernel_stack_base, kernel_pages);
+    pmm::free_frames(thread->kernel_guard_page, guard_pages);
     pmm::free_frames(thread->user_stack_base, user_pages);
 
     // Free thread structure
@@ -457,6 +496,36 @@ std::uint32_t time_slice() noexcept {
 
 void set_exit_handler(ExitHandler handler) {
     exit_handler = handler;
+}
+
+bool set_preemption(bool enabled) noexcept {
+    bool old = preemption_enabled;
+    preemption_enabled = enabled;
+    return old;
+}
+
+bool preempt_enabled() noexcept {
+    return preemption_enabled;
+}
+
+// FPU exception handler (called from assembly for vector 7 - Device Not Available)
+// This implements lazy FPU context switching.
+extern "C" void scheduler_fpu_exception() {
+    // Save the old thread's FPU state if it was using FPU
+    if (current != nullptr && current->fpu_used) {
+        asm volatile("fxsave %0" : : "m"(current->fpu_state));
+    }
+    
+    // Enable FPU for the new thread
+    if (current != nullptr) {
+        current->fpu_used = true;
+        
+        // Restore FPU state if this thread has used FPU before
+        asm volatile("fxrstor %0" : : "m"(current->fpu_state));
+    }
+    
+    // Clear CR0.TS (Task Switched) bit to allow FPU instructions
+    asm volatile("mov %%cr0, %%eax; and $~0x8, %%eax; mov %%eax, %%cr0" : : : "eax", "memory");
 }
 
 } // namespace kernel::scheduler

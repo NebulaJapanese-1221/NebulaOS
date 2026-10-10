@@ -20,6 +20,7 @@
 #include "../../timer.hpp"
 #include "../../../drivers/serial.hpp"
 #include "../../../drivers/vga.hpp"
+#include "../../assert.hpp"
 
 namespace {
 
@@ -262,6 +263,19 @@ void initialize() {
     remap_pic();
     timer::initialize();
     initialize_lapic();
+    
+    // Enable FPU: Clear CR0.EM (bit 2) and CR0.TS (bit 3)
+    // CR0.EM = 1 means FPU emulation, CR0.TS = 1 means task switched
+    asm volatile(
+        "mov %%cr0, %%eax\n"
+        "and $~0xC, %%eax\n"  ; Clear bits 2 (EM) and 3 (TS)
+        "mov %%eax, %%cr0\n"
+        : : : "eax", "memory"
+    );
+    
+    // Initialize FPU with fninit
+    asm volatile("fninit" : : : "memory");
+    
     enable();
 }
 
@@ -432,6 +446,16 @@ void send_lapic_eoi() {
 
 namespace {
 
+struct PanicRegs {
+    std::uint32_t vector;
+    std::uint32_t error_code;
+    std::uint32_t eip;
+    std::uint32_t cs;
+    std::uint32_t eflags;
+    std::uint32_t user_esp;
+    std::uint32_t user_ss;
+};
+
 // Terminal handler for every exception. It never returns: the state
 // that produced the fault is not recoverable from inside the fault,
 // so continuing would only trip the next one. Halting with interrupts
@@ -446,69 +470,34 @@ namespace {
     const unsigned int cs = frame_pointer[3];
     const unsigned int eflags = frame_pointer[4];
 
-    drivers::vga::clear();
-    drivers::serial::write_line("");
-    drivers::serial::write_line("");
+    // Use the new assert/panic with register dump and stack trace
+    kernel::assert::RegisterState regs;
+    regs.eax = 0;
+    regs.ebx = 0;
+    regs.ecx = 0;
+    regs.edx = 0;
+    regs.esi = 0;
+    regs.edi = 0;
+    regs.ebp = 0;
+    regs.esp = 0;
+    regs.eip = eip;
+    regs.cs = cs;
+    regs.eflags = eflags;
+    regs.user_esp = frame_pointer[5];
+    regs.user_ss = frame_pointer[6];
 
-    put_line("+--------------------------------------------------------------+");
-    put_line("|                    NEBULAOS KERNEL PANIC                    |");
-    put_line("+--------------------------------------------------------------+");
-    put_line("");
-    put("Exception: ");
-    put_line(vector < 32 ? exception_names[vector] : "Unknown");
-    put_line("");
+    // Build panic message
+    char msg[256];
+    char* p = msg;
+    const char* prefix = "Exception: ";
+    while (*prefix) *p++ = *prefix++;
+    const char* name = vector < 32 ? exception_names[vector] : "Unknown";
+    while (*name) *p++ = *name++;
+    *p++ = '\n';
+    *p++ = '\n';
+    *p = '\0';
 
-    put("Vector   0x");
-    put_hex(vector, 2);
-    put_line("");
-    put("Error    0x");
-    put_hex(error_code, 8);
-    put_line("");
-    put("EIP      0x");
-    put_hex(eip, 8);
-    put_line("");
-    put("CS:EFLAGS 0x");
-    put_hex(cs, 4);
-    put(':');
-    put_hex(eflags, 8);
-    put_line("");
-
-    if (vector == 14) {
-        put("Address  0x");
-        put_hex(fault_address(), 8);
-        put_line("");
-        // The low three bits of a page fault error code say what kind
-        // of access it was and whether it was user or supervisor,
-        // which is usually the difference between a null pointer and
-        // a permissions bug.
-        put_line("");
-        put("Access   ");
-        put((error_code & 0x1) != 0 ? "write" : "read");
-        put_line("");
-        put("User     ");
-        put_line((error_code & 0x4) != 0 ? "yes" : "no");
-        put_line("");
-        const unsigned int cause = (error_code >> 1) & 0x7;
-        put("Cause    ");
-        switch (cause) {
-        case 0: put_line("page not present"); break;
-        case 1: put_line("write to read only"); break;
-        case 2: put_line("access through a reserved bit"); break;
-        case 3: put_line("access through a reserved bit"); break;
-        case 4: put_line("instruction fetch"); break;
-        case 5: put_line("write to read only, user"); break;
-        case 6: put_line("reserved bit, user"); break;
-        default: put_line("reserved bit, user"); break;
-        }
-    }
-
-    put_line("");
-    put_line("The system has been halted. Reset to restart.");
-    put_line("");
-
-    for (;;) {
-        asm volatile("cli; hlt");
-    }
+    kernel::assert::panic_with_regs(&regs, msg);
 }
 
 // Walks the registered handlers for an IRQ line. The first handler
