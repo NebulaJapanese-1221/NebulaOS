@@ -96,23 +96,38 @@ set(KERNEL_ASM_FLAGS "-f elf32 -g")
 
 # Userspace flags (minimal libc)
 set(USER_C_FLAGS
-    "-m32"
-    "-ffreestanding"
-    "-fno-exceptions"
-    "-fno-rtti"
-    "-fno-stack-protector"
-    "-fno-pic"
-    "-fno-pie"
-    "-Wall"
-    "-Wextra"
-    "-Werror"
-    "-O2"
-    "-pipe"
-    "-fdiagnostics-color=always"
+    -m32
+    -ffreestanding
+    -fno-exceptions
+    -fno-rtti
+    -fno-stack-protector
+    -fno-pic
+    -fno-pie
+    -Wall
+    -Wextra
+    -Werror
+    -O2
+    -pipe
+    -fdiagnostics-color=always
 )
 
-set(USER_CXX_FLAGS "${USER_C_FLAGS} -std=gnu++17")
-set(USER_ASM_FLAGS "-f elf32 -g")
+set(USER_CXX_FLAGS
+    -m32
+    -ffreestanding
+    -fno-exceptions
+    -fno-rtti
+    -fno-stack-protector
+    -fno-pic
+    -fno-pie
+    -Wall
+    -Wextra
+    -Werror
+    -O2
+    -pipe
+    -fdiagnostics-color=always
+    -std=gnu++17
+)
+set(USER_ASM_FLAGS "-f elf32")
 
 # Linker flags
 set(KERNEL_LD_FLAGS "-m elf_i386 -nostdlib -z max-page-size=0x1000")

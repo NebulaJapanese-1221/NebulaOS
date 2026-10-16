@@ -53,7 +53,7 @@ foreach(c_src ${LIBC_SOURCES})
     get_filename_component(obj_name ${c_src} NAME_WE)
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o
-        COMMAND ${CMAKE_CXX_COMPILER} ${USER_C_FLAGS} -I${USERSPACE_DIR} -I${USERSPACE_DIR}/lib ${USERSPACE_DIR}/${c_src} -c -o ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o
+        COMMAND ${CMAKE_C_COMPILER} ${USER_C_FLAGS} -I${USERSPACE_DIR} -I${USERSPACE_DIR}/lib ${USERSPACE_DIR}/${c_src} -c -o ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o
         DEPENDS ${USERSPACE_DIR}/${c_src} ${LIBC_HEADERS}
         COMMENT "Compiling userspace ${c_src}"
     )
@@ -87,7 +87,7 @@ foreach(c_src ${APP_SOURCES})
     # Compile app object
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o
-        COMMAND ${CMAKE_CXX_COMPILER} ${USER_C_FLAGS} -I${USERSPACE_DIR} -I${USERSPACE_DIR}/lib ${USERSPACE_DIR}/${c_src} -c -o ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o
+        COMMAND ${CMAKE_C_COMPILER} ${USER_C_FLAGS} -I${USERSPACE_DIR} -I${USERSPACE_DIR}/lib ${USERSPACE_DIR}/${c_src} -c -o ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o
         DEPENDS ${USERSPACE_DIR}/${c_src} ${LIBC_HEADERS}
         COMMENT "Compiling app ${c_src}"
     )

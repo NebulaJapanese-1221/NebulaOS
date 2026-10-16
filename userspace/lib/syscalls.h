@@ -18,8 +18,8 @@
 #ifndef _NEBULA_SYSCALLS_H
 #define _NEBULA_SYSCALLS_H
 
-#include <cstdint>
-#include <cstddef>
+#include <stdint.h>
+#include <stddef.h>
 
 typedef uint32_t uint32_t;
 typedef int int32_t;

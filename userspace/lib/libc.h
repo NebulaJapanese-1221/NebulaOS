@@ -18,10 +18,10 @@
 #ifndef _NEBULA_LIBC_H
 #define _NEBULA_LIBC_H
 
-#include <cstdint>
-#include <cstddef>
-#include <cstdarg>
-#include <ctime>
+#include <stdint.h>
+#include <stddef.h>
+#include <stdarg.h>
+#include <time.h>
 
 // =============================================================================
 // Types
@@ -361,6 +361,10 @@ int dirfd(DIR* dirp);
 // =============================================================================
 // time.h
 // =============================================================================
+struct timeval {
+    long tv_sec;
+    long tv_usec;
+};
 time_t time(time_t* t);
 int gettimeofday(struct timeval* tv, void* tz);
 clock_t clock(void);

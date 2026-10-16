@@ -12,9 +12,8 @@ Electronic contact: [nebulajapanese@gmail.com](mailto:nebulajapanese@gmail.com).
 
 ## Linux requirements
 
-- GNU Make
-- GCC and G++ with 32-bit compilation support
-- GNU binutils (`ld`)
+- Clang and Clang++ (LLVM) with 32-bit support for freestanding targets
+- LLVM binutils or GNU binutils
 - NASM
 - GRUB utilities (`grub-mkrescue`, typically provided by `grub-pc-bin`)
 - `xorriso` (used by `grub-mkrescue`)
@@ -23,22 +22,24 @@ Electronic contact: [nebulajapanese@gmail.com](mailto:nebulajapanese@gmail.com).
 On Debian or Ubuntu, the tools can be installed with:
 
 ```sh
-sudo apt install build-essential nasm grub-pc-bin xorriso qemu-system-x86
+sudo apt install clang lld nasm grub-pc-bin xorriso qemu-system-x86
 ```
 
 On Arch Linux, the tools can be installed with:
 
 ```sh
-sudo pacman -S base-devel nasm grub xorriso qemu-system-x86
+sudo pacman -S clang lld nasm grub xorriso qemu-system-x86
 ```
 
 On Fedora, the tools can be installed with:
 
 ```sh
-sudo dnf install gcc gcc-c++ make nasm grub2 xorriso qemu-system-x86
+sudo dnf install clang lld nasm grub2 xorriso qemu-system-x86
 ```
 
 ## Build and run
+
+Requirements: Clang (clang/clang++), LLVM tools, NASM, GRUB utilities, xorriso, and QEMU. The project uses a custom Clang-based toolchain for freestanding i686.
 
 ```sh
 make
