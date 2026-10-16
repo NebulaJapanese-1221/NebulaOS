@@ -37,25 +37,8 @@ set(CMAKE_STRIP        ${TARGET_TRIPLET}-strip  CACHE PATH "Strip")
 set(CMAKE_READELF      ${TARGET_TRIPLET}-readelf CACHE PATH "Readelf")
 
 # Flags for the target
-set(CMAKE_C_FLAGS_INIT
-    "-m32"
-    "-ffreestanding"
-    "-fno-exceptions"
-    "-fno-rtti"
-    "-fno-stack-protector"
-    "-fno-pic"
-    "-fno-pie"
-    "-nostdinc"
-    "-nostdinc++"
-    "-Wall"
-    "-Wextra"
-    "-Werror"
-    "-O2"
-    "-pipe"
-    "-fdiagnostics-color=always"
-)
-
-set(CMAKE_CXX_FLAGS_INIT "${CMAKE_C_FLAGS_INIT} -std=gnu++17")
+set(CMAKE_C_FLAGS_INIT "-m32 -ffreestanding -fno-exceptions -fno-stack-protector -fno-pic -fno-pie -nostdinc -Wall -Wextra -Werror -O2 -pipe -fdiagnostics-color=always")
+set(CMAKE_CXX_FLAGS_INIT "-m32 -ffreestanding -fno-exceptions -fno-rtti -fno-stack-protector -fno-pic -fno-pie -nostdinc -nostdinc++ -Wall -Wextra -Werror -O2 -pipe -fdiagnostics-color=always -std=gnu++17")
 set(CMAKE_ASM_FLAGS_INIT "-f elf32 -g")
 
 # Linker flags

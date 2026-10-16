@@ -38,9 +38,10 @@ set(LIBC_ASM_SOURCES
 # Assembly objects for libc
 foreach(asm_src ${LIBC_ASM_SOURCES})
     get_filename_component(obj_name ${asm_src} NAME_WE)
+    string(APPEND obj_name "_asm")
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o
-        COMMAND ${CMAKE_ASM_COMPILER} ${USER_ASM_FLAGS} -I${USERSPACE_DIR} ${USERSPACE_DIR}/${asm_src} -o ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o
+        COMMAND ${CMAKE_ASM_COMPILER} ${USER_ASM_FLAGS} -I${USERSPACE_DIR} -I${USERSPACE_DIR}/lib ${USERSPACE_DIR}/${asm_src} -o ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o
         DEPENDS ${USERSPACE_DIR}/${asm_src}
         COMMENT "Assembling userspace ${asm_src}"
     )
@@ -52,7 +53,7 @@ foreach(c_src ${LIBC_SOURCES})
     get_filename_component(obj_name ${c_src} NAME_WE)
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o
-        COMMAND ${CMAKE_C_COMPILER} ${USER_C_FLAGS} -I${USERSPACE_DIR} ${USERSPACE_DIR}/${c_src} -c -o ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o
+        COMMAND ${CMAKE_CXX_COMPILER} ${USER_C_FLAGS} -I${USERSPACE_DIR} -I${USERSPACE_DIR}/lib ${USERSPACE_DIR}/${c_src} -c -o ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o
         DEPENDS ${USERSPACE_DIR}/${c_src} ${LIBC_HEADERS}
         COMMENT "Compiling userspace ${c_src}"
     )
@@ -64,7 +65,7 @@ foreach(cxx_src ${LIBC_CXX_SOURCES})
     get_filename_component(obj_name ${cxx_src} NAME_WE)
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o
-        COMMAND ${CMAKE_CXX_COMPILER} ${USER_CXX_FLAGS} -I${USERSPACE_DIR} ${USERSPACE_DIR}/${cxx_src} -c -o ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o
+        COMMAND ${CMAKE_CXX_COMPILER} ${USER_CXX_FLAGS} -I${USERSPACE_DIR} -I${USERSPACE_DIR}/lib ${USERSPACE_DIR}/${cxx_src} -c -o ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o
         DEPENDS ${USERSPACE_DIR}/${cxx_src} ${LIBC_HEADERS}
         COMMENT "Compiling userspace ${cxx_src}"
     )
@@ -86,7 +87,7 @@ foreach(c_src ${APP_SOURCES})
     # Compile app object
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o
-        COMMAND ${CMAKE_C_COMPILER} ${USER_C_FLAGS} -I${USERSPACE_DIR} ${USERSPACE_DIR}/${c_src} -c -o ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o
+        COMMAND ${CMAKE_CXX_COMPILER} ${USER_C_FLAGS} -I${USERSPACE_DIR} -I${USERSPACE_DIR}/lib ${USERSPACE_DIR}/${c_src} -c -o ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o
         DEPENDS ${USERSPACE_DIR}/${c_src} ${LIBC_HEADERS}
         COMMENT "Compiling app ${c_src}"
     )
@@ -95,12 +96,12 @@ foreach(c_src ${APP_SOURCES})
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/userspace/${app_name}
         COMMAND ${CMAKE_C_COMPILER} ${USER_LD_FLAGS} -T ${USERSPACE_DIR}/linker.ld
-                ${CMAKE_BINARY_DIR}/userspace/crt0.o
+                ${CMAKE_BINARY_DIR}/userspace/crt0_asm.o
                 ${CMAKE_BINARY_DIR}/userspace/libc.o
                 ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o
                 -o ${CMAKE_BINARY_DIR}/userspace/${app_name}
         DEPENDS ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o
-                ${CMAKE_BINARY_DIR}/userspace/crt0.o
+                ${CMAKE_BINARY_DIR}/userspace/crt0_asm.o
                 ${CMAKE_BINARY_DIR}/userspace/libc.o
                 ${USERSPACE_DIR}/linker.ld
         COMMENT "Linking app ${app_name}"

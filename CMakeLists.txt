@@ -103,8 +103,6 @@ set(USER_C_FLAGS
     "-fno-stack-protector"
     "-fno-pic"
     "-fno-pie"
-    "-nostdinc"
-    "-nostdinc++"
     "-Wall"
     "-Wextra"
     "-Werror"
@@ -166,14 +164,6 @@ add_custom_target(kernel.elf
 )
 
 # =============================================================================
-# Initrd creation
-# =============================================================================
-add_custom_target(initrd
-    DEPENDS ${INITRD_FILE}
-    COMMENT "Building initrd.cpio"
-)
-
-# =============================================================================
 # ISO creation
 # =============================================================================
 add_custom_command(
@@ -195,8 +185,9 @@ add_custom_target(nebulaos.iso
 # =============================================================================
 # Default target
 # =============================================================================
-add_custom_target(all
+add_custom_target(nebulaos-all
     DEPENDS nebulaos.iso
+    COMMENT "Building NebulaOS"
 )
 
 # =============================================================================

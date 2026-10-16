@@ -27,8 +27,8 @@ typedef uint16_t uint16_t;
 typedef int16_t int16_t;
 typedef uint8_t uint8_t;
 typedef int8_t int8_t;
-typedef unsigned long size_t;
 typedef long ssize_t;
+typedef unsigned int useconds_t;
 typedef unsigned int mode_t;
 typedef long off_t;
 

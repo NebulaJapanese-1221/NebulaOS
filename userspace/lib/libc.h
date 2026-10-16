@@ -21,21 +21,16 @@
 #include <cstdint>
 #include <cstddef>
 #include <cstdarg>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include <ctime>
 
 // =============================================================================
 // Types
 // =============================================================================
 typedef int errno_t;
-typedef long ssize_t;
 typedef unsigned int mode_t;
 typedef unsigned int uid_t;
 typedef unsigned int gid_t;
 typedef long off_t;
-typedef unsigned int pid_t;
 typedef int fd_t;
 
 // =============================================================================
@@ -194,7 +189,6 @@ void* calloc(size_t count, size_t size);
 void* realloc(void* ptr, size_t size);
 void abort(void);
 void exit(int status);
-void _exit(int status);
 int atexit(void (*func)(void));
 int abs(int n);
 long labs(long n);
@@ -216,8 +210,6 @@ void* aligned_alloc(size_t alignment, size_t size);
 // =============================================================================
 int open(const char* path, int flags, ...);
 int close(int fd);
-ssize_t read(int fd, void* buf, size_t count);
-ssize_t write(int fd, const void* buf, size_t count);
 off_t lseek(int fd, off_t offset, int whence);
 int fstat(int fd, void* stat);
 int stat(const char* path, void* stat);
@@ -248,7 +240,6 @@ int swapoff(const char* path);
 int reboot(int magic, int magic2, unsigned int cmd, void* arg);
 int gethostname(char* name, size_t len);
 int sethostname(const char* name, size_t len);
-int getpid(void);
 int getppid(void);
 int getuid(void);
 int geteuid(void);
@@ -370,28 +361,6 @@ int dirfd(DIR* dirp);
 // =============================================================================
 // time.h
 // =============================================================================
-struct timespec {
-    long tv_sec;
-    long tv_nsec;
-};
-
-struct timeval {
-    long tv_sec;
-    long tv_usec;
-};
-
-struct tm {
-    int tm_sec;
-    int tm_min;
-    int tm_hour;
-    int tm_mday;
-    int tm_mon;
-    int tm_year;
-    int tm_wday;
-    int tm_yday;
-    int tm_isdst;
-};
-
 time_t time(time_t* t);
 int gettimeofday(struct timeval* tv, void* tz);
 clock_t clock(void);
@@ -520,9 +489,5 @@ int iscntrl(int c);
 int isxdigit(int c);
 int toupper(int c);
 int tolower(int c);
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif // _NEBULA_LIBC_H

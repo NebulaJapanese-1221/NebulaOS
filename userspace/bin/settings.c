@@ -73,10 +73,10 @@ int main(int argc, char** argv) {
 
     print_line("SYSTEM STATUS:");
     print("  UPTIME: ");
-    print_number(time_seconds());
+    print_number(get_time_seconds());
     print_line(" SECONDS");
     print("  TICKS: ");
-    print_number(time_ticks());
+    print_number(get_ticks());
     print_line("");
     print("  PID: ");
     print_number(getpid());

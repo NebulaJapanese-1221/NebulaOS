@@ -88,6 +88,7 @@ set(KERNEL_ASM_SOURCES
 # Assembly objects
 foreach(asm_src ${KERNEL_ASM_SOURCES} context_switch.asm)
     get_filename_component(obj_name ${asm_src} NAME_WE)
+    string(APPEND obj_name "_asm")
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/kernel/${obj_name}.o
         COMMAND ${CMAKE_ASM_COMPILER} ${KERNEL_ASM_FLAGS} -I${KERNEL_DIR} ${KERNEL_DIR}/${asm_src} -o ${CMAKE_BINARY_DIR}/kernel/${obj_name}.o
