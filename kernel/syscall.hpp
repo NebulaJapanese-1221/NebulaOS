@@ -103,6 +103,14 @@ void wm_get_screen_info(void* info);
 bool wm_poll_mouse(void* state);
 bool wm_poll_keyboard(void* event);
 
+// Clipboard syscalls
+int clipboard_set(const void* data, unsigned int size);
+unsigned int clipboard_get(void* buffer, unsigned int size);
+unsigned int clipboard_size();
+
+// System beep
+void beep(unsigned int frequency_hz, unsigned int duration_ms);
+
 // System info syscall
 struct SysInfo {
     // Memory
@@ -127,5 +135,18 @@ struct SysInfo {
 
 // Get system information
 void sysinfo(SysInfo* info);
+
+// Process list snapshot
+struct ProcessInfo {
+    unsigned int id;
+    unsigned int state;
+    unsigned int priority;
+    unsigned int total_time_ms;
+    char name[32];
+};
+
+unsigned int process_list(ProcessInfo* out, unsigned int max);
+
+// ---- End of syscalls ----
 
 } // namespace kernel::syscall

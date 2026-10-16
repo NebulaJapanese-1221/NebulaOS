@@ -83,6 +83,20 @@ typedef __builtin_va_list va_list;
 #define SYS_NANOSLEEP       248
 #define SYS_PRESENT         249
 
+// Clipboard
+#define SYS_CLIPBOARD_SET   300
+#define SYS_CLIPBOARD_GET   301
+#define SYS_CLIPBOARD_SIZE  302
+
+// PC speaker beep
+#define SYS_BEEP            303
+
+// System information
+#define SYS_SYSINFO         304
+
+// Process list
+#define SYS_PROCESS_LIST    305
+
 static inline uint32_t syscall0(uint32_t num) {
     uint32_t ret;
     asm volatile("int $0x80" : "=a"(ret) : "a"(num) : "memory");
@@ -312,6 +326,30 @@ static inline unsigned int syscall_ticks(void) {
 static inline void syscall_exit(int status) {
     (void)status;
     syscall1(SYS_EXIT, 0);
+}
+
+static inline int syscall_clipboard_set(const void* data, unsigned int size) {
+    return syscall2(SYS_CLIPBOARD_SET, (uint32_t)data, size);
+}
+
+static inline unsigned int syscall_clipboard_get(void* buffer, unsigned int size) {
+    return syscall2(SYS_CLIPBOARD_GET, (uint32_t)buffer, size);
+}
+
+static inline unsigned int syscall_clipboard_size(void) {
+    return syscall0(SYS_CLIPBOARD_SIZE);
+}
+
+static inline void syscall_beep(unsigned int frequency_hz, unsigned int duration_ms) {
+    syscall2(SYS_BEEP, frequency_hz, duration_ms);
+}
+
+static inline int syscall_sysinfo(void* info) {
+    return syscall1(SYS_SYSINFO, (uint32_t)info);
+}
+
+static inline unsigned int syscall_process_list(void* out, unsigned int max) {
+    return syscall2(SYS_PROCESS_LIST, (uint32_t)out, max);
 }
 
 #endif

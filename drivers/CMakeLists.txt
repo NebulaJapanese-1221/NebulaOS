@@ -20,6 +20,7 @@ set(DRIVER_SOURCES
     keyboard.cpp
     mouse.cpp
     serial.cpp
+    speaker.cpp
     vga.cpp
 )
 
@@ -28,6 +29,7 @@ set(DRIVER_HEADERS
     keyboard.hpp
     mouse.hpp
     serial.hpp
+    speaker.hpp
     vga.hpp
 )
 

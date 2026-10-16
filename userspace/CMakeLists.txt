@@ -78,6 +78,7 @@ endforeach()
 set(APP_SOURCES
     bin/console.c
     bin/settings.c
+    bin/taskmgr.c
 )
 
 foreach(c_src ${APP_SOURCES})

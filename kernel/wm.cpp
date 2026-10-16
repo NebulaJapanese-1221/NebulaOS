@@ -17,6 +17,7 @@
 
 #include "wm.hpp"
 #include "heap.hpp"
+#include "vfs.hpp"
 #include "../drivers/serial.hpp"
 #include <cstring>
 
@@ -67,6 +68,47 @@ Window* double_click_window = nullptr;
 // Window classes
 WindowClass classes[32];
 std::size_t class_count = 0;
+
+// Clipboard buffer
+std::uint8_t clipboard_data[4096];
+std::uint32_t clipboard_size = 0;
+
+// Wallpaper
+Wallpaper wallpaper = {};
+bool wallpaper_loaded = false;
+
+// Helper: apply the wallpaper (tiled) to the desktop surface buffer.
+void apply_wallpaper() {
+    if (desktop == nullptr || desktop->surface == nullptr) {
+        return;
+    }
+    std::uint32_t* buf = reinterpret_cast<std::uint32_t*>(
+        desktop->surface->buffer);
+    const std::uint32_t dw = desktop->surface->width;
+    const std::uint32_t dh = desktop->surface->height;
+
+    if (!wallpaper_loaded || wallpaper.pixels == nullptr) {
+        for (std::uint32_t i = 0; i < dw * dh; ++i) {
+            buf[i] = config.background_color;
+        }
+    } else {
+        const std::uint32_t ww = wallpaper.width;
+        const std::uint32_t wh = wallpaper.height;
+        if (ww == 0 || wh == 0) {
+            for (std::uint32_t i = 0; i < dw * dh; ++i) {
+                buf[i] = config.background_color;
+            }
+        } else {
+            for (std::uint32_t y = 0; y < dh; ++y) {
+                for (std::uint32_t x = 0; x < dw; ++x) {
+                    buf[y * dw + x] =
+                        wallpaper.pixels[(y % wh) * ww + (x % ww)];
+                }
+            }
+        }
+    }
+    compositor::damage_all(desktop->surface);
+}
 
 // Helper: get the title bar height for a window
 std::uint32_t titlebar_height(const Window* window) {
@@ -345,6 +387,8 @@ bool initialize(const Config& new_config) {
     if (desktop == nullptr) {
         return false;
     }
+
+    apply_wallpaper();
 
     return true;
 }
@@ -1106,6 +1150,102 @@ void register_class(const WindowClass& window_class) {
         return;
     }
     classes[class_count++] = window_class;
+}
+
+void wm_clipboard_set(const void* data, std::uint32_t size) {
+    if (data == nullptr || size == 0 || size > sizeof(clipboard_data)) {
+        clipboard_size = 0;
+        return;
+    }
+    std::memcpy(clipboard_data, data, size);
+    clipboard_size = size;
+}
+
+std::uint32_t wm_clipboard_get(void* buffer, std::uint32_t size) {
+    if (buffer == nullptr || clipboard_size == 0) {
+        return 0;
+    }
+    std::uint32_t copy = size < clipboard_size ? size : clipboard_size;
+    std::memcpy(buffer, clipboard_data, copy);
+    return copy;
+}
+
+std::uint32_t wm_clipboard_size() noexcept {
+    return clipboard_size;
+}
+
+bool wm_load_wallpaper(const char* path) {
+    if (path == nullptr) {
+        return false;
+    }
+
+    auto fd = kernel::vfs::open(path, kernel::vfs::FLAG_READ);
+    if (!fd.ok) {
+        return false;
+    }
+
+    // Read the header: magic "NWLP", width, height.
+    char header[12];
+    ssize_t n = kernel::vfs::read(*fd, header, sizeof(header));
+    if (n < static_cast<ssize_t>(sizeof(header))) {
+        kernel::vfs::close(*fd);
+        return false;
+    }
+    if (header[0] != 'N' || header[1] != 'W' || header[2] != 'L' ||
+        header[3] != 'P') {
+        kernel::vfs::close(*fd);
+        return false;
+    }
+    std::uint32_t width = *reinterpret_cast<std::uint32_t*>(&header[4]);
+    std::uint32_t height = *reinterpret_cast<std::uint32_t*>(&header[8]);
+    if (width == 0 || height == 0) {
+        kernel::vfs::close(*fd);
+        return false;
+    }
+
+    // Free old wallpaper pixels if any.
+    if (wallpaper.pixels != nullptr) {
+        heap::release(wallpaper.pixels);
+        wallpaper.pixels = nullptr;
+    }
+
+    const std::size_t pixel_count = static_cast<std::size_t>(width) * height;
+    wallpaper.pixels = static_cast<std::uint32_t*>(
+        heap::allocate(pixel_count * sizeof(std::uint32_t)));
+    if (wallpaper.pixels == nullptr) {
+        kernel::vfs::close(*fd);
+        return false;
+    }
+
+    n = kernel::vfs::read(*fd, wallpaper.pixels,
+                          pixel_count * sizeof(std::uint32_t));
+    kernel::vfs::close(*fd);
+    if (n < static_cast<ssize_t>(pixel_count * sizeof(std::uint32_t))) {
+        heap::release(wallpaper.pixels);
+        wallpaper.pixels = nullptr;
+        return false;
+    }
+
+    wallpaper.width = width;
+    wallpaper.height = height;
+    wallpaper_loaded = true;
+
+    apply_wallpaper();
+    return true;
+}
+
+void wm_set_wallpaper(const Wallpaper& wallpaper_in) {
+    if (wallpaper.pixels != nullptr) {
+        heap::release(wallpaper.pixels);
+    }
+    wallpaper = wallpaper_in;
+    wallpaper_loaded = wallpaper.pixels != nullptr &&
+                       wallpaper.width != 0 && wallpaper.height != 0;
+    apply_wallpaper();
+}
+
+const Wallpaper* wm_get_wallpaper() noexcept {
+    return wallpaper_loaded ? &wallpaper : nullptr;
 }
 
 } // namespace kernel::wm

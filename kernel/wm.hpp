@@ -364,4 +364,20 @@ struct WindowClass {
 
 void register_class(const WindowClass& window_class);
 
+// Clipboard: a shared byte buffer any window can read or write.
+void wm_clipboard_set(const void* data, std::uint32_t size);
+std::uint32_t wm_clipboard_get(void* buffer, std::uint32_t size);
+std::uint32_t wm_clipboard_size() noexcept;
+
+// Wallpaper: a bitmap loaded from the initrd and tiled on the desktop.
+struct Wallpaper {
+    std::uint32_t* pixels;
+    std::uint32_t width;
+    std::uint32_t height;
+};
+
+bool wm_load_wallpaper(const char* path);
+void wm_set_wallpaper(const Wallpaper& wallpaper);
+const Wallpaper* wm_get_wallpaper() noexcept;
+
 } // namespace kernel::wm

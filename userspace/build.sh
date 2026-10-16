@@ -44,5 +44,9 @@ echo "Building settings..."
 $CC $CFLAGS -c ./bin/settings.c -o ./bin/settings.o
 $LD $LDFLAGS ./lib/crt0.o ./lib/crt0_c.o ./lib/libc.o ./bin/settings.o -o "$OUT_DIR/settings"
 
+echo "Building taskmgr..."
+$CC $CFLAGS -c ./bin/taskmgr.c -o ./bin/taskmgr.o
+$LD $LDFLAGS ./lib/crt0.o ./lib/crt0_c.o ./lib/libc.o ./bin/taskmgr.o -o "$OUT_DIR/taskmgr"
+
 echo "Userspace build complete!"
 ls -la "$OUT_DIR/"

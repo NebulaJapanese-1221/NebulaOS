@@ -24,6 +24,10 @@
 #include "../kernel/paging.hpp"
 #include "../kernel/pmm.hpp"
 #include "../kernel/timer.hpp"
+#include "../kernel/vfs.hpp"
+#include "../drivers/speaker.hpp"
+
+#include <cstring>
 
 namespace {
 const unsigned int background_color = 0x0015202E;
@@ -64,6 +68,15 @@ const unsigned int pointer_size = 6;
 // the console as it is typed, so the caret can be moved through it without
 // reprinting the scrollback above it.
 const unsigned int input_capacity = 128;
+
+// Command history: a ring buffer of the most recent command lines.
+const unsigned int history_capacity = 32;
+const unsigned int history_length = 128;
+
+char history[history_capacity][history_length];
+unsigned int history_count = 0;
+unsigned int history_nav = history_capacity; // history_capacity means "not navigating"
+char history_draft[input_capacity];
 
 char input_line[input_capacity];
 unsigned int input_length = 0;
@@ -128,6 +141,46 @@ void format_duration(char* out, unsigned int total_seconds) {
     out[index++] = ':';
     append_number(out, index, seconds, 2);
     out[index] = '\0';
+}
+
+// Adds a completed command line to the history ring buffer. Empty lines and
+// lines identical to the most recent entry are not stored.
+void history_add(const char* line) {
+    if (line == nullptr || line[0] == '\0') {
+        return;
+    }
+    if (history_count > 0) {
+        unsigned int latest = (history_count - 1) % history_capacity;
+        if (std::strcmp(history[latest], line) == 0) {
+            return;
+        }
+    }
+    unsigned int slot = history_count % history_capacity;
+    std::strncpy(history[slot], line, history_length - 1);
+    history[slot][history_length - 1] = '\0';
+    if (history_count < history_capacity) {
+        ++history_count;
+    }
+    history_nav = history_capacity;
+}
+
+// Loads a history entry into the input buffer and repaints.
+void history_load(unsigned int index) {
+    if (index >= history_count) {
+        return;
+    }
+    const char* entry = history[index % history_capacity];
+    unsigned int len = std::strlen(entry);
+    if (len > input_capacity - 1) {
+        len = input_capacity - 1;
+    }
+    for (unsigned int i = 0; i < len; ++i) {
+        input_line[i] = entry[i];
+    }
+    input_length = static_cast<unsigned int>(len);
+    input_cursor = input_length;
+    input_line[input_length] = '\0';
+    repaint_input();
 }
 
 bool inside(int left, int top, int right, int bottom) {
@@ -259,6 +312,15 @@ void command_help() {
     shell::apps::console::write_line("AVAILABLE COMMANDS:");
     shell::apps::console::write_line("  HELP       THIS LIST");
     shell::apps::console::write_line("  CLEAR      CLEAR THE SCREEN");
+    shell::apps::console::write_line("  LS         LIST FILES");
+    shell::apps::console::write_line("  CD PATH    CHANGE DIRECTORY");
+    shell::apps::console::write_line("  CAT FILE   PRINT FILE CONTENTS");
+    shell::apps::console::write_line("  MKDIR DIR  CREATE A DIRECTORY");
+    shell::apps::console::write_line("  RM FILE    DELETE A FILE");
+    shell::apps::console::write_line("  CP SRC DST COPY A FILE");
+    shell::apps::console::write_line("  MV SRC DST MOVE/RENAME A FILE");
+    shell::apps::console::write_line("  WALLPAPER PATH LOAD DESKTOP BACKGROUND");
+    shell::apps::console::write_line("  BEEP FREQ MS   PLAY A TONE VIA PC SPEAKER");
     shell::apps::console::write_line("  UPTIME     TIME SINCE BOOT");
     shell::apps::console::write_line("  MEM        PHYSICAL MEMORY AND HEAP");
     shell::apps::console::write_line("  DISPLAY    FRAMEBUFFER AND PAGING");
@@ -268,6 +330,7 @@ void command_help() {
     shell::apps::console::write_line("  REBOOT     RESET VIA THE PS/2 CONTROLLER");
     shell::apps::console::write_line("");
     shell::apps::console::write_line("ARROW KEYS MOVE THE CARET, HOME AND END JUMP.");
+    shell::apps::console::write_line("UP/DOWN RECALL COMMAND HISTORY.");
 }
 
 void command_uptime() {
@@ -367,6 +430,124 @@ const char* argument(const char* line) {
     return line;
 }
 
+void command_ls() {
+    auto fd = kernel::vfs::opendir("/");
+    if (!fd.ok) {
+        shell::apps::console::write_line("CANNOT OPEN /");
+        return;
+    }
+    for (std::uint32_t i = 0; ; ++i) {
+        kernel::vfs::Dirent* e = kernel::vfs::readdir(*fd, i);
+        if (e == nullptr) break;
+        shell::apps::console::write(e->name);
+        shell::apps::console::write_line(e->type == 2 ? "/" : "");
+    }
+    kernel::vfs::close(*fd);
+}
+
+void command_cd(const char* path) {
+    if (kernel::vfs::chdir(path) == 0) {
+        shell::apps::console::write_line("OK");
+    } else {
+        shell::apps::console::write_line("FAILED");
+    }
+}
+
+void command_cat(const char* path) {
+    auto fd = kernel::vfs::open(path, kernel::vfs::FLAG_READ);
+    if (!fd.ok) {
+        shell::apps::console::write_line("CANNOT OPEN");
+        return;
+    }
+    char buf[256];
+    while (true) {
+        ssize_t n = kernel::vfs::read(*fd, buf, sizeof(buf) - 1);
+        if (n <= 0) break;
+        buf[n] = '\0';
+        shell::apps::console::write(buf);
+    }
+    shell::apps::console::write_line("");
+    kernel::vfs::close(*fd);
+}
+
+void command_mkdir(const char* path) {
+    if (kernel::vfs::mkdir(path, 0755) == 0) {
+        shell::apps::console::write_line("OK");
+    } else {
+        shell::apps::console::write_line("FAILED");
+    }
+}
+
+void command_rm(const char* path) {
+    if (kernel::vfs::unlink(path) == 0) {
+        shell::apps::console::write_line("OK");
+    } else {
+        shell::apps::console::write_line("FAILED");
+    }
+}
+
+void command_cp(const char* src, const char* dst) {
+    auto fd_in = kernel::vfs::open(src, kernel::vfs::FLAG_READ);
+    if (!fd_in.ok) {
+        shell::apps::console::write_line("CANNOT OPEN SOURCE");
+        return;
+    }
+    auto fd_out = kernel::vfs::open(dst, kernel::vfs::FLAG_WRITE | kernel::vfs::FLAG_CREATE | kernel::vfs::FLAG_TRUNC);
+    if (!fd_out.ok) {
+        shell::apps::console::write_line("CANNOT OPEN DEST");
+        kernel::vfs::close(*fd_in);
+        return;
+    }
+    char buf[256];
+    while (true) {
+        ssize_t n = kernel::vfs::read(*fd_in, buf, sizeof(buf));
+        if (n <= 0) break;
+        kernel::vfs::write(*fd_out, buf, static_cast<std::size_t>(n));
+    }
+    kernel::vfs::close(*fd_in);
+    kernel::vfs::close(*fd_out);
+    shell::apps::console::write_line("OK");
+}
+
+void command_mv(const char* src, const char* dst) {
+    if (kernel::vfs::rename(src, dst) == 0) {
+        shell::apps::console::write_line("OK");
+    } else {
+        shell::apps::console::write_line("FAILED");
+    }
+}
+
+void command_wallpaper(const char* path) {
+    if (kernel::wm::wm_load_wallpaper(path)) {
+        shell::apps::console::write_line("OK");
+    } else {
+        shell::apps::console::write_line("FAILED");
+    }
+}
+
+void command_beep(const char* args) {
+    unsigned int frequency = 0;
+    unsigned int duration = 500;
+    const char* p = args;
+    while (*p >= '0' && *p <= '9') {
+        frequency = frequency * 10 + static_cast<unsigned int>(*p - '0');
+        ++p;
+    }
+    while (*p == ' ') ++p;
+    if (*p >= '0' && *p <= '9') {
+        duration = 0;
+        while (*p >= '0' && *p <= '9') {
+            duration = duration * 10 + static_cast<unsigned int>(*p - '0');
+            ++p;
+        }
+    }
+    if (frequency == 0) {
+        frequency = 440;
+    }
+    drivers::speaker::beep(frequency, duration);
+    shell::apps::console::write_line("BEEP");
+}
+
 void run_command(const char* line) {
     if (matches(line, "HELP")) {
         command_help();
@@ -386,6 +567,42 @@ void run_command(const char* line) {
         command_about();
     } else if (matches(line, "REBOOT")) {
         command_reboot();
+    } else if (matches(line, "LS")) {
+        command_ls();
+    } else if (matches(line, "CD")) {
+        command_cd(argument(line));
+    } else if (matches(line, "CAT")) {
+        command_cat(argument(line));
+    } else if (matches(line, "MKDIR")) {
+        command_mkdir(argument(line));
+    } else if (matches(line, "RM")) {
+        command_rm(argument(line));
+    } else if (matches(line, "CP")) {
+        const char* args = argument(line);
+        const char* src = args;
+        while (*args != '\0' && *args != ' ') {
+            ++args;
+        }
+        while (*args == ' ') {
+            ++args;
+        }
+        const char* dst = args;
+        command_cp(src, dst);
+    } else if (matches(line, "MV")) {
+        const char* args = argument(line);
+        const char* src = args;
+        while (*args != '\0' && *args != ' ') {
+            ++args;
+        }
+        while (*args == ' ') {
+            ++args;
+        }
+        const char* dst = args;
+        command_mv(src, dst);
+    } else if (matches(line, "WALLPAPER")) {
+        command_wallpaper(argument(line));
+    } else if (matches(line, "BEEP")) {
+        command_beep(argument(line));
     } else if (line[0] != '\0') {
         shell::apps::console::write("UNKNOWN COMMAND: ");
         shell::apps::console::write_line(line);
@@ -455,6 +672,46 @@ void handle_key(const drivers::keyboard::Event& event) {
                 --input_length;
             }
             break;
+        case drivers::keyboard::key_up:
+            if (history_count == 0) {
+                break;
+            }
+            // Leaving live editing mode: remember the current draft.
+            if (history_nav == history_capacity) {
+                for (unsigned int i = 0; i < input_length; ++i) {
+                    history_draft[i] = input_line[i];
+                }
+                history_draft[input_length] = '\0';
+                history_nav = history_count - 1;
+            } else if (history_nav > 0) {
+                --history_nav;
+            }
+            history_load(history_nav);
+            break;
+        case drivers::keyboard::key_down:
+            if (history_nav == history_capacity) {
+                break;
+            }
+            if (history_nav + 1 < history_count) {
+                ++history_nav;
+                history_load(history_nav);
+            } else {
+                // Back to the most recent entry: restore the draft and stop
+                // navigating.
+                unsigned int len = std::strlen(history_draft);
+                if (len > input_capacity - 1) {
+                    len = input_capacity - 1;
+                }
+                for (unsigned int i = 0; i < len; ++i) {
+                    input_line[i] = history_draft[i];
+                }
+                input_length = len;
+                input_cursor = input_length;
+                input_line[input_length] = '\0';
+                history_nav = history_capacity;
+                repaint_input();
+            }
+            break;
         default:
             return;
         }
@@ -464,6 +721,7 @@ void handle_key(const drivers::keyboard::Event& event) {
 
     if (event.code == drivers::keyboard::key_enter) {
         input_line[input_length] = '\0';
+        history_add(input_line);
         shell::apps::console::write_line(input_line);
         run_command(input_line);
         input_length = 0;

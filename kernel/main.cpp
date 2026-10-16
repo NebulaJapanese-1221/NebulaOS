@@ -19,6 +19,7 @@
 #include "../drivers/keyboard.hpp"
 #include "../drivers/mouse.hpp"
 #include "../drivers/serial.hpp"
+#include "../drivers/speaker.hpp"
 #include "../drivers/vga.hpp"
 #include "../shell/shell.hpp"
 #include "arch/x86/interrupts.hpp"
@@ -528,7 +529,12 @@ extern "C" void kmain(unsigned int boot_magic, unsigned int multiboot_info_addre
     show_graphics_status(4, "PS/2 KEYBOARD: READY", boot_ok);
     kernel::timer::delay_ms(stage_delay_ms);
 
-    show_graphics_status(5, "PS/2 MOUSE: INITIALIZING", boot_text);
+    show_graphics_status(5, "PC SPEAKER: INITIALIZING", boot_text);
+    drivers::speaker::initialize();
+    show_graphics_status(5, "PC SPEAKER: READY", boot_ok);
+    kernel::timer::delay_ms(stage_delay_ms);
+
+    show_graphics_status(6, "PS/2 MOUSE: INITIALIZING", boot_text);
     const bool mouse_available = drivers::mouse::initialize(
         drivers::graphics::width(), drivers::graphics::height());
     show_graphics_status(5, mouse_available ? "PS/2 MOUSE: READY" : "PS/2 MOUSE: NOT FOUND",

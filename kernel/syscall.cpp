@@ -17,9 +17,14 @@
 
 #include "syscall.hpp"
 #include "../drivers/serial.hpp"
+#include "../drivers/speaker.hpp"
 #include "framebuffer.hpp"
 #include "timer.hpp"
 #include "log.hpp"
+#include "wm.hpp"
+#include "process.hpp"
+#include "pmm.hpp"
+#include "heap.hpp"
 
 namespace kernel::syscall {
 
@@ -161,6 +166,111 @@ unsigned int sys_syslog_stats(RegisterState* regs) {
     return 0;
 }
 
+// Clipboard syscalls
+unsigned int sys_clipboard_set(RegisterState* regs) {
+
+    const void* data = reinterpret_cast<const void*>(regs->ebx);
+    unsigned int size = regs->ecx;
+    kernel::wm::wm_clipboard_set(data, size);
+    return 0;
+}
+
+unsigned int sys_clipboard_get(RegisterState* regs) {
+    void* buffer = reinterpret_cast<void*>(regs->ebx);
+    unsigned int size = regs->ecx;
+    return kernel::wm::wm_clipboard_get(buffer, size);
+}
+
+unsigned int sys_clipboard_size(RegisterState* regs) {
+    (void)regs;
+    return kernel::wm::wm_clipboard_size();
+}
+
+// Forward declaration for the speaker beep helper.
+std::uint8_t read_port_u8(std::uint16_t port);
+
+// PC speaker beep. Programs PIT channel 2 for the given frequency and gates
+// the speaker for the given duration.
+unsigned int sys_beep(RegisterState* regs) {
+    unsigned int frequency = regs->ebx;
+    unsigned int duration_ms = regs->ecx;
+    drivers::speaker::beep(frequency, duration_ms);
+    return 0;
+}
+
+std::uint8_t read_port_u8(std::uint16_t port) {
+    std::uint8_t value;
+    asm volatile("inb %1, %0" : "=a"(value) : "Nd"(port));
+    return value;
+}
+
+// Sysinfo
+unsigned int sys_sysinfo(RegisterState* regs) {
+    SysInfo* info = reinterpret_cast<SysInfo*>(regs->ebx);
+    if (info == nullptr) {
+        return 0xFFFFFFFF;
+    }
+
+    // Memory
+    unsigned long long detected = kernel::memory::pmm::detected_bytes();
+    info->total_memory_mb = static_cast<unsigned int>(detected / (1024ULL * 1024ULL));
+    info->free_memory_mb = static_cast<unsigned int>(
+        (kernel::memory::pmm::free_frames() * kernel::memory::pmm::PAGE_SIZE) /
+        (1024ULL * 1024ULL));
+    info->used_memory_mb = info->total_memory_mb > info->free_memory_mb
+                               ? info->total_memory_mb - info->free_memory_mb
+                               : 0;
+
+    // Uptime
+    info->uptime_seconds = kernel::timer::seconds();
+
+    // CPU
+    info->cpu_count = 1;
+    info->cpu_frequency_mhz = 0;
+    std::memset(info->cpu_vendor, 0, sizeof(info->cpu_vendor));
+    std::memset(info->cpu_model, 0, sizeof(info->cpu_model));
+
+    // Kernel info
+    std::strncpy(info->kernel_version, "NebulaOS 0.0.1 Alpha",
+                 sizeof(info->kernel_version) - 1);
+    info->kernel_version[sizeof(info->kernel_version) - 1] = '\0';
+    extern const char git_build_date[];
+    extern const char git_build_sha[];
+    std::strncpy(info->build_date, git_build_date, sizeof(info->build_date) - 1);
+    info->build_date[sizeof(info->build_date) - 1] = '\0';
+    std::strncpy(info->build_sha, git_build_sha, sizeof(info->build_sha) - 1);
+    info->build_sha[sizeof(info->build_sha) - 1] = '\0';
+
+    return 0;
+}
+
+// Process list snapshot
+unsigned int sys_process_list(RegisterState* regs) {
+    ProcessInfo* out = reinterpret_cast<ProcessInfo*>(regs->ebx);
+    unsigned int max = regs->ecx;
+    if (out == nullptr || max == 0) {
+        return 0;
+    }
+
+    Process* processes[64];
+    std::size_t count = kernel::process::list(processes, 64);
+    if (count > max) {
+        count = max;
+    }
+
+    for (std::size_t i = 0; i < count; ++i) {
+        out[i].id = processes[i]->id;
+        out[i].state = static_cast<unsigned int>(processes[i]->state);
+        out[i].priority = 128;
+        out[i].total_time_ms = 0;
+        std::strncpy(out[i].name, kernel::process::name(processes[i]),
+                     sizeof(out[i].name) - 1);
+        out[i].name[sizeof(out[i].name) - 1] = '\0';
+    }
+
+    return static_cast<unsigned int>(count);
+}
+
 } // namespace
 
 void initialize() {
@@ -178,6 +288,12 @@ void initialize() {
     handlers[210] = sys_syslog_read;          // syslog_read
     handlers[211] = sys_syslog_clear;         // syslog_clear
     handlers[212] = sys_syslog_stats;         // syslog_stats
+    handlers[300] = sys_clipboard_set;        // clipboard_set
+    handlers[301] = sys_clipboard_get;        // clipboard_get
+    handlers[302] = sys_clipboard_size;       // clipboard_size
+    handlers[303] = sys_beep;                 // beep
+    handlers[304] = sys_sysinfo;              // sysinfo
+    handlers[305] = sys_process_list;         // process_list
 }
 
 extern "C" unsigned int syscall_dispatch(void* register_state) {
