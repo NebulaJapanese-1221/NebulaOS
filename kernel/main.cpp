@@ -380,9 +380,13 @@ extern "C" void kmain(unsigned int boot_magic, unsigned int multiboot_info_addre
     // Text mode carries the whole of the hardware bring up, because it is the
     // only output that exists before a framebuffer has been handed over.
     drivers::serial::initialize();
+    drivers::serial::write("A: SERIAL INIT DONE\n");
     kernel::log::initialize();
+    drivers::serial::write("B: LOG INIT DONE\n");
     kernel::log::info("NebulaOS kernel logging initialized");
+    drivers::serial::write("C: LOG INFO DONE\n");
     run_stage("SERIAL PORT", "OK", 0x0A);
+    drivers::serial::write("D: SERIAL PORT STAGE DONE\n");
 
     if (boot_magic != kernel::multiboot::handoff_magic) {
         halt_with_error("INVALID MULTIBOOT HANDOFF");
