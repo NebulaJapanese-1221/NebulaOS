@@ -44,7 +44,7 @@ void exit(int status) {
     _exit(status);
 }
 
-extern "C" void _start_c(int argc, char** argv) {
+void _start_c(int argc, char** argv) {
     // Run the init section first.
     _init();
 

@@ -18,10 +18,11 @@
 #ifndef _NEBULA_LIBC_H
 #define _NEBULA_LIBC_H
 
+#include "syscalls.h"
+
 #include <stdint.h>
 #include <stddef.h>
 #include <stdarg.h>
-#include <time.h>
 
 // =============================================================================
 // Types
@@ -31,6 +32,16 @@ typedef unsigned int mode_t;
 typedef unsigned int uid_t;
 typedef unsigned int gid_t;
 typedef long off_t;
+
+// Time types (kept local so libc.h stays self-contained under -nostdinc).
+typedef long time_t;
+typedef long clock_t;
+typedef int pid_t;
+struct tm;
+struct timespec {
+    time_t tv_sec;
+    long tv_nsec;
+};
 typedef int fd_t;
 
 // =============================================================================
@@ -84,6 +95,9 @@ typedef int fd_t;
 // =============================================================================
 // String functions
 // =============================================================================
+#ifdef __cplusplus
+extern "C" {
+#endif
 size_t strlen(const char* s);
 char* strcpy(char* dest, const char* src);
 char* strncpy(char* dest, const char* src, size_t n);
@@ -149,7 +163,7 @@ int vsnprintf(char* out, size_t size, const char* fmt, va_list ap);
 int putchar(int c);
 int fputc(int c, FILE* stream);
 int puts(const char* s);
-int fgets(char* buf, int n, FILE* stream);
+char* fgets(char* buf, int n, FILE* stream);
 int getchar(void);
 int ungetc(int c, FILE* stream);
 int fflush(FILE* stream);
@@ -493,5 +507,8 @@ int iscntrl(int c);
 int isxdigit(int c);
 int toupper(int c);
 int tolower(int c);
+#ifdef __cplusplus
+}
+#endif
 
 #endif // _NEBULA_LIBC_H

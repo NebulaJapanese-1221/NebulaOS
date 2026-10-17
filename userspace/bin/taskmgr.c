@@ -77,11 +77,6 @@ static void print_str(const char* s) {
     }
 }
 
-static void print_line(const char* s) {
-    print_str(s);
-    write(1, "\n", 1);
-}
-
 int main(int argc, char** argv) {
     (void)argc;
     (void)argv;

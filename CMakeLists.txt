@@ -95,8 +95,19 @@ set(KERNEL_CXX_FLAGS "${KERNEL_C_FLAGS} -std=gnu++17")
 set(KERNEL_ASM_FLAGS "-f elf32 -g")
 
 # Userspace flags (minimal libc)
+# -nostdinc keeps host system headers out; clang's own builtin headers
+# (stdint.h, stddef.h, stdarg.h, ...) are re-added via -isystem below so
+# libc.h can stay self-contained.
+execute_process(
+    COMMAND ${CMAKE_C_COMPILER} -print-resource-dir
+    OUTPUT_VARIABLE CLANG_RESOURCE_DIR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
 set(USER_C_FLAGS
     -m32
+    -nostdinc
+    -isystem ${CLANG_RESOURCE_DIR}/include
     -ffreestanding
     -fno-exceptions
     -fno-rtti
@@ -131,7 +142,7 @@ set(USER_ASM_FLAGS "-f elf32")
 
 # Linker flags
 set(KERNEL_LD_FLAGS "-m elf_i386 -nostdlib -z max-page-size=0x1000")
-set(USER_LD_FLAGS "-m elf_i386 -nostdlib")
+set(USER_LD_FLAGS -m32 -nostdlib -no-pie)
 
 # =============================================================================
 # Paths

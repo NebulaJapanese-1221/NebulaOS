@@ -31,11 +31,12 @@ typedef long ssize_t;
 typedef unsigned int useconds_t;
 typedef unsigned int mode_t;
 typedef long off_t;
-
+#ifndef va_start
 typedef __builtin_va_list va_list;
 #define va_start(ap, last) __builtin_va_start(ap, last)
 #define va_end(ap) __builtin_va_end(ap)
 #define va_arg(ap, type) __builtin_va_arg(ap, type)
+#endif
 
 // Syscall numbers
 #define SYS_WRITE           1
@@ -133,8 +134,8 @@ static inline uint32_t syscall5(uint32_t num, uint32_t arg1, uint32_t arg2, uint
     return ret;
 }
 
-static inline int write(int fd, const void* buf, uint32_t count) {
-    return syscall3(SYS_WRITE, fd, (uint32_t)buf, count);
+static inline ssize_t write(int fd, const void* buf, uint32_t count) {
+    return syscall3(SYS_WRITE_NEW, (uint32_t)fd, (uint32_t)buf, count);
 }
 
 static inline void _exit(int status) {
@@ -163,8 +164,8 @@ static inline unsigned int get_ticks(void) {
     return syscall1(SYS_GET_TICKS, 0);
 }
 
-static inline int read(int fd, void* buf, uint32_t count) {
-    return syscall3(SYS_WRITE, fd, (uint32_t)buf, count);
+static inline ssize_t read(int fd, void* buf, uint32_t count) {
+    return syscall3(SYS_READ, (uint32_t)fd, (uint32_t)buf, count);
 }
 
 // Kernel logging (syslog/dmesg) syscalls

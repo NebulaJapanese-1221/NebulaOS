@@ -345,95 +345,6 @@ FILE* stderr = &std_files[2];
 
 static FILE file_pool[FOPEN_MAX - 3];
 
-static int format_char(char* buf, size_t size, const char*& fmt,
-                        va_list ap, int& written) {
-    (void)buf;
-    (void)size;
-    (void)written;
-
-    char c = *fmt;
-    if (c == '%') {
-        ++fmt;
-        // Parse flags
-        bool left_align = false;
-        bool plus = false;
-        bool space = false;
-        bool zero_pad = false;
-        bool alt = false;
-
-        while (true) {
-            switch (*fmt) {
-                case '-': left_align = true; ++fmt; break;
-                case '+': plus = true; ++fmt; break;
-                case ' ': space = true; ++fmt; break;
-                case '0': zero_pad = true; ++fmt; break;
-                case '#': alt = true; ++fmt; break;
-                default: goto flags_done;
-            }
-        }
-        flags_done:
-
-        // Parse width
-        int width = 0;
-        while (*fmt >= '0' && *fmt <= '9') {
-            width = width * 10 + (*fmt - '0');
-            ++fmt;
-        }
-
-        // Parse precision
-        int precision = -1;
-        if (*fmt == '.') {
-            ++fmt;
-            precision = 0;
-            while (*fmt >= '0' && *fmt <= '9') {
-                precision = precision * 10 + (*fmt - '0');
-                ++fmt;
-            }
-        }
-
-        // Parse length modifier
-        int length = 0;  // 0=none, 1=hh, 2=h, 3=l, 4=ll
-        if (*fmt == 'h') {
-            ++fmt;
-            if (*fmt == 'h') {
-                length = 1;
-                ++fmt;
-            } else {
-                length = 2;
-            }
-        } else if (*fmt == 'l') {
-            ++fmt;
-            if (*fmt == 'l') {
-                length = 4;
-                ++fmt;
-            } else {
-                length = 3;
-            }
-        }
-
-        // Parse conversion specifier
-        char spec = *fmt;
-        if (spec == '\0') {
-            return -1;
-        }
-        ++fmt;
-
-        (void)left_align;
-        (void)plus;
-        (void)space;
-        (void)zero_pad;
-        (void)alt;
-        (void)width;
-        (void)precision;
-        (void)length;
-
-        return (int)spec;
-    }
-
-    ++fmt;
-    return (int)c;
-}
-
 int vsnprintf(char* out, size_t size, const char* fmt, va_list ap) {
     if (size == 0) {
         return 0;
@@ -836,7 +747,7 @@ int fgetc(FILE* stream) {
     return (unsigned char)c;
 }
 
-int fgets(char* buf, int n, FILE* stream) {
+char* fgets(char* buf, int n, FILE* stream) {
     if (buf == nullptr || stream == nullptr || n <= 0) {
         return nullptr;
     }
@@ -1184,14 +1095,6 @@ void exit(int status) {
     }
 }
 
-void _exit(int status) {
-    (void)status;
-    syscall_exit(0);
-    for (;;) {
-        asm volatile("hlt");
-    }
-}
-
 int atexit(void (*func)(void)) {
     (void)func;
     return 0;
@@ -1269,7 +1172,7 @@ void* aligned_alloc(size_t alignment, size_t size) {
 // =============================================================================
 // unistd
 // =============================================================================
-int open(const char* path, int flags, ...) {
+extern "C" int open(const char* path, int flags, ...) {
     if (path == nullptr) {
         return -1;
     }
@@ -1283,16 +1186,8 @@ int open(const char* path, int flags, ...) {
     return syscall_open(path, flags, mode);
 }
 
-int close(int fd) {
+extern "C" int close(int fd) {
     return syscall_close(fd);
-}
-
-ssize_t read(int fd, void* buf, size_t count) {
-    return syscall_read(fd, buf, count);
-}
-
-ssize_t write(int fd, const void* buf, size_t count) {
-    return syscall_write(fd, buf, count);
 }
 
 off_t lseek(int fd, off_t offset, int whence) {
@@ -1428,10 +1323,6 @@ int sethostname(const char* name, size_t len) {
     (void)name;
     (void)len;
     return -1;
-}
-
-int getpid(void) {
-    return syscall_getpid();
 }
 
 int getppid(void) {
@@ -1626,45 +1517,14 @@ int kill(pid_t pid, int signum) {
 // These are typically implemented in assembly, but we provide
 // a simple C implementation for now
 
-int setjmp(jmp_buf env) {
-    asm volatile(
-        "mov %%ebx, %0\n"
-        "mov %%ecx, %1\n"
-        "mov %%edx, %2\n"
-        "mov %%esi, %3\n"
-        "mov %%edi, %4\n"
-        "mov %%ebp, %5\n"
-        "mov %%esp, %6\n"
-        "mov %%eip, %7\n"
-        : "=m"(env[0].ebx), "=m"(env[0].ecx),
-          "=m"(env[0].edx), "=m"(env[0].esi),
-          "=m"(env[0].edi), "=m"(env[0].ebp),
-          "=m"(env[0].esp), "=m"(env[0].eip)
-        :
-        : "memory"
-    );
+__attribute__((unused)) int setjmp(jmp_buf env) {
+    (void)env;
     return 0;
 }
 
-void longjmp(jmp_buf env, int val) {
-    asm volatile(
-        "mov %0, %%ebx\n"
-        "mov %1, %%ecx\n"
-        "mov %2, %%edx\n"
-        "mov %3, %%esi\n"
-        "mov %4, %%edi\n"
-        "mov %5, %%ebp\n"
-        "mov %6, %%esp\n"
-        "mov %7, %%eip\n"
-        :
-        : "m"(env[0].ebx), "m"(env[0].ecx),
-          "m"(env[0].edx), "m"(env[0].esi),
-          "m"(env[0].edi), "m"(env[0].ebp),
-          "m"(env[0].esp), "m"(env[0].eip)
-        : "memory"
-    );
+__attribute__((unused)) void longjmp(jmp_buf env, int val) {
+    (void)env;
     (void)val;
-    // Never returns
     for (;;) {
         asm volatile("hlt");
     }
@@ -1738,14 +1598,14 @@ int pthread_mutex_unlock(pthread_mutex_t* mutex) {
 // =============================================================================
 // framebuffer device
 // =============================================================================
-int open_framebuffer(framebuffer_info_t* info) {
+extern "C" int open_framebuffer(framebuffer_info_t* info) {
     if (info == nullptr) {
         return -1;
     }
-    return syscall_get_framebuffer_info(0, info);
+    return get_framebuffer_info(0, info);
 }
 
-void close_framebuffer(int fd) {
+extern "C" void close_framebuffer(int fd) {
     (void)fd;
 }
 

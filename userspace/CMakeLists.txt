@@ -98,11 +98,13 @@ foreach(c_src ${APP_SOURCES})
         OUTPUT ${CMAKE_BINARY_DIR}/userspace/${app_name}
         COMMAND ${CMAKE_C_COMPILER} ${USER_LD_FLAGS} -T ${USERSPACE_DIR}/linker.ld
                 ${CMAKE_BINARY_DIR}/userspace/crt0_asm.o
+                ${CMAKE_BINARY_DIR}/userspace/crt0.o
                 ${CMAKE_BINARY_DIR}/userspace/libc.o
                 ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o
                 -o ${CMAKE_BINARY_DIR}/userspace/${app_name}
         DEPENDS ${CMAKE_BINARY_DIR}/userspace/${obj_name}.o
                 ${CMAKE_BINARY_DIR}/userspace/crt0_asm.o
+                ${CMAKE_BINARY_DIR}/userspace/crt0.o
                 ${CMAKE_BINARY_DIR}/userspace/libc.o
                 ${USERSPACE_DIR}/linker.ld
         COMMENT "Linking app ${app_name}"
@@ -120,7 +122,7 @@ add_custom_command(
     COMMAND mkdir -p ${CMAKE_BINARY_DIR}/initrd_root
     COMMAND cp ${APP_BINARIES} ${CMAKE_BINARY_DIR}/initrd_root/
     COMMAND cd ${CMAKE_BINARY_DIR}/initrd_root && find . -print0 | cpio --null -o --format=newc > ${INITRD_FILE}
-    DEPENDS ${APP_BINARIES}
+    DEPENDS ${APP_BINARIES} userspace-lib
     COMMENT "Creating initrd.cpio"
 )
 
