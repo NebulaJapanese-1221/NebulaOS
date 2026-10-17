@@ -43,7 +43,7 @@ std::uintptr_t device_cursor = layout::DEVICE_WINDOW_BASE;
 PageFaultHandler fault_handler = nullptr;
 
 // Page table entry counts for statistics
-std::size_t mapped_pages = 0;
+std::size_t mapped_pages __attribute__((unused)) = 0;
 
 // Helper: get directory index from virtual address
 inline std::size_t directory_index(std::uintptr_t vaddr) noexcept {
@@ -136,8 +136,12 @@ bool initialize(std::size_t identity_mib) {
 }
 
 bool enable() {
-    // Set CR3 to the kernel page directory
-    const std::uintptr_t pd_phys = reinterpret_cast<std::uintptr_t>(kernel_page_directory);
+    // CR3 needs a physical address. kernel_page_directory is a C++ global
+    // living at a higher-half virtual address, so subtract KERNEL_BASE to
+    // get the physical address the MMU will actually use.
+    const std::uintptr_t pd_virt =
+        reinterpret_cast<std::uintptr_t>(kernel_page_directory);
+    const std::uintptr_t pd_phys = pd_virt - layout::KERNEL_BASE;
     asm volatile("mov %0, %%cr3" : : "r"(pd_phys));
 
     // Enable paging (PG bit) and write protection (WP bit)

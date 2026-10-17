@@ -84,6 +84,7 @@ set(KERNEL_C_FLAGS
     "-Wall"
     "-Wextra"
     "-Werror"
+    "-Wno-unused-but-set-global"
     "-O2"
     "-pipe"
     "-fdiagnostics-color=always"

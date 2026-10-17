@@ -57,7 +57,7 @@ Stats stats_data = {};
 std::uint32_t next_surface_id = 1;
 
 // Vsync counter
-std::uint64_t frame_count = 0;
+std::uint64_t frame_count __attribute__((unused)) = 0;
 
 
 

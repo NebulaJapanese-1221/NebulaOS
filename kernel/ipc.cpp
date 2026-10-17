@@ -34,11 +34,11 @@ namespace {
 
 // Global port list
 Port* port_list = nullptr;
-std::uint32_t port_count = 0;
+std::uint32_t port_count __attribute__((unused)) = 0;
 
 // Global shared region list
 SharedRegion shared_regions[MAX_SHARED_REGIONS];
-std::uint32_t shared_region_count = 0;
+std::uint32_t shared_region_count __attribute__((unused)) = 0;
 
 // Statistics
 IpcStats ipc_stats = {};

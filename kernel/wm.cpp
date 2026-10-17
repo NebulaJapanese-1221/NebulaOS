@@ -48,8 +48,8 @@ std::uint32_t active_workspace = 0;
 constexpr std::uint32_t MAX_WORKSPACES = 16;
 
 // Mouse state
-int mouse_x = 0;
-int mouse_y = 0;
+int mouse_x __attribute__((unused)) = 0;
+int mouse_y __attribute__((unused)) = 0;
 bool mouse_buttons[8] = {};
 Window* mouse_window = nullptr;
 Window* drag_window = nullptr;
@@ -64,8 +64,8 @@ std::uint32_t resize_start_height = 0;
 bool resizing = false;
 
 // Last click time for double-click detection
-std::uint64_t last_click_time = 0;
-Window* double_click_window = nullptr;
+std::uint64_t last_click_time __attribute__((unused)) = 0;
+Window* double_click_window __attribute__((unused)) = nullptr;
 
 // Window classes
 WindowClass classes[32];

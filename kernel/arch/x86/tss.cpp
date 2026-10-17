@@ -17,30 +17,43 @@
 
 #include "tss.hpp"
 
+#include <cstdint>
+
 namespace {
 struct __attribute__((packed)) TaskStateSegment {
-    unsigned int previous_task_link;
-    unsigned short esp0;
-    unsigned short ss0;
-    unsigned char reserved0;
-    unsigned char reserved1;
-    unsigned short reserved2;
-    unsigned int eip;
-    unsigned short cs;
-    unsigned short reserved3;
-    unsigned int eflags;
-    unsigned int esp;
-    unsigned short ss;
-    unsigned short reserved4;
-    unsigned int ist1_sp;
-    unsigned short ist1_ss;
-    unsigned short reserved5;
+    std::uint32_t back_link;      // 0x00: previous task link
+    std::uint32_t esp0;           // 0x04: kernel stack pointer (ring 0)
+    std::uint32_t ss0;            // 0x08: kernel stack segment (ring 0)
+    std::uint32_t esp1;           // 0x0C: unused
+    std::uint32_t ss1;            // 0x10: unused
+    std::uint32_t esp2;           // 0x14: unused
+    std::uint32_t ss2;            // 0x18: unused
+    std::uint32_t cr3;            // 0x1C: page directory base
+    std::uint32_t eip;            // 0x20: instruction pointer
+    std::uint32_t eflags;         // 0x24: flags
+    std::uint32_t eax;            // 0x28: general purpose
+    std::uint32_t ecx;            // 0x2C: general purpose
+    std::uint32_t edx;            // 0x30: general purpose
+    std::uint32_t ebx;            // 0x34: general purpose
+    std::uint32_t esp;            // 0x38: stack pointer
+    std::uint32_t ebp;            // 0x3C: base pointer
+    std::uint32_t esi;            // 0x40: source index
+    std::uint32_t edi;            // 0x44: destination index
+    std::uint32_t es;             // 0x48: extra segment
+    std::uint32_t cs;             // 0x4C: code segment
+    std::uint32_t ss;             // 0x50: stack segment
+    std::uint32_t ds;             // 0x54: data segment
+    std::uint32_t fs;             // 0x58: F segment
+    std::uint32_t gs;             // 0x5C: G segment
+    std::uint32_t ldt;            // 0x60: LDT selector
+    std::uint32_t trace_trap;     // 0x64: trace/trap bits
+    std::uint16_t iomap_base;     // 0x68: I/O map base offset
 };
 
 // The stack the faulting vectors run on. It is separate from the kernel stack
 // on purpose: a double fault is most often a symptom of that stack having run
 // out of room, so the handler cannot borrow it.
-__attribute__((aligned(16))) unsigned char fault_stack[16384];
+__attribute__((aligned(16))) unsigned char fault_stack[16384] __attribute__((unused));
 
 // Kernel stack for syscalls and interrupt handlers that need to run from user mode.
 // This is the esp0/ss0 that the CPU loads when transitioning from ring 3 to ring 0.
@@ -56,6 +69,7 @@ bool loaded = false;
 
 // The kernel data selector, used for every stack the task state names.
 const unsigned short kernel_data_selector = 0x10;
+const unsigned short kernel_code_selector = 0x08;
 }
 
 namespace kernel::tss {
@@ -69,13 +83,35 @@ void initialize() {
         return;
     }
 
-    unsigned char* const fault_stack_top = fault_stack + sizeof(fault_stack);
     unsigned char* const syscall_stack_top = syscall_stack + sizeof(syscall_stack);
-    task_state.previous_task_link = 0;
-    task_state.esp0 = static_cast<unsigned short>(reinterpret_cast<unsigned int>(syscall_stack_top) & 0xFFFF);
+
+    task_state.back_link = 0;
+    task_state.esp0 = reinterpret_cast<std::uintptr_t>(syscall_stack_top);
     task_state.ss0 = kernel_data_selector;
-    task_state.ist1_sp = reinterpret_cast<unsigned int>(fault_stack_top);
-    task_state.ist1_ss = kernel_data_selector;
+    task_state.esp1 = 0;
+    task_state.ss1 = 0;
+    task_state.esp2 = 0;
+    task_state.ss2 = 0;
+    task_state.cr3 = 0;
+    task_state.eip = 0;
+    task_state.eflags = 0;
+    task_state.eax = 0;
+    task_state.ecx = 0;
+    task_state.edx = 0;
+    task_state.ebx = 0;
+    task_state.esp = 0;
+    task_state.ebp = 0;
+    task_state.esi = 0;
+    task_state.edi = 0;
+    task_state.es = kernel_data_selector;
+    task_state.cs = kernel_code_selector;
+    task_state.ss = kernel_data_selector;
+    task_state.ds = kernel_data_selector;
+    task_state.fs = kernel_data_selector;
+    task_state.gs = kernel_data_selector;
+    task_state.ldt = 0;
+    task_state.trace_trap = 0;
+    task_state.iomap_base = static_cast<std::uint16_t>(sizeof(TaskStateSegment));
 
     // Fill the GDT entry the task register will point at. The descriptor is a
     // 32-bit available TSS: present, ring zero, and it occupies one entry.
@@ -114,10 +150,9 @@ void update_descriptor() {
     gdt_tss_descriptor[6] = 0;
     gdt_tss_descriptor[7] = static_cast<unsigned char>((base >> 24) & 0xFF);
 
-    unsigned char* const fault_stack_top = fault_stack + sizeof(fault_stack);
     unsigned char* const syscall_stack_top = syscall_stack + sizeof(syscall_stack);
-    task_state.esp0 = static_cast<unsigned short>(reinterpret_cast<unsigned int>(syscall_stack_top) & 0xFFFF);
-    task_state.ist1_sp = reinterpret_cast<unsigned int>(fault_stack_top);
+    task_state.esp0 = reinterpret_cast<std::uintptr_t>(syscall_stack_top);
+    task_state.iomap_base = static_cast<std::uint16_t>(sizeof(TaskStateSegment));
 
     asm volatile("ltr %0" : : "r"(tss_selector));
 }
