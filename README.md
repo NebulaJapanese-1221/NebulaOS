@@ -47,4 +47,4 @@ make
 make run
 ```
 
-`make` creates `nebulaos.iso`, a bootable GRUB ISO containing the Multiboot ELF kernel. `make run` starts it in QEMU. Override tool commands as needed, for example `make QEMU=qemu-system-i386`.
+`make` creates `build/nebulaos.iso`, a bootable GRUB ISO containing the Multiboot ELF kernel. `make run` launches that existing ISO in QEMU's graphical display without rebuilding it; run `make` first if the ISO does not exist. Override the emulator command as needed, for example `make run QEMU=qemu-system-i386`.

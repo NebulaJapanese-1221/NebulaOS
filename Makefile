@@ -21,6 +21,7 @@
 
 CMAKE ?= cmake
 BUILD_DIR ?= build
+QEMU ?= qemu-system-i386
 
 .PHONY: all clean run run-serial run-debug initrd kernel.elf nebulaos.iso
 
@@ -38,9 +39,8 @@ initrd: $(BUILD_DIR)/Makefile
 nebulaos.iso: kernel.elf initrd
 	$(CMAKE) --build $(BUILD_DIR) --target nebulaos-iso
 
-run: nebulaos.iso
-	$(CMAKE) --build $(BUILD_DIR) --target run
-
+run:
+	qemu-system-i386 -m 64M -cdrom build/nebulaos.iso -vga std
 run-serial: nebulaos.iso
 	$(CMAKE) --build $(BUILD_DIR) --target run-serial
 
