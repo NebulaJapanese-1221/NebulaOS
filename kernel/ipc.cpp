@@ -20,9 +20,15 @@
 #include "scheduler.hpp"
 #include "paging.hpp"
 #include "pmm.hpp"
+#include "timer.hpp"
 #include <cstring>
 
 namespace kernel::ipc {
+
+namespace heap = kernel::memory::heap;
+namespace paging = kernel::memory::paging;
+namespace pmm = kernel::memory::pmm;
+namespace timer = kernel::timer;
 
 namespace {
 
@@ -257,6 +263,7 @@ Result receive_timeout(Port* port, Message& out_message,
 }
 
 Result reply(const Message& request, const void* data, std::size_t size) {
+    (void)data;
     // Find the sender's port (assuming port 0 is the reply port)
     // This is a simplified implementation
     // In a real OS, you'd have a reply port mechanism

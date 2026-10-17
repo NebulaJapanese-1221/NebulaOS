@@ -61,7 +61,7 @@ struct Process {
     std::uint32_t flags;
 
     // Address space
-    paging::AddressSpace address_space;
+    kernel::memory::paging::AddressSpace address_space;
 
     // Threads
     scheduler::Thread* threads[MAX_THREADS_PER_PROCESS];

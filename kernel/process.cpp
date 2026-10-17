@@ -23,6 +23,9 @@
 
 namespace kernel::process {
 
+namespace heap = kernel::memory::heap;
+namespace paging = kernel::memory::paging;
+
 namespace {
 
 // Process list
@@ -37,16 +40,6 @@ std::uint32_t next_process_id = 1;
 
 // Exit handler
 ExitHandler exit_handler = nullptr;
-
-// Process names (stored in the process structure)
-// For simplicity, we'll use a fixed-size buffer
-
-// Find a free slot in the process list
-Process* find_free_slot() {
-    // In a more sophisticated implementation, we'd have a free list
-    // For now, just check the linked list
-    return nullptr;
-}
 
 } // namespace
 

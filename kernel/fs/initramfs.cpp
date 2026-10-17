@@ -18,6 +18,7 @@
 #include "initramfs.hpp"
 #include "../heap.hpp"
 #include "../../drivers/serial.hpp"
+#include <cstring>
 
 namespace kernel::initramfs {
 
@@ -66,7 +67,7 @@ Node* find_or_create_child(Node* parent, const char* name,
                                     vfs::FileType type) {
     for (Node* child = parent->children; child != nullptr;
          child = child->next) {
-        if (strcmp(child->name, name) == 0) {
+        if (std::strcmp(child->name, name) == 0) {
             return child;
         }
     }
@@ -162,7 +163,7 @@ std::size_t count_entries(const unsigned char* archive,
         const char* name =
             reinterpret_cast<const char*>(ptr + sizeof(cpio::Header));
         const bool trailer = namesize > 0 &&
-            strcmp(name, "TRAILER!!!") == 0;
+            std::strcmp(name, "TRAILER!!!") == 0;
         if (trailer) {
             break;
         }
@@ -220,7 +221,7 @@ bool populate(Node* root, const unsigned char* archive,
             ~static_cast<std::size_t>(3));
 
         const bool trailer = namesize > 0 &&
-            strcmp(name, "TRAILER!!!") == 0;
+            std::strcmp(name, "TRAILER!!!") == 0;
         if (trailer) {
             break;
         }
@@ -232,7 +233,7 @@ bool populate(Node* root, const unsigned char* archive,
             clean += 2;
         }
 
-        if (clean[0] != '\0' && strcmp(clean, ".") != 0) {
+        if (clean[0] != '\0' && std::strcmp(clean, ".") != 0) {
             const vfs::FileType type = type_from_mode(mode);
             Node* node = ensure_path(root, clean, type, mode, uid, gid,
                                      filesize, mtime,
@@ -280,7 +281,7 @@ int node_close(void* node) {
     return 0;
 }
 
-ssize_t node_read(void* node, std::uint64_t offset,
+vfs::ssize_t node_read(void* node, std::uint64_t offset,
                         void* buffer, std::size_t size) {
     const Node* file = static_cast<Node*>(node);
     if (file == nullptr || file->type != vfs::FileType::REGULAR) {
@@ -301,10 +302,10 @@ ssize_t node_read(void* node, std::uint64_t offset,
     for (std::size_t index = 0; index < size; ++index) {
         destination[index] = file->data[offset + index];
     }
-    return static_cast<ssize_t>(size);
+    return static_cast<vfs::ssize_t>(size);
 }
 
-ssize_t node_write(void* node, std::uint64_t offset,
+vfs::ssize_t node_write(void* node, std::uint64_t offset,
                          const void* buffer, std::size_t size) {
     (void)node;
     (void)offset;
@@ -315,7 +316,7 @@ ssize_t node_write(void* node, std::uint64_t offset,
     return -1;
 }
 
-off_t node_seek(void* node, off_t offset, std::uint32_t whence) {
+vfs::off_t node_seek(void* node, vfs::off_t offset, std::uint32_t whence) {
     (void)node;
     (void)offset;
     (void)whence;
@@ -383,7 +384,7 @@ void* node_finddir(void* node, const char* name) {
     }
     for (Node* child = directory->children; child != nullptr;
          child = child->next) {
-        if (strcmp(child->name, name) == 0) {
+        if (std::strcmp(child->name, name) == 0) {
             return child;
         }
     }
@@ -561,15 +562,3 @@ int mount(const unsigned char* archive, std::size_t size,
 }
 
 } // namespace kernel::initramfs
-
-// strcmp is provided by the C library for userspace, but the
-// kernel needs its own copy before the heap and the VFS come up.
-extern "C" int strcmp(const char* a, const char* b) {
-    while (*a && *a == *b) {
-        ++a;
-        ++b;
-    }
-    return static_cast<int>(
-        *reinterpret_cast<const unsigned char*>(a) -
-        *reinterpret_cast<const unsigned char*>(b));
-}

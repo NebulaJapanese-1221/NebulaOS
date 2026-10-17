@@ -165,19 +165,19 @@ void put(const char* text) {
     }
 }
 
-void put_line(const char* text) {
+void __attribute__((unused)) put_line(const char* text) {
     put(text);
     put('\n');
 }
 
-void put_hex(unsigned int value, unsigned int digits) {
+void __attribute__((unused)) put_hex(unsigned int value, unsigned int digits) {
     const char* table = "0123456789ABCDEF";
     for (unsigned int position = digits; position > 0; --position) {
         put(table[(value >> ((position - 1) * 4)) & 0xF]);
     }
 }
 
-unsigned int fault_address() {
+unsigned int __attribute__((unused)) fault_address() {
     unsigned int address = 0;
     asm volatile("mov %%cr2, %0" : "=r"(address));
     return address;
@@ -268,7 +268,7 @@ void initialize() {
     // CR0.EM = 1 means FPU emulation, CR0.TS = 1 means task switched
     asm volatile(
         "mov %%cr0, %%eax\n"
-        "and $~0xC, %%eax\n"  ; Clear bits 2 (EM) and 3 (TS)
+        "and $~0xC, %%eax\n"
         "mov %%eax, %%cr0\n"
         : : : "eax", "memory"
     );
@@ -466,6 +466,7 @@ struct PanicRegs {
 
     const unsigned int vector = frame_pointer[0];
     const unsigned int error_code = frame_pointer[1];
+    (void)error_code;
     const unsigned int eip = frame_pointer[2];
     const unsigned int cs = frame_pointer[3];
     const unsigned int eflags = frame_pointer[4];
@@ -507,8 +508,8 @@ bool dispatch_irq_handlers(unsigned int irq) {
     if (irq >= 16 || !irq_handlers[irq].in_use) {
         return false;
     }
-    const IrqResult result = irq_handlers[irq].handler(irq, irq_handlers[irq].context);
-    return result == IrqResult::Handled;
+    const kernel::interrupts::IrqResult result = irq_handlers[irq].handler(irq, irq_handlers[irq].context);
+    return result == kernel::interrupts::IrqResult::Handled;
 }
 
 } // namespace

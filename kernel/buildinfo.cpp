@@ -27,5 +27,7 @@
 #define NEBULA_BUILD_SHA "unknown"
 #endif
 
-const char git_build_date[] = NEBULA_BUILD_DATE;
-const char git_build_sha[] = NEBULA_BUILD_SHA;
+extern "C" {
+extern const char git_build_date[] = NEBULA_BUILD_DATE;
+extern const char git_build_sha[] = NEBULA_BUILD_SHA;
+}

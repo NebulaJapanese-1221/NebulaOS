@@ -24,6 +24,9 @@
 
 namespace kernel::elf {
 
+namespace paging = kernel::memory::paging;
+namespace pmm = kernel::memory::pmm;
+
 namespace {
 
 // Loaded modules
@@ -33,24 +36,6 @@ std::size_t module_count_value = 0;
 
 // Dynamic linker initialized
 bool elf_initialized = false;
-
-// Helper: check if a pointer is valid
-inline bool valid_pointer(const void* ptr, std::size_t size,
-                                 const void* data, std::size_t data_size) {
-    if (ptr == nullptr) {
-        return false;
-    }
-    const std::uintptr_t start = reinterpret_cast<std::uintptr_t>(ptr);
-    const std::uintptr_t end = start + size;
-    const std::uintptr_t data_start = reinterpret_cast<std::uintptr_t>(data);
-    const std::uintptr_t data_end = data_start + data_size;
-    return start >= data_start && end <= data_end;
-}
-
-// Helper: get symbol type
-inline std::uint8_t symbol_type(const Elf32_Sym& sym) {
-    return sym.st_info & 0xF;
-}
 
 // Helper: get symbol binding
 inline std::uint8_t symbol_binding(const Elf32_Sym& sym) {
@@ -65,15 +50,6 @@ inline std::uint8_t relocation_type(std::uint32_t info) {
 // Helper: get relocation symbol index
 inline std::uint32_t relocation_symbol(std::uint32_t info) {
     return info >> 8;
-}
-
-// Helper: get the string at an offset in a string table
-const char* get_string(const char* strtab, std::size_t strtab_size,
-                            std::uint32_t offset) {
-    if (strtab == nullptr || offset >= strtab_size) {
-        return nullptr;
-    }
-    return strtab + offset;
 }
 
 } // namespace
@@ -405,8 +381,6 @@ Result<void*> resolve_symbol(ModuleInfo& module, const char* name) {
     const Elf32_Sym* symtab = nullptr;
     const char* strtab = nullptr;
     std::size_t sym_count = 0;
-    std::size_t str_size = 0;
-
     for (std::size_t i = 0; dynamic[i].d_tag != DT_NULL; ++i) {
         switch (dynamic[i].d_tag) {
             case DT_SYMTAB:
@@ -416,9 +390,6 @@ Result<void*> resolve_symbol(ModuleInfo& module, const char* name) {
             case DT_STRTAB:
                 strtab = reinterpret_cast<const char*>(
                     dynamic[i].d_un.d_ptr);
-                break;
-            case DT_STRSZ:
-                str_size = dynamic[i].d_un.d_val;
                 break;
             default:
                 break;
@@ -600,7 +571,7 @@ bool apply_relocations(ModuleInfo& module, bool lazy) {
 
                 case R_386_RELATIVE: {
                     // B + A
-                    *target = module.base + r.r_addend;
+                    *target += module.base;
                     break;
                 }
 

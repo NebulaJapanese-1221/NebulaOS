@@ -25,6 +25,7 @@
 #include "../kernel/pmm.hpp"
 #include "../kernel/timer.hpp"
 #include "../kernel/vfs.hpp"
+#include "../kernel/wm.hpp"
 #include "../drivers/speaker.hpp"
 
 #include <cstring>
@@ -83,6 +84,8 @@ unsigned int input_length = 0;
 unsigned int input_cursor = 0;
 // Console column the prompt ends at, which is where the editable text starts.
 unsigned int prompt_column = 0;
+
+void repaint_input();
 
 bool needs_render = true;
 unsigned int pointer_x = 0;
@@ -461,7 +464,8 @@ void command_cat(const char* path) {
     }
     char buf[256];
     while (true) {
-        ssize_t n = kernel::vfs::read(*fd, buf, sizeof(buf) - 1);
+        kernel::vfs::ssize_t n =
+            kernel::vfs::read(*fd, buf, sizeof(buf) - 1);
         if (n <= 0) break;
         buf[n] = '\0';
         shell::apps::console::write(buf);
@@ -500,7 +504,8 @@ void command_cp(const char* src, const char* dst) {
     }
     char buf[256];
     while (true) {
-        ssize_t n = kernel::vfs::read(*fd_in, buf, sizeof(buf));
+        kernel::vfs::ssize_t n =
+            kernel::vfs::read(*fd_in, buf, sizeof(buf));
         if (n <= 0) break;
         kernel::vfs::write(*fd_out, buf, static_cast<std::size_t>(n));
     }

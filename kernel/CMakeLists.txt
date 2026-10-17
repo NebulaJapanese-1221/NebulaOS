@@ -37,6 +37,7 @@ set(KERNEL_SOURCES
     vfs.cpp
     log.cpp
     buildinfo.cpp
+    runtime.cpp
     context_switch.asm
     fs/initramfs.cpp
     assert.cpp
@@ -110,6 +111,7 @@ foreach(cpp_src ${KERNEL_SOURCES} ${KERNEL_ARCH_SOURCES})
         COMMAND ${CMAKE_CXX_COMPILER} ${KERNEL_CXX_FLAGS} -I${KERNEL_DIR} -I${CMAKE_SOURCE_DIR} -I${CMAKE_SOURCE_DIR}/drivers ${KERNEL_DIR}/${cpp_src} -c -o ${CMAKE_BINARY_DIR}/kernel/${obj_name}.o
         DEPENDS ${KERNEL_DIR}/${cpp_src} ${KERNEL_HEADERS} ${KERNEL_ARCH_HEADERS}
         COMMENT "Compiling ${cpp_src}"
+        VERBATIM
     )
     list(APPEND KERNEL_OBJS ${CMAKE_BINARY_DIR}/kernel/${obj_name}.o)
 endforeach()
@@ -118,12 +120,6 @@ endforeach()
 # Kernel ELF
 # =============================================================================
 set(KERNEL_ELF ${CMAKE_BINARY_DIR}/kernel.elf)
-add_custom_command(
-    OUTPUT ${KERNEL_ELF}
-    COMMAND ${CMAKE_CXX_COMPILER} ${KERNEL_LD_FLAGS} -T ${KERNEL_DIR}/arch/x86/linker.ld ${KERNEL_OBJS} -o ${KERNEL_ELF}
-    DEPENDS ${KERNEL_OBJS} ${KERNEL_DIR}/arch/x86/linker.ld
-    COMMENT "Linking kernel.elf"
-)
 
 # Make kernel.elf available to parent scope
 set(KERNEL_ELF ${KERNEL_ELF} PARENT_SCOPE)

@@ -1,5 +1,6 @@
 #include "cpio.hpp"
 #include "../drivers/serial.hpp"
+#include <cstring>
 
 namespace kernel::cpio {
 
@@ -49,7 +50,7 @@ const unsigned char* find_file(const unsigned char* cpio_data, unsigned int cpio
             if (name[0] != 'T' || name[1] != 'R' || name[2] != 'A' ||
                 name[3] != 'I' || name[4] != 'L' || name[5] != 'E' ||
                 name[6] != 'R' || name[7] != '!') {
-                if (strcmp(name, filename) == 0) {
+                if (std::strcmp(name, filename) == 0) {
                     if (file_size) {
                         *file_size = filesize;
                     }

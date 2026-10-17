@@ -44,8 +44,8 @@
 #include "assert.hpp"
 
 // NebulaOS version
-constexpr const char* NEBULAOS_VERSION = "0.0.1";
-constexpr const char* NEBULAOS_CODENAME = "Alpha";
+constexpr const char* NEBULAOS_VERSION __attribute__((unused)) = "0.0.1";
+constexpr const char* NEBULAOS_CODENAME __attribute__((unused)) = "Alpha";
 
 // Build metadata, embedded at link time so it can be reported at boot.
 extern "C" {
@@ -88,12 +88,12 @@ struct __attribute__((packed)) Elf32_Phdr {
 };
 
 const unsigned int PT_LOAD = 1;
-const unsigned int PT_DYNAMIC = 2;
-const unsigned int PT_INTERP = 3;
+const unsigned int PT_DYNAMIC __attribute__((unused)) = 2;
+const unsigned int PT_INTERP __attribute__((unused)) = 3;
 
-const unsigned int ELF_MAGIC = 0x464C457F;
+const unsigned int ELF_MAGIC __attribute__((unused)) = 0x464C457F;
 
-const unsigned int USER_BASE = 0x08048000;
+const unsigned int USER_BASE __attribute__((unused)) = 0x08048000;
 const unsigned int USER_STACK_TOP = 0xBFFFFFFF;
 
 // Allocates a frame and maps it at the given virtual address with the
@@ -271,7 +271,7 @@ void launch_userspace_program(const unsigned int multiboot_info_address) {
         "iret\n"
         : "=r"(user_esp)
         : "r"(stack_top), "r"(name_addr), "r"(1),
-          "r"(kernel::tss::user_data_selector), "r"(kernel::tss::user_code_selector),
+          "r"((unsigned int)kernel::tss::user_data_selector), "r"((unsigned int)kernel::tss::user_code_selector),
           "r"(entry)
         : "memory"
     );
@@ -396,13 +396,13 @@ extern "C" void kmain(unsigned int boot_magic, unsigned int multiboot_info_addre
 
     drivers::serial::write("memory detected ");
     drivers::serial::write_decimal(
-        static_cast<unsigned int>(kernel::memory::pmm::detected_bytes() / (1024 * 1024)));
+        static_cast<unsigned int>(kernel::memory::pmm::total_bytes() / (1024 * 1024)));
     drivers::serial::write(" MB, free frames ");
     drivers::serial::write_decimal(kernel::memory::pmm::free_frames());
     drivers::serial::write_newline();
 
     const unsigned int identity_megabytes =
-        identity_megabytes_for(kernel::memory::pmm::detected_bytes());
+        identity_megabytes_for(kernel::memory::pmm::total_bytes());
     if (!kernel::memory::paging::initialize(identity_megabytes)) {
         halt_with_error("PAGING TABLES UNAVAILABLE");
     }

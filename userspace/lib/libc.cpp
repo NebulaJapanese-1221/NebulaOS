@@ -1086,7 +1086,7 @@ void abort(void) {
     }
 }
 
-void exit(int status) {
+__attribute__((weak)) void exit(int status) {
     (void)status;
     // Exit the process
     _exit(status);
@@ -1095,7 +1095,7 @@ void exit(int status) {
     }
 }
 
-int atexit(void (*func)(void)) {
+__attribute__((weak)) int atexit(void (*func)(void)) {
     (void)func;
     return 0;
 }

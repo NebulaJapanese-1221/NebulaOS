@@ -80,6 +80,7 @@ void print_stack_trace() noexcept;
 // Unreachable code marker
 [[noreturn]] inline void unreachable(const char* file, int line) {
     default_assert_handler("unreachable", file, line, nullptr, "Execution reached unreachable code");
+    __builtin_unreachable();
 }
 
 #define UNREACHABLE() kernel::assert::unreachable(__FILE__, __LINE__)

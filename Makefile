@@ -30,13 +30,13 @@ $(BUILD_DIR)/Makefile: CMakeLists.txt
 	$(CMAKE) -S . -B $(BUILD_DIR) -DCMAKE_TOOLCHAIN_FILE=toolchain/i686-elf.cmake
 
 kernel.elf: $(BUILD_DIR)/Makefile
-	$(CMAKE) --build $(BUILD_DIR) --target kernel.elf
+	$(CMAKE) --build $(BUILD_DIR) --target kernel-bin
 
 initrd: $(BUILD_DIR)/Makefile
 	$(CMAKE) --build $(BUILD_DIR) --target initrd
 
 nebulaos.iso: kernel.elf initrd
-	$(CMAKE) --build $(BUILD_DIR) --target nebulaos.iso
+	$(CMAKE) --build $(BUILD_DIR) --target nebulaos-iso
 
 run: nebulaos.iso
 	$(CMAKE) --build $(BUILD_DIR) --target run

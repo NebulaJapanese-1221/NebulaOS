@@ -31,6 +31,7 @@ const unsigned char key_end = 0x4F;
 const unsigned char key_page_up = 0x49;
 const unsigned char key_page_down = 0x51;
 const unsigned char key_up = 0x48;
+const unsigned char key_down = 0x50;
 const unsigned char key_left = 0x4B;
 const unsigned char key_right = 0x4D;
 const unsigned char key_insert = 0x52;

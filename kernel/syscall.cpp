@@ -25,6 +25,12 @@
 #include "process.hpp"
 #include "pmm.hpp"
 #include "heap.hpp"
+#include <cstring>
+
+extern "C" {
+extern const char git_build_date[];
+extern const char git_build_sha[];
+}
 
 namespace kernel::syscall {
 
@@ -37,7 +43,8 @@ struct RegisterState {
 
 using SyscallHandler = unsigned int (*)(RegisterState*);
 
-SyscallHandler handlers[256] = {};
+constexpr unsigned int MAX_SYSCALL_NUMBER = 305;
+SyscallHandler handlers[MAX_SYSCALL_NUMBER + 1] = {};
 
 unsigned int sys_write(RegisterState* regs) {
     unsigned int fd = regs->ebx;
@@ -68,8 +75,6 @@ unsigned int sys_getpid(RegisterState* regs) {
 
 unsigned int sys_open_device(RegisterState* regs) {
     const char* name = reinterpret_cast<const char*>(regs->ecx);
-    unsigned int buffer = regs->edx;
-    unsigned int length = regs->esi;
 
     // fd 3 is the framebuffer, fd 4 is the serial console.
     if (name == nullptr) {
@@ -134,7 +139,7 @@ unsigned int sys_syslog_read(RegisterState* regs) {
     // EBX = buffer pointer (LogEntry*)
     // ECX = count
     // EDX = level filter (optional, -1 for all)
-    kernel::log::LogEntry* buffer = reinterpret_cast<kernel::log::LogEntry*>(regs->ebx);
+    LogEntry* buffer = reinterpret_cast<LogEntry*>(regs->ebx);
     int count = static_cast<int>(regs->ecx);
     int level_filter = static_cast<int>(regs->edx);
     
@@ -154,11 +159,11 @@ unsigned int sys_syslog_clear(RegisterState* regs) {
 
 unsigned int sys_syslog_stats(RegisterState* regs) {
     // EBX = LogStats*
-    kernel::log::LogStats* stats = reinterpret_cast<kernel::log::LogStats*>(regs->ebx);
+    LogStats* stats = reinterpret_cast<LogStats*>(regs->ebx);
     if (stats == nullptr) {
         return 0xFFFFFFFF;
     }
-    kernel::log::LogStats s = kernel::log::syslog_stats();
+    const kernel::log::LogStats s = kernel::log::syslog_stats();
     stats->total_written = static_cast<unsigned int>(s.total_written);
     stats->dropped = static_cast<unsigned int>(s.dropped);
     stats->buffer_size = static_cast<unsigned int>(s.buffer_size);
@@ -186,9 +191,6 @@ unsigned int sys_clipboard_size(RegisterState* regs) {
     return kernel::wm::wm_clipboard_size();
 }
 
-// Forward declaration for the speaker beep helper.
-std::uint8_t read_port_u8(std::uint16_t port);
-
 // PC speaker beep. Programs PIT channel 2 for the given frequency and gates
 // the speaker for the given duration.
 unsigned int sys_beep(RegisterState* regs) {
@@ -196,12 +198,6 @@ unsigned int sys_beep(RegisterState* regs) {
     unsigned int duration_ms = regs->ecx;
     drivers::speaker::beep(frequency, duration_ms);
     return 0;
-}
-
-std::uint8_t read_port_u8(std::uint16_t port) {
-    std::uint8_t value;
-    asm volatile("inb %1, %0" : "=a"(value) : "Nd"(port));
-    return value;
 }
 
 // Sysinfo
@@ -212,7 +208,7 @@ unsigned int sys_sysinfo(RegisterState* regs) {
     }
 
     // Memory
-    unsigned long long detected = kernel::memory::pmm::detected_bytes();
+    unsigned long long detected = kernel::memory::pmm::total_bytes();
     info->total_memory_mb = static_cast<unsigned int>(detected / (1024ULL * 1024ULL));
     info->free_memory_mb = static_cast<unsigned int>(
         (kernel::memory::pmm::free_frames() * kernel::memory::pmm::PAGE_SIZE) /
@@ -234,11 +230,9 @@ unsigned int sys_sysinfo(RegisterState* regs) {
     std::strncpy(info->kernel_version, "NebulaOS 0.0.1 Alpha",
                  sizeof(info->kernel_version) - 1);
     info->kernel_version[sizeof(info->kernel_version) - 1] = '\0';
-    extern const char git_build_date[];
-    extern const char git_build_sha[];
-    std::strncpy(info->build_date, git_build_date, sizeof(info->build_date) - 1);
+    std::strncpy(info->build_date, ::git_build_date, sizeof(info->build_date) - 1);
     info->build_date[sizeof(info->build_date) - 1] = '\0';
-    std::strncpy(info->build_sha, git_build_sha, sizeof(info->build_sha) - 1);
+    std::strncpy(info->build_sha, ::git_build_sha, sizeof(info->build_sha) - 1);
     info->build_sha[sizeof(info->build_sha) - 1] = '\0';
 
     return 0;
@@ -252,7 +246,7 @@ unsigned int sys_process_list(RegisterState* regs) {
         return 0;
     }
 
-    Process* processes[64];
+    kernel::process::Process* processes[64];
     std::size_t count = kernel::process::list(processes, 64);
     if (count > max) {
         count = max;
@@ -274,7 +268,7 @@ unsigned int sys_process_list(RegisterState* regs) {
 } // namespace
 
 void initialize() {
-    for (unsigned int i = 0; i < 256; ++i) {
+    for (unsigned int i = 0; i <= MAX_SYSCALL_NUMBER; ++i) {
         handlers[i] = nullptr;
     }
     handlers[1] = sys_write;   // write
@@ -300,7 +294,7 @@ extern "C" unsigned int syscall_dispatch(void* register_state) {
     RegisterState* regs = static_cast<RegisterState*>(register_state);
     unsigned int syscall_num = regs->eax;
 
-    if (syscall_num < 256 && handlers[syscall_num] != nullptr) {
+    if (syscall_num <= MAX_SYSCALL_NUMBER && handlers[syscall_num] != nullptr) {
         return handlers[syscall_num](regs);
     }
 

@@ -23,10 +23,12 @@
 
 namespace kernel::wm {
 
+namespace heap = kernel::memory::heap;
+
 namespace {
 
 // Window list
-Window* window_list = nullptr;
+Window* windows_head = nullptr;
 std::uint32_t window_count = 0;
 
 // Focused window
@@ -42,7 +44,7 @@ Config config = {};
 std::uint32_t next_window_id = 1;
 
 // Workspace
-std::uint32_t current_workspace = 0;
+std::uint32_t active_workspace = 0;
 constexpr std::uint32_t MAX_WORKSPACES = 16;
 
 // Mouse state
@@ -147,7 +149,6 @@ bool in_button(const Window* window, int x, int y,
     }
 
     const std::uint32_t bw = border_width(window);
-    const std::uint32_t tbh = titlebar_height(window);
     const std::uint32_t bs = config.button_size;
 
     // Buttons are in the top-right corner
@@ -189,7 +190,7 @@ bool in_resize_handle(const Window* window, int x, int y) {
 
 // Helper: sort windows by z-order
 void sort_windows() {
-    if (window_list == nullptr) {
+    if (windows_head == nullptr) {
         return;
     }
 
@@ -197,7 +198,7 @@ void sort_windows() {
     while (swapped) {
         swapped = false;
         Window* prev = nullptr;
-        Window* current = window_list;
+        Window* current = windows_head;
 
         while (current != nullptr && current->next != nullptr) {
             if (current->z_order > current->next->z_order) {
@@ -206,7 +207,7 @@ void sort_windows() {
                 next->next = current;
 
                 if (prev == nullptr) {
-                    window_list = next;
+                    windows_head = next;
                 } else {
                     prev->next = next;
                 }
@@ -243,10 +244,6 @@ void draw_decorations(Window* window) {
     const std::uint32_t titlebar_color = is_focused
                                               ? config.active_titlebar_color
                                               : config.inactive_titlebar_color;
-    const std::uint32_t text_color = is_focused
-                                          ? config.active_titlebar_text_color
-                                          : config.inactive_titlebar_text_color;
-
     const int x = window->x;
     const int y = window->y;
     const int w = static_cast<int>(window->width + 2 * bw);
@@ -357,12 +354,12 @@ void update_surface(Window* window) {
 bool initialize(const Config& new_config) {
     config = new_config;
 
-    window_list = nullptr;
+    windows_head = nullptr;
     window_count = 0;
     focused = nullptr;
     desktop = nullptr;
     next_window_id = 1;
-    current_workspace = 0;
+    active_workspace = 0;
 
     std::memset(mouse_buttons, 0, sizeof(mouse_buttons));
     mouse_window = nullptr;
@@ -381,8 +378,8 @@ bool initialize(const Config& new_config) {
     desktop = create_window(WindowType::DESKTOP,
                                  "Desktop",
                                  0, 0,
-                                 config.screen_width,
-                                 config.screen_height,
+                                 compositor::screen_width(),
+                                 compositor::screen_height(),
                                  FLAG_NONE);
     if (desktop == nullptr) {
         return false;
@@ -395,14 +392,14 @@ bool initialize(const Config& new_config) {
 
 void shutdown() {
     // Destroy all windows
-    Window* current = window_list;
+    Window* current = windows_head;
     while (current != nullptr) {
         Window* next = current->next;
         destroy_window(current);
         current = next;
     }
 
-    window_list = nullptr;
+    windows_head = nullptr;
     window_count = 0;
     focused = nullptr;
     desktop = nullptr;
@@ -473,7 +470,7 @@ Window* create_window(WindowType type,
     window->has_close = (flags & FLAG_CLOSABLE) != 0;
 
     window->z_order = static_cast<int>(window_count);
-    window->workspace = current_workspace;
+    window->workspace = active_workspace;
     window->parent = nullptr;
     window->child_count = 0;
     window->user_data = nullptr;
@@ -494,17 +491,17 @@ Window* create_window(WindowType type,
     if (window->decorated) {
         compositor::set_paint_callback(window->surface,
             [](compositor::Surface* surface, int, int,
-                  std::uint32_t, std::uint32_t) {
+                  int, int) {
                 Window* win = static_cast<Window*>(surface->user_data);
                 draw_decorations(win);
             });
     }
 
     // Add to window list
-    if (window_list == nullptr) {
-        window_list = window;
+    if (windows_head == nullptr) {
+        windows_head = window;
     } else {
-        Window* tail = window_list;
+        Window* tail = windows_head;
         while (tail->next != nullptr) {
             tail = tail->next;
         }
@@ -513,8 +510,6 @@ Window* create_window(WindowType type,
     }
 
     ++window_count;
-    ++stats_data.total_windows;
-
     return window;
 }
 
@@ -527,7 +522,7 @@ void destroy_window(Window* window) {
     if (window->prev != nullptr) {
         window->prev->next = window->next;
     } else {
-        window_list = window->next;
+        windows_head = window->next;
     }
     if (window->next != nullptr) {
         window->next->prev = window->prev;
@@ -584,12 +579,12 @@ void move_window(Window* window, int x, int y) {
             y = 0;
         }
         if (x + static_cast<int>(window->width) >
-            static_cast<int>(config.screen_width - config.snap_distance)) {
-            x = static_cast<int>(config.screen_width - window->width);
+            static_cast<int>(compositor::screen_width() - config.snap_distance)) {
+            x = static_cast<int>(compositor::screen_width() - window->width);
         }
         if (y + static_cast<int>(window->height) >
-            static_cast<int>(config.screen_height - config.snap_distance)) {
-            y = static_cast<int>(config.screen_height - window->height);
+            static_cast<int>(compositor::screen_height() - config.snap_distance)) {
+            y = static_cast<int>(compositor::screen_height() - window->height);
         }
     }
 
@@ -667,8 +662,8 @@ void maximize_window(Window* window) {
     window->state = WindowState::MAXIMIZED;
     window->x = 0;
     window->y = 0;
-    window->width = config.screen_width;
-    window->height = config.screen_height;
+    window->width = compositor::screen_width();
+    window->height = compositor::screen_height();
 
     update_surface(window);
 
@@ -747,8 +742,8 @@ void set_state(Window* window, WindowState state) {
             window->state = WindowState::FULLSCREEN;
             window->x = 0;
             window->y = 0;
-            window->width = config.screen_width;
-            window->height = config.screen_height;
+            window->width = compositor::screen_width();
+            window->height = compositor::screen_height();
             update_surface(window);
             break;
         default:
@@ -770,7 +765,7 @@ void raise_window(Window* window) {
 
     // Find maximum z-order
     int max_z = window->z_order;
-    for (Window* w = window_list; w != nullptr; w = w->next) {
+    for (Window* w = windows_head; w != nullptr; w = w->next) {
         if (w->z_order > max_z) {
             max_z = w->z_order;
         }
@@ -788,7 +783,7 @@ void lower_window(Window* window) {
 
     // Find minimum z-order
     int min_z = window->z_order;
-    for (Window* w = window_list; w != nullptr; w = w->next) {
+    for (Window* w = windows_head; w != nullptr; w = w->next) {
         if (w->z_order < min_z) {
             min_z = w->z_order;
         }
@@ -835,7 +830,7 @@ Window* focused_window() noexcept {
 Window* window_at(int x, int y) {
     // Search from top to bottom
     Window* found = nullptr;
-    for (Window* window = window_list; window != nullptr; window = window->next) {
+    for (Window* window = windows_head; window != nullptr; window = window->next) {
         if (window->surface == nullptr ||
             (window->surface->flags & compositor::FLAG_VISIBLE) == 0) {
             continue;
@@ -854,7 +849,7 @@ Window* window_at(int x, int y) {
 }
 
 Window* get_window(std::uint32_t id) noexcept {
-    for (Window* window = window_list; window != nullptr; window = window->next) {
+    for (Window* window = windows_head; window != nullptr; window = window->next) {
         if (window->id == id) {
             return window;
         }
@@ -883,11 +878,13 @@ void set_paint_callback(Window* window,
     window->paint_callback = callback;
     if (window->surface != nullptr) {
         compositor::set_paint_callback(window->surface,
-            [callback](compositor::Surface* surface, int x, int y,
-                          std::uint32_t width, std::uint32_t height) {
+            [](compositor::Surface* surface, int x, int y,
+               int width, int height) {
                 Window* win = static_cast<Window*>(surface->user_data);
-                if (callback != nullptr) {
-                    callback(win, x, y, width, height);
+                if (win->paint_callback != nullptr) {
+                    win->paint_callback(win, x, y,
+                                        static_cast<std::uint32_t>(width),
+                                        static_cast<std::uint32_t>(height));
                 }
             });
     }
@@ -974,10 +971,6 @@ void process_mouse_button(int x, int y, std::uint32_t button, bool pressed) {
 
     if (pressed) {
         // Check for double-click
-        const bool is_double_click =
-            (target == double_click_window) &&
-            (target != nullptr);
-
         if (target != nullptr) {
             focus_window(target);
 
@@ -1087,9 +1080,9 @@ Stats stats() noexcept {
     s.total_windows = window_count;
     s.focused_window_id = focused != nullptr ? focused->id : 0;
     s.workspaces = MAX_WORKSPACES;
-    s.current_workspace = current_workspace;
+    s.current_workspace = active_workspace;
 
-    for (Window* window = window_list; window != nullptr; window = window->next) {
+    for (Window* window = windows_head; window != nullptr; window = window->next) {
         if (window->surface != nullptr &&
             (window->surface->flags & compositor::FLAG_VISIBLE) != 0) {
             ++s.visible_windows;
@@ -1103,14 +1096,14 @@ void set_workspace(std::uint32_t workspace) {
     if (workspace >= MAX_WORKSPACES) {
         return;
     }
-    current_workspace = workspace;
+    active_workspace = workspace;
 
     // Show/hide windows based on workspace
-    for (Window* window = window_list; window != nullptr; window = window->next) {
+    for (Window* window = windows_head; window != nullptr; window = window->next) {
         if (window->surface == nullptr) {
             continue;
         }
-        if (window->workspace == current_workspace ||
+        if (window->workspace == active_workspace ||
             (window->state == WindowState::STICKY)) {
             compositor::show(window->surface);
         } else {
@@ -1120,7 +1113,7 @@ void set_workspace(std::uint32_t workspace) {
 }
 
 std::uint32_t current_workspace() noexcept {
-    return current_workspace;
+    return active_workspace;
 }
 
 std::uint32_t workspace_count() noexcept {
@@ -1133,7 +1126,7 @@ std::size_t window_list(Window** out, std::size_t max) noexcept {
     }
 
     std::size_t count = 0;
-    for (Window* window = window_list; window != nullptr && count < max; window = window->next) {
+    for (Window* window = windows_head; window != nullptr && count < max; window = window->next) {
         out[count++] = window;
     }
 
@@ -1186,8 +1179,8 @@ bool wm_load_wallpaper(const char* path) {
 
     // Read the header: magic "NWLP", width, height.
     char header[12];
-    ssize_t n = kernel::vfs::read(*fd, header, sizeof(header));
-    if (n < static_cast<ssize_t>(sizeof(header))) {
+    kernel::vfs::ssize_t n = kernel::vfs::read(*fd, header, sizeof(header));
+    if (n < static_cast<kernel::vfs::ssize_t>(sizeof(header))) {
         kernel::vfs::close(*fd);
         return false;
     }
@@ -1220,7 +1213,8 @@ bool wm_load_wallpaper(const char* path) {
     n = kernel::vfs::read(*fd, wallpaper.pixels,
                           pixel_count * sizeof(std::uint32_t));
     kernel::vfs::close(*fd);
-    if (n < static_cast<ssize_t>(pixel_count * sizeof(std::uint32_t))) {
+    if (n < static_cast<kernel::vfs::ssize_t>(
+                pixel_count * sizeof(std::uint32_t))) {
         heap::release(wallpaper.pixels);
         wallpaper.pixels = nullptr;
         return false;

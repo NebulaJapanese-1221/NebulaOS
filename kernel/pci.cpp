@@ -22,6 +22,8 @@
 
 namespace kernel::pci {
 
+namespace heap = kernel::memory::heap;
+
 namespace {
 
 // Device list
@@ -53,13 +55,13 @@ inline std::uint32_t read_raw(std::uint8_t bus, std::uint8_t slot,
     const std::uint32_t address = create_address(bus, slot, function, offset);
 
     // Write the address to the configuration address port
-    asm volatile("outl %0, %1"
+    asm volatile("outl %0, %w1"
                  :
                  : "a"(address), "Nd"(PCI_CONFIG_ADDRESS));
 
     // Read the data from the configuration data port
     std::uint32_t value;
-    asm volatile("inl %1, %0"
+    asm volatile("inl %w1, %0"
                  : "=a"(value)
                  : "Nd"(PCI_CONFIG_DATA));
 
@@ -74,12 +76,12 @@ inline void write_raw(std::uint8_t bus, std::uint8_t slot,
     const std::uint32_t address = create_address(bus, slot, function, offset);
 
     // Write the address to the configuration address port
-    asm volatile("outl %0, %1"
+    asm volatile("outl %0, %w1"
                  :
                  : "a"(address), "Nd"(PCI_CONFIG_ADDRESS));
 
     // Write the data to the configuration data port
-    asm volatile("outl %0, %1"
+    asm volatile("outl %0, %w1"
                  :
                  : "a"(value), "Nd"(PCI_CONFIG_DATA));
 }
@@ -275,12 +277,18 @@ void probe_device(std::uint8_t bus, std::uint8_t slot,
     }
 
     // Log the device
-    char buffer[128];
-    std::snprintf(buffer, sizeof(buffer),
-                  "[pci] %02x:%02x.%x %04x:%04x %s\n",
-                  bus, slot, function, vendor_id, device_id,
-                  class_name(class_code));
-    drivers::serial::write_line(buffer);
+    drivers::serial::write("[pci] ");
+    drivers::serial::write_hex(bus);
+    drivers::serial::write(":");
+    drivers::serial::write_hex(slot);
+    drivers::serial::write(".");
+    drivers::serial::write_hex(function);
+    drivers::serial::write(" ");
+    drivers::serial::write_hex(vendor_id);
+    drivers::serial::write(":");
+    drivers::serial::write_hex(device_id);
+    drivers::serial::write(" ");
+    drivers::serial::write_line(class_name(class_code));
 }
 
 // Helper: scan a bus
@@ -327,8 +335,8 @@ void scan() {
     }
 
     // Scan all buses
-    for (std::uint8_t bus = 0; bus < MAX_BUSES; ++bus) {
-        scan_bus(bus);
+    for (std::uint32_t bus = 0; bus < MAX_BUSES; ++bus) {
+        scan_bus(static_cast<std::uint8_t>(bus));
     }
 }
 

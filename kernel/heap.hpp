@@ -71,29 +71,6 @@ bool validate() noexcept;
 // Get the heap base address
 std::uintptr_t base_address() noexcept;
 
-// C++ operator new/delete for kernel
-inline void* operator new(std::size_t size) {
-    return allocate(size);
-}
 
-inline void* operator new[](std::size_t size) {
-    return allocate(size);
-}
-
-inline void operator delete(void* ptr) noexcept {
-    release(ptr);
-}
-
-inline void operator delete[](void* ptr) noexcept {
-    release(ptr);
-}
-
-inline void operator delete(void* ptr, std::size_t) noexcept {
-    release(ptr);
-}
-
-inline void operator delete[](void* ptr, std::size_t) noexcept {
-    release(ptr);
-}
 
 } // namespace kernel::memory::heap

@@ -24,6 +24,9 @@
 
 namespace kernel::compositor {
 
+namespace heap = kernel::memory::heap;
+namespace pmm = kernel::memory::pmm;
+
 namespace {
 
 // Screen buffer (back buffer)
@@ -56,33 +59,7 @@ std::uint32_t next_surface_id = 1;
 // Vsync counter
 std::uint64_t frame_count = 0;
 
-// Helper: clamp a value
-inline int clamp(int value, int min, int max) {
-    if (value < min) return min;
-    if (value > max) return max;
-    return value;
-}
 
-// Helper: check if a rectangle intersects the screen
-bool intersects_screen(int x, int y, std::uint32_t width, std::uint32_t height) {
-    if (x < 0) {
-        width = static_cast<std::uint32_t>(
-            static_cast<int>(width) + x);
-        x = 0;
-    }
-    if (y < 0) {
-        height = static_cast<std::uint32_t>(
-            static_cast<int>(height) + y);
-        y = 0;
-    }
-    if (x + static_cast<int>(width) > static_cast<int>(config.screen_width)) {
-        width = config.screen_width - x;
-    }
-    if (y + static_cast<int>(height) > static_cast<int>(config.screen_height)) {
-        height = config.screen_height - y;
-    }
-    return width > 0 && height > 0;
-}
 
 // Helper: sort surfaces by z-order (simple insertion sort)
 void sort_surfaces() {

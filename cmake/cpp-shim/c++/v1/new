@@ -1,0 +1,4 @@
+// Freestanding C++ kernel: <new> is not provided by the host clang
+// resource directory. The kernel defines its own operator new/delete in
+// kernel/memory/heap.hpp and does not use std::bad_alloc, so this header is
+// intentionally empty.

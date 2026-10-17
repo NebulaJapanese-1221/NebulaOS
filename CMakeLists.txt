@@ -91,8 +91,8 @@ set(KERNEL_C_FLAGS
     "-DNEBULA_BUILD_SHA=\"${NEBULA_BUILD_SHA}\""
 )
 
-set(KERNEL_CXX_FLAGS "${KERNEL_C_FLAGS} -std=gnu++17")
-set(KERNEL_ASM_FLAGS "-f elf32 -g")
+set(KERNEL_CXX_FLAGS ${KERNEL_C_FLAGS} -std=gnu++17)
+set(KERNEL_ASM_FLAGS -f elf32 -g)
 
 # Userspace flags (minimal libc)
 # -nostdinc keeps host system headers out; clang's own builtin headers
@@ -104,6 +104,13 @@ execute_process(
     OUTPUT_STRIP_TRAILING_WHITESPACE
     ERROR_QUIET
 )
+find_library(CLANG_RT_BUILTINS
+    NAMES clang_rt.builtins-i386
+    PATHS "${CLANG_RESOURCE_DIR}/lib/linux"
+    NO_DEFAULT_PATH
+    REQUIRED
+)
+set(KERNEL_CXX_FLAGS ${KERNEL_CXX_FLAGS} -isystem ${CLANG_RESOURCE_DIR}/include -isystem ${CMAKE_SOURCE_DIR}/cmake/cpp-shim/c++/v1)
 set(USER_C_FLAGS
     -m32
     -nostdinc
@@ -137,11 +144,12 @@ set(USER_CXX_FLAGS
     -pipe
     -fdiagnostics-color=always
     -std=gnu++17
+    -isystem ${CMAKE_SOURCE_DIR}/cmake/cpp-shim/c++/v1
 )
-set(USER_ASM_FLAGS "-f elf32")
+set(USER_ASM_FLAGS -f elf32)
 
 # Linker flags
-set(KERNEL_LD_FLAGS "-m elf_i386 -nostdlib -z max-page-size=0x1000")
+set(KERNEL_LD_FLAGS -m elf_i386 -nostdlib -z max-page-size=0x1000)
 set(USER_LD_FLAGS -m32 -nostdlib -no-pie)
 
 # =============================================================================
@@ -184,8 +192,9 @@ add_subdirectory(userspace)
 # =============================================================================
 # Kernel ELF target
 # =============================================================================
-add_custom_target(kernel.elf
-    DEPENDS ${KERNEL_ELF}
+add_custom_target(kernel-bin
+    COMMAND ld -m elf_i386 -nostdlib -z max-page-size=0x1000 -T ${KERNEL_DIR}/arch/x86/linker.ld ${KERNEL_OBJS} ${DRIVER_OBJS} ${SHELL_OBJS} ${CLANG_RT_BUILTINS} -o ${KERNEL_ELF}
+    DEPENDS kernel-objects drivers shell ${KERNEL_DIR}/arch/x86/linker.ld
     COMMENT "Building kernel.elf"
 )
 
@@ -199,11 +208,11 @@ add_custom_command(
     COMMAND cp ${BOOT_DIR}/grub/grub.cfg ${ISO_DIR}/boot/grub/grub.cfg
     COMMAND cp ${INITRD_FILE} ${ISO_DIR}/boot/initrd.cpio
     COMMAND ${GRUB_MKRESCUE} -o ${CMAKE_BINARY_DIR}/nebulaos.iso ${ISO_DIR}
-    DEPENDS kernel.elf initrd ${BOOT_DIR}/grub/grub.cfg
+    DEPENDS kernel-bin initrd ${BOOT_DIR}/grub/grub.cfg
     COMMENT "Creating nebulaos.iso"
 )
 
-add_custom_target(nebulaos.iso
+add_custom_target(nebulaos-iso
     DEPENDS ${CMAKE_BINARY_DIR}/nebulaos.iso
     COMMENT "ISO target"
 )
@@ -212,7 +221,7 @@ add_custom_target(nebulaos.iso
 # Default target
 # =============================================================================
 add_custom_target(nebulaos-all
-    DEPENDS nebulaos.iso
+    DEPENDS nebulaos-iso
     COMMENT "Building NebulaOS"
 )
 
@@ -221,19 +230,19 @@ add_custom_target(nebulaos-all
 # =============================================================================
 add_custom_target(run
     COMMAND ${QEMU} -m 64M -cdrom ${CMAKE_BINARY_DIR}/nebulaos.iso
-    DEPENDS nebulaos.iso
+    DEPENDS nebulaos-iso
     COMMENT "Running in QEMU"
 )
 
 add_custom_target(run-serial
     COMMAND ${QEMU} -m 64M -cdrom ${CMAKE_BINARY_DIR}/nebulaos.iso -display none -serial stdio
-    DEPENDS nebulaos.iso
+    DEPENDS nebulaos-iso
     COMMENT "Running in QEMU (serial only)"
 )
 
 add_custom_target(run-debug
     COMMAND ${QEMU} -m 64M -cdrom ${CMAKE_BINARY_DIR}/nebulaos.iso -display none -serial stdio -no-reboot -d int,cpu_reset -D ${BUILD_DIR}/qemu-debug.log
-    DEPENDS nebulaos.iso
+    DEPENDS nebulaos-iso
     COMMENT "Running in QEMU (debug)"
 )
 

@@ -27,12 +27,36 @@ namespace {
 
 AssertHandler g_assert_handler = default_assert_handler;
 
+void append_text(char* buffer, std::size_t capacity, std::size_t& length,
+                 const char* text) {
+    if (text == nullptr) {
+        return;
+    }
+    while (*text != '\0' && length + 1 < capacity) {
+        buffer[length++] = *text++;
+    }
+    buffer[length] = '\0';
+}
+
+void append_line(char* buffer, std::size_t capacity, std::size_t& length,
+                 int line) {
+    char digits[16];
+    std::size_t count = 0;
+    unsigned int value = static_cast<unsigned int>(line);
+    do {
+        digits[count++] = static_cast<char>('0' + value % 10);
+        value /= 10;
+    } while (value != 0 && count < sizeof(digits));
+    while (count > 0 && length + 1 < capacity) {
+        buffer[length++] = digits[--count];
+    }
+    buffer[length] = '\0';
+}
+
 void print_registers(const RegisterState* regs) {
     drivers::serial::write_line("+--------------------------------------------------------------+");
     drivers::serial::write_line("|                    REGISTER DUMP                            |");
     drivers::serial::write_line("+--------------------------------------------------------------+");
-    
-    char buf[128];
     
     drivers::serial::write("EAX: 0x");
     drivers::serial::write_hex(regs->eax);
@@ -95,7 +119,6 @@ void print_stack_trace_impl() {
     int count = backtrace(frames, 32);
     
     for (int i = 0; i < count; ++i) {
-        char buf[64];
         drivers::serial::write("  #");
         drivers::serial::write_decimal(i);
         drivers::serial::write("  0x");
@@ -173,13 +196,21 @@ void default_assert_handler(const char* expr, const char* file, int line,
     
     // Also log to kernel log buffer
     char log_buf[256];
-    int pos = 0;
-    pos += kernel::log::write(log_buf + pos, sizeof(log_buf) - pos, "ASSERT: %s at %s:%d", expr, file, line);
+    std::size_t pos = 0;
+    log_buf[0] = '\0';
+    append_text(log_buf, sizeof(log_buf), pos, "ASSERT: ");
+    append_text(log_buf, sizeof(log_buf), pos, expr);
+    append_text(log_buf, sizeof(log_buf), pos, " at ");
+    append_text(log_buf, sizeof(log_buf), pos, file);
+    append_text(log_buf, sizeof(log_buf), pos, ":");
+    append_line(log_buf, sizeof(log_buf), pos, line);
     if (func) {
-        pos += kernel::log::write(log_buf + pos, sizeof(log_buf) - pos, " in %s", func);
+        append_text(log_buf, sizeof(log_buf), pos, " in ");
+        append_text(log_buf, sizeof(log_buf), pos, func);
     }
     if (msg && msg[0]) {
-        pos += kernel::log::write(log_buf + pos, sizeof(log_buf) - pos, ": %s", msg);
+        append_text(log_buf, sizeof(log_buf), pos, ": ");
+        append_text(log_buf, sizeof(log_buf), pos, msg);
     }
     kernel::log::err(log_buf);
     

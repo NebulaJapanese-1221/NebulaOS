@@ -37,6 +37,10 @@ constexpr std::size_t MAX_FILES = 256;
 // Maximum number of file descriptors per process
 constexpr std::size_t MAX_FDS = 32;
 
+// Freestanding types not provided by the host C library under -nostdinc
+using ssize_t = std::intptr_t;
+using off_t = std::int64_t;
+
 // File types
 enum class FileType : std::uint8_t {
     NONE     = 0,

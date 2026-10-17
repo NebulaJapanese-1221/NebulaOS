@@ -23,6 +23,9 @@
 
 namespace kernel::scheduler {
 
+namespace pmm = kernel::memory::pmm;
+namespace heap = kernel::memory::heap;
+
 namespace {
 
 // Thread list
@@ -54,26 +57,6 @@ std::uint32_t next_thread_id = 1;
 
 // Preemption state
 bool preemption_enabled = true;
-
-// Allocate a kernel stack for a thread
-std::uintptr_t allocate_kernel_stack(std::size_t size) {
-    const std::size_t pages = (size + pmm::PAGE_SIZE - 1) / pmm::PAGE_SIZE;
-    const auto frame = pmm::allocate_frames(pages, pmm::FrameFlags::ZEROED);
-    if (!frame.ok) {
-        return 0;
-    }
-    return frame.value;
-}
-
-// Allocate a user stack for a thread
-std::uintptr_t allocate_user_stack(std::size_t size) {
-    const std::size_t pages = (size + pmm::PAGE_SIZE - 1) / pmm::PAGE_SIZE;
-    const auto frame = pmm::allocate_frames(pages, pmm::FrameFlags::ZEROED);
-    if (!frame.ok) {
-        return 0;
-    }
-    return frame.value;
-}
 
 // Add a thread to the ready queue
 void enqueue_ready(Thread* thread) {
@@ -118,7 +101,7 @@ void remove_from_list(Thread* thread) {
 }
 
 // The idle thread - runs when no other thread is ready
-void idle_entry() {
+void idle_entry(void*) {
     for (;;) {
         asm volatile("hlt");
     }
@@ -305,6 +288,7 @@ void unblock(Thread* thread) {
 }
 
 void sleep(std::uint32_t milliseconds) {
+    (void)milliseconds;
     if (current == nullptr) {
         return;
     }

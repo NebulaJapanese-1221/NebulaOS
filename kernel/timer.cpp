@@ -187,7 +187,7 @@ bool initialize_tsc() {
     // EDX bit 4 of CPUID leaf 0x80000007 reports an invariant TSC, which
     // runs at a constant rate across power states and is safe to use as a
     // wall clock. Leaf 0x15 gives a direct frequency when present.
-    std::uint32_t leaf = 0;
+    std::uint32_t __attribute__((unused)) leaf = 0;
     std::uint32_t eax = 0;
     std::uint32_t ebx = 0;
     std::uint32_t ecx = 0;

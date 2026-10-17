@@ -90,7 +90,7 @@ std::uint32_t* get_or_create_table(std::size_t dir_index,
 }
 
 // Helper: extract flags from a page table entry
-inline std::uint32_t extract_flags(std::uint32_t entry) noexcept {
+inline std::uint32_t __attribute__((unused)) extract_flags(std::uint32_t entry) noexcept {
     return entry & 0xFFF;
 }
 
@@ -132,7 +132,6 @@ bool initialize(std::size_t identity_mib) {
         }
     }
 
-    identity_mib = identity_mib;
     return true;
 }
 
@@ -284,10 +283,6 @@ bool map_device_range(std::uintptr_t physical_base, std::size_t length,
     const std::uintptr_t first_page = physical_base & PAGE_MASK;
     const std::uintptr_t last_page = (physical_base + length + PAGE_SIZE - 1) & PAGE_MASK;
     const std::uintptr_t span = last_page - first_page;
-
-    if (last_page > 0x100000000ULL) {
-        return false;
-    }
     if (device_cursor + span > layout::DEVICE_WINDOW_LIMIT) {
         return false;
     }

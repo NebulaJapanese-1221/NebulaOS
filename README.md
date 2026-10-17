@@ -16,30 +16,31 @@ Electronic contact: [nebulajapanese@gmail.com](mailto:nebulajapanese@gmail.com).
 - LLVM binutils or GNU binutils
 - NASM
 - GRUB utilities (`grub-mkrescue`, typically provided by `grub-pc-bin`)
+- `mtools` (`mformat`, used by `grub-mkrescue`)
 - `xorriso` (used by `grub-mkrescue`)
 - QEMU (`qemu-system-i386`) to run the system
 
 On Debian or Ubuntu, the tools can be installed with:
 
 ```sh
-sudo apt install clang lld nasm grub-pc-bin xorriso qemu-system-x86
+sudo apt install clang lld nasm grub-pc-bin mtools xorriso qemu-system-x86
 ```
 
 On Arch Linux, the tools can be installed with:
 
 ```sh
-sudo pacman -S clang lld nasm grub xorriso qemu-system-x86
+sudo pacman -S clang lld nasm grub mtools xorriso qemu-system-x86
 ```
 
 On Fedora, the tools can be installed with:
 
 ```sh
-sudo dnf install clang lld nasm grub2 xorriso qemu-system-x86
+sudo dnf install clang lld nasm grub2 mtools xorriso qemu-system-x86
 ```
 
 ## Build and run
 
-Requirements: Clang (clang/clang++), LLVM tools, NASM, GRUB utilities, xorriso, and QEMU. The project uses a custom Clang-based toolchain for freestanding i686.
+Requirements: Clang (clang/clang++), LLVM tools, NASM, GRUB utilities, mtools, xorriso, and QEMU. The project uses a custom Clang-based toolchain for freestanding i686.
 
 ```sh
 make

@@ -254,7 +254,8 @@ FrameResult allocate_frame(FrameFlags flags) {
             allocation_hint = (frame + 1) % total_frame_count;
 
             std::uintptr_t addr = address_from_frame(frame);
-            if ((flags & FrameFlags::ZEROED) != FrameFlags::NONE) {
+            if ((static_cast<std::uint32_t>(flags) &
+                 static_cast<std::uint32_t>(FrameFlags::ZEROED)) != 0) {
                 std::memset(reinterpret_cast<void*>(addr), 0, PAGE_SIZE);
             }
             return {addr, true};
@@ -288,7 +289,8 @@ FrameResult allocate_frames(std::size_t count, FrameFlags flags) {
                 allocation_hint = (start_frame + count) % total_frame_count;
 
                 std::uintptr_t addr = address_from_frame(start_frame);
-                if ((flags & FrameFlags::ZEROED) != FrameFlags::NONE) {
+                if ((static_cast<std::uint32_t>(flags) &
+                     static_cast<std::uint32_t>(FrameFlags::ZEROED)) != 0) {
                     std::memset(reinterpret_cast<void*>(addr), 0, count * PAGE_SIZE);
                 }
                 return {addr, true};

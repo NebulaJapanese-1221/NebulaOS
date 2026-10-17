@@ -22,6 +22,8 @@
 
 namespace kernel::vfs {
 
+namespace heap = kernel::memory::heap;
+
 namespace {
 
 // Root node (from the initramfs or first mounted filesystem)
@@ -64,19 +66,6 @@ inline const char* next_component(const char* path) {
         ++path;
     }
     return path;
-}
-
-// Helper: copy a path component
-inline std::size_t copy_component(char* dest, std::size_t dest_size,
-                                          const char* src) {
-    std::size_t len = 0;
-    while (len < dest_size - 1 && src[len] != '\0' &&
-           !is_separator(src[len])) {
-        dest[len] = src[len];
-        ++len;
-    }
-    dest[len] = '\0';
-    return len;
 }
 
 // Helper: resolve a path to a node
@@ -142,43 +131,6 @@ Result<void*> resolve_path(const char* path) {
     }
 
     return {current, true};
-}
-
-// Helper: find the mount point for a path
-Mount* find_mount(const char* path) {
-    if (path == nullptr) {
-        return nullptr;
-    }
-
-    Mount* best = nullptr;
-    std::size_t best_len = 0;
-
-    for (Mount* mount = mount_list; mount != nullptr;
-         mount = mount->next) {
-        const std::size_t target_len = std::strlen(mount->target);
-        if (std::strncmp(path, mount->target, target_len) == 0) {
-            if (target_len > best_len) {
-                best = mount;
-                best_len = target_len;
-            }
-        }
-    }
-
-    return best;
-}
-
-// Helper: get the path relative to a mount point
-const char* relative_path(const char* path,
-                                 const char* mount_point) {
-    const std::size_t mount_len = std::strlen(mount_point);
-    const char* p = path + mount_len;
-    while (*p != '\0' && is_separator(*p)) {
-        ++p;
-    }
-    if (*p == '\0') {
-        return "/";
-    }
-    return p;
 }
 
 // Helper: find an empty file descriptor slot
@@ -386,7 +338,6 @@ Result<FileDescriptor*> open(const char* path,
             return {{}, false};
         }
 
-        void* node = nullptr;
         // Create in the parent directory
         // (In a real implementation, we'd use the parent's ops->create)
         int result = root_ops->create(parent_node.value,

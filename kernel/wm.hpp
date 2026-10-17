@@ -260,10 +260,10 @@ Window* create_window(WindowType type,
                            const char* title,
                            int x, int y,
                            std::uint32_t width, std::uint32_t height,
-                           WindowFlags flags = FLAG_DECORATED |
+                           WindowFlags flags = static_cast<WindowFlags>(FLAG_DECORATED |
                                FLAG_RESIZABLE | FLAG_MOVABLE |
                                FLAG_MINIMIZABLE | FLAG_MAXIMIZABLE |
-                               FLAG_CLOSABLE | FLAG_FOCUSABLE);
+                               FLAG_CLOSABLE | FLAG_FOCUSABLE));
 
 // Destroy a window
 void destroy_window(Window* window);
