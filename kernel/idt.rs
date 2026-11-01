@@ -10,7 +10,6 @@ pub struct IdtEntry {
     _ist: u8,
     type_attr: u8,
     offset_mid: u16,
-    offset_high: u16,
 }
 
 #[repr(C, packed)]
@@ -27,7 +26,6 @@ static mut IDT: [IdtEntry; IDT_ENTRIES] = [IdtEntry {
     _ist: 0,
     type_attr: 0,
     offset_mid: 0,
-    offset_high: 0,
 }; IDT_ENTRIES];
 
 static mut IDT_PTR: IdtPtr = IdtPtr { limit: 0, base: 0 };
@@ -44,7 +42,6 @@ fn idt_set_entry(index: usize, offset: u32, selector: u16, type_attr: u8) {
         IDT[index]._ist = 0;
         IDT[index].type_attr = IDT_PRESENT | IDT_RING0 | type_attr;
         IDT[index].offset_mid = ((offset >> 16) & 0xFFFF) as u16;
-        IDT[index].offset_high = 0;
     }
 }
 
@@ -56,7 +53,7 @@ extern "C" {
 pub fn init() {
     unsafe {
         IDT_PTR.limit = (IDT_ENTRIES * core::mem::size_of::<IdtEntry>() - 1) as u16;
-        IDT_PTR.base = &IDT as *const _ as u32;
+        IDT_PTR.base = core::ptr::addr_of!(IDT) as u32;
 
         for i in 0..IDT_ENTRIES {
             let offset = isr_stub_table[i];
@@ -68,6 +65,6 @@ pub fn init() {
             idt_set_entry(i, offset, gdt::kernel_code_selector(), type_attr);
         }
 
-        idt_load(&IDT_PTR);
+        idt_load(core::ptr::addr_of!(IDT_PTR));
     }
 }

@@ -1,6 +1,6 @@
 // Global Descriptor Table and Task State Segment
 
-use core::ptr::write_volatile;
+use core::ptr;
 
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
@@ -51,7 +51,7 @@ pub(super) fn gdt_set_entry(index: usize, base: u32, limit: u32, access: u8, gra
 pub fn init() {
     unsafe {
         GDT_PTR.limit = (GDT_ENTRIES * core::mem::size_of::<GdtEntry>() - 1) as u16;
-        GDT_PTR.base = &GDT as *const _ as u32;
+        GDT_PTR.base = ptr::addr_of!(GDT) as u32;
 
         // Null descriptor
         gdt_set_entry(0, 0, 0, 0, 0);
@@ -60,7 +60,7 @@ pub fn init() {
         // Kernel data segment: base=0, limit=4GB, present, ring0, data, writable
         gdt_set_entry(2, 0, 0xFFFFF, 0x92, 0xCF);
 
-        load_gdt(&GDT_PTR);
+        load_gdt(ptr::addr_of!(GDT_PTR));
     }
 }
 

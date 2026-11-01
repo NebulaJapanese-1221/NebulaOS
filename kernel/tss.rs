@@ -87,7 +87,7 @@ pub fn init(kernel_stack_top: u32) {
         TSS.ss0 = 0x10; // kernel data segment
 
         // Set up TSS descriptor in GDT
-        let base = &TSS as *const Tss as u32;
+        let base = core::ptr::addr_of!(TSS) as u32;
         let limit = core::mem::size_of::<Tss>() as u32 - 1;
 
         // TSS descriptor: base, limit, access=0x89 (available 32-bit TSS), gran=0x00

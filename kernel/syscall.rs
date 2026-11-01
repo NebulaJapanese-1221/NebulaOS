@@ -1,7 +1,6 @@
 // Syscall interface (int 0x80) and interrupt handler
 
 const SYSCALL_PRINT: u32 = 0;
-const SYSCALL_READ_LINE: u32 = 1;
 const SYSCALL_EXIT: u32 = 2;
 const SYSCALL_GET_TICKS: u32 = 3;
 
@@ -9,26 +8,10 @@ const SYSCALL_GET_TICKS: u32 = 3;
 const REG_EAX: usize = 44 / 4;
 const REG_EBX: usize = 32 / 4;
 const REG_ECX: usize = 40 / 4;
-const REG_EDX: usize = 36 / 4;
-const REG_ESI: usize = 20 / 4;
-const REG_EDI: usize = 16 / 4;
 
 fn port_byte_out(port: u16, data: u8) {
     unsafe {
         core::arch::asm!("out dx, al", in("dx") port, in("al") data);
-    }
-}
-
-fn serial_write_byte(byte: u8) {
-    unsafe {
-        core::arch::asm!("2: in al, dx", "test al, 0x20", "jz 2b", in("dx") 0x3FD, options(nostack));
-    }
-    port_byte_out(0x3F8, byte);
-}
-
-fn serial_write_string(s: &str) {
-    for byte in s.bytes() {
-        serial_write_byte(byte);
     }
 }
 
@@ -46,10 +29,9 @@ pub extern "C" fn isr_handler_rust(interrupt_num: u32, _error_code: u32, regs_pt
         return handle_syscall(regs_ptr);
     }
 
-    // Hardware interrupt or exception - log via serial
-    drivers_serial_write_string("Interrupt: ");
-    drivers_serial_write_dec(interrupt_num);
-    drivers_serial_write_string("\r\n");
+    if interrupt_num == 32 {
+        crate::drivers::pit::pit_tick();
+    }
 
     0
 }
@@ -63,17 +45,7 @@ fn handle_syscall(regs_ptr: *const u32) -> u32 {
                 let ptr = *regs_ptr.add(REG_EBX) as *const u8;
                 let len = *regs_ptr.add(REG_ECX) as usize;
                 let s = core::slice::from_raw_parts(ptr, len);
-                for &b in s {
-                    if b == b'\n' {
-                        serial_write_byte(b'\r');
-                    }
-                    serial_write_byte(b);
-                }
-                0
-            }
-            SYSCALL_READ_LINE => {
-                let _buf = *regs_ptr.add(REG_EBX) as *mut u8;
-                let _len = *regs_ptr.add(REG_ECX) as usize;
+                crate::drivers::wm::console_write(s);
                 0
             }
             SYSCALL_EXIT => {
@@ -85,28 +57,5 @@ fn handle_syscall(regs_ptr: *const u32) -> u32 {
             }
             _ => 0xFFFFFFFF,
         }
-    }
-}
-
-fn drivers_serial_write_string(s: &str) {
-    for byte in s.bytes() {
-        serial_write_byte(byte);
-    }
-}
-
-fn drivers_serial_write_dec(mut val: u32) {
-    if val == 0 {
-        serial_write_byte(b'0');
-        return;
-    }
-    let mut buf = [0u8; 10];
-    let mut pos = 10;
-    while val > 0 {
-        pos -= 1;
-        buf[pos] = b'0' + (val % 10) as u8;
-        val /= 10;
-    }
-    for i in pos..10 {
-        serial_write_byte(buf[i]);
     }
 }

@@ -25,7 +25,14 @@ pub fn init() {
 
 pub fn write_byte(byte: u8) {
     unsafe {
-        core::arch::asm!("2: in al, dx", "test al, 0x20", "jz 2b", in("dx") 0x3F8 + 5, options(nostack));
+        core::arch::asm!(
+            "2: in al, dx",
+            "test al, 0x20",
+            "jz 2b",
+            in("dx") 0x3F8 + 5,
+            out("al") _,
+            options(nostack)
+        );
     }
     port_byte_out(0x3F8, byte);
 }

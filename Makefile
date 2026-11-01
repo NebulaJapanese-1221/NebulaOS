@@ -15,7 +15,7 @@ ISO := nebulaos.iso
 
 all: $(ISO)
 
-$(KERNEL_LIB): Cargo.toml Cargo.lock .cargo/config.toml targets/i686-unknown-nebula.json $(shell find kernel -type f -name '*.rs')
+$(KERNEL_LIB): Cargo.toml Cargo.lock .cargo/config.toml targets/i686-unknown-nebula.json $(shell find kernel userspace -type f -name '*.rs')
 	$(CARGO) build --release
 
 $(ISR_OBJ): kernel/arch/isr.asm
@@ -27,7 +27,7 @@ $(KERNEL_ELF): $(KERNEL_LIB) $(ISR_OBJ) linker.ld
 $(ISO): $(KERNEL_ELF) Makefile
 	mkdir -p boot/iso/boot/grub
 	cp $(KERNEL_ELF) boot/iso/boot/kernel.elf
-	@printf 'set timeout=5\nset timeout_style=menu\nset default=0\n\nmenuentry "NebulaOS" {\n    multiboot2 /boot/kernel.elf\n}\n' > boot/iso/boot/grub/grub.cfg
+	@printf 'serial --unit=0 --speed=115200 --word=8 --parity=no --stop=1\nset gfxmode=1024x768x32;auto\nset gfxpayload=keep\ninsmod vbe\ninsmod gfxterm\nterminal_input console serial\nterminal_output gfxterm serial\nset timeout=5\nset timeout_style=menu\nset default=0\n\nmenuentry "NebulaOS" {\n    multiboot2 /boot/kernel.elf\n}\n' > boot/iso/boot/grub/grub.cfg
 	$(GRUB_MKRESCUE) -o $(ISO) boot/iso
 
 run: $(ISO)

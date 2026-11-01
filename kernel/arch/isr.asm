@@ -27,6 +27,13 @@ multiboot2_header:
     dd 0
     dd multiboot2_header_end - multiboot2_header
     dd -(0xE85250D6 + (multiboot2_header_end - multiboot2_header))
+    dw 5
+    dw 0
+    dd 20
+    dd 1024
+    dd 768
+    dd 32
+    dd 0
     dd 0
     dd 8
 multiboot2_header_end:
@@ -34,6 +41,8 @@ multiboot2_header_end:
 section .text.boot
 _start:
     cli
+    cmp eax, 0x36D76289
+    jne .halt
     mov esp, 0x90000
     xor ebp, ebp
     xor eax, eax
@@ -41,7 +50,9 @@ _start:
     mov ecx, __bss_end
     sub ecx, edi
     rep stosb
+    push ebx
     call kernel_entry
+    add esp, 4
 .halt:
     cli
     hlt

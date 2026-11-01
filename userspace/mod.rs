@@ -1,6 +1,5 @@
 // Userspace module
 
-pub mod shell;
+extern crate alloc;
+
 pub mod apps;
-pub mod runtime;
-pub mod wm;
