@@ -1,0 +1,17 @@
+[package]
+name = "nebulaos"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "nebulaos"
+path = "kernel/src/main.rs"
+crate-type = ["staticlib"]
+
+[profile.release]
+opt-level = "z"
+panic = "abort"
+lto = true
+codegen-units = 1
+
+
