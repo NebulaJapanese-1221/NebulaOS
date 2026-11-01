@@ -2,6 +2,7 @@
 
 pub mod keyboard;
 pub mod mouse;
+pub mod disk;
 pub mod font;
 pub mod framebuffer;
 pub mod serial;

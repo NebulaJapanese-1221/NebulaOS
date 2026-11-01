@@ -1,4 +1,4 @@
-PHONY: all clean run iso debug
+.PHONY: all clean run iso debug data-disk
 
 CARGO ?= cargo
 NASM ?= nasm
@@ -12,6 +12,7 @@ KERNEL_LIB := target/$(TARGET)/release/libnebulaos.a
 ISR_OBJ := kernel/arch/isr.o
 KERNEL_ELF := boot/kernel.elf
 ISO := nebulaos.iso
+DISK := nebulaos.disk
 
 all: $(ISO)
 
@@ -31,7 +32,16 @@ $(ISO): $(KERNEL_ELF) Makefile
 	$(GRUB_MKRESCUE) -o $(ISO) boot/iso
 
 run: $(ISO)
-	$(QEMU) -cdrom $(ISO) -m 256 -vga std -serial stdio
+	@if [ -f "$(DISK)" ]; then \
+		$(QEMU) -cdrom $(ISO) -drive file=$(DISK),format=raw,if=ide -m 256 -vga std -serial stdio; \
+	else \
+		$(QEMU) -cdrom $(ISO) -m 256 -vga std -serial stdio; \
+	fi
+
+data-disk:
+	@test ! -e "$(DISK)" || { echo "$(DISK) already exists; refusing to overwrite it"; exit 1; }
+	dd if=/dev/zero of=$(DISK) bs=1M count=1 status=none
+	@echo "Created blank IDE data disk: $(DISK). NebulaOS will offer to format it on first boot."
 
 debug: $(ISO)
 	$(QEMU) -cdrom $(ISO) -m 256 -vga std -serial stdio -s -S &

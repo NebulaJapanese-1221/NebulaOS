@@ -21,6 +21,11 @@ static mut MOUSE: MouseState = MouseState {
 };
 static mut PACKET: [u8; PACKET_SIZE] = [0; PACKET_SIZE];
 static mut PACKET_INDEX: usize = 0;
+static mut SENSITIVITY: i32 = 2;
+
+pub fn set_sensitivity(value: i32) {
+    unsafe { SENSITIVITY = value.clamp(1, 4); }
+}
 
 fn port_byte_out(port: u16, data: u8) {
     unsafe {
@@ -102,8 +107,11 @@ pub fn poll() -> Option<MouseState> {
 
         let fb_width = crate::drivers::framebuffer::get_width() as i32;
         let fb_height = crate::drivers::framebuffer::get_height() as i32;
-        MOUSE.x = (MOUSE.x + PACKET[1] as i8 as i32).clamp(0, fb_width.saturating_sub(1));
-        MOUSE.y = (MOUSE.y - PACKET[2] as i8 as i32).clamp(0, fb_height.saturating_sub(1));
+        let sensitivity = SENSITIVITY;
+        let dx = PACKET[1] as i8 as i32 * sensitivity / 2;
+        let dy = PACKET[2] as i8 as i32 * sensitivity / 2;
+        MOUSE.x = (MOUSE.x + dx).clamp(0, fb_width.saturating_sub(1));
+        MOUSE.y = (MOUSE.y - dy).clamp(0, fb_height.saturating_sub(1));
         MOUSE.left = PACKET[0] & 0x01 != 0;
         MOUSE.right = PACKET[0] & 0x02 != 0;
         MOUSE.middle = PACKET[0] & 0x04 != 0;

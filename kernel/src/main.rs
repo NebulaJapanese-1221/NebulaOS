@@ -63,6 +63,17 @@ pub extern "C" fn kernel_entry(multiboot_info: *const u8) -> ! {
     drivers::serial::write_string("x");
     drivers::serial::write_dec(framebuffer.height);
     drivers::serial::write_string("\r\n");
+    match drivers::disk::init() {
+        Ok(()) => drivers::serial::write_string(if drivers::disk::is_formatted() {
+            "IDE storage ready; NebulaFS mounted.\r\n"
+        } else {
+            "IDE storage ready; disk needs explicit formatting.\r\n"
+        }),
+        Err(drivers::disk::StorageError::NoDisk) => {
+            drivers::serial::write_string("No IDE disk detected; file manager storage unavailable.\r\n")
+        }
+        Err(_) => drivers::serial::write_string("IDE storage initialization failed.\r\n"),
+    }
 
     drivers::keyboard::init();
     if drivers::mouse::init() {
