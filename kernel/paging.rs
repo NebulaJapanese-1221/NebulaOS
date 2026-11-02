@@ -3,6 +3,7 @@ use core::ptr;
 
 const PAGE_SIZE: usize = 4096;
 const ENTRIES_PER_TABLE: usize = 1024;
+const KERNEL_BUFFER_VIRTUAL_BASE: u32 = 0xD000_0000;
 const MMIO_VIRTUAL_BASE: u32 = 0xE000_0000;
 const MMIO_MAX_SIZE: usize = 64 * 1024 * 1024;
 const USER_PHYSICAL_LIMIT: usize = 0x0080_0000;
@@ -241,6 +242,85 @@ pub fn map_mmio(physical_start: u32, length: usize) -> Option<*mut u8> {
         load_page_dir(cr3);
         Some((MMIO_VIRTUAL_BASE as usize + page_offset) as *mut u8)
     }
+}
+
+pub fn map_kernel_buffer(length: usize) -> Option<*mut u8> {
+    if length == 0 || length > MMIO_MAX_SIZE {
+        return None;
+    }
+
+    let page_count = length.checked_add(PAGE_SIZE - 1)? / PAGE_SIZE;
+    let end = (KERNEL_BUFFER_VIRTUAL_BASE as usize)
+        .checked_add(page_count.checked_mul(PAGE_SIZE)?)?;
+    if end > MMIO_VIRTUAL_BASE as usize {
+        return None;
+    }
+
+    unsafe {
+        let page_directory = KERNEL_PAGE_DIR;
+        if page_directory.is_null() {
+            return None;
+        }
+
+        let mut mapped_pages = 0;
+        while mapped_pages < page_count {
+            let virtual_address =
+                KERNEL_BUFFER_VIRTUAL_BASE as usize + mapped_pages * PAGE_SIZE;
+            let directory_index = virtual_address >> 22;
+            let table_index = (virtual_address >> 12) & 0x3FF;
+            let mut table_entry = (*page_directory).entries[directory_index];
+
+            if table_entry & PAGE_PRESENT == 0 {
+                let Some(table_phys) = frame_allocator::alloc_frame() else {
+                    unmap_kernel_buffer_pages(mapped_pages);
+                    return None;
+                };
+                let table = table_phys as *mut PageTable;
+                ptr::write_bytes(table, 0, 1);
+                table_entry = table_phys as u32 | PAGE_PRESENT | PAGE_READ_WRITE;
+                (*page_directory).entries[directory_index] = table_entry;
+            }
+
+            let table = (table_entry & 0xFFFF_F000) as *mut PageTable;
+            if (*table).entries[table_index] & PAGE_PRESENT != 0 {
+                unmap_kernel_buffer_pages(mapped_pages);
+                return None;
+            }
+            let Some(frame) = frame_allocator::alloc_frame() else {
+                unmap_kernel_buffer_pages(mapped_pages);
+                return None;
+            };
+            (*table).entries[table_index] = frame as u32 | PAGE_PRESENT | PAGE_READ_WRITE;
+            mapped_pages += 1;
+        }
+
+        let cr3: u32;
+        core::arch::asm!("mov {0}, cr3", out(reg) cr3, options(nostack, preserves_flags));
+        load_page_dir(cr3);
+        let buffer = KERNEL_BUFFER_VIRTUAL_BASE as *mut u8;
+        ptr::write_bytes(buffer, 0, length);
+        Some(buffer)
+    }
+}
+
+unsafe fn unmap_kernel_buffer_pages(page_count: usize) {
+    let page_directory = KERNEL_PAGE_DIR;
+    for page in 0..page_count {
+        let virtual_address = KERNEL_BUFFER_VIRTUAL_BASE as usize + page * PAGE_SIZE;
+        let directory_entry = (*page_directory).entries[virtual_address >> 22];
+        if directory_entry & PAGE_PRESENT == 0 {
+            continue;
+        }
+        let table = (directory_entry & 0xFFFF_F000) as *mut PageTable;
+        let page_entry = &mut (*table).entries[(virtual_address >> 12) & 0x3FF];
+        if *page_entry & PAGE_PRESENT != 0 {
+            frame_allocator::free_frame((*page_entry & 0xFFFF_F000) as usize);
+            *page_entry = 0;
+        }
+    }
+    let cr3: u32;
+    core::arch::asm!("mov {0}, cr3", out(reg) cr3, options(nostack, preserves_flags));
+    load_page_dir(cr3);
 }
 
 extern "C" {

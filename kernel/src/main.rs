@@ -61,6 +61,9 @@ pub extern "C" fn kernel_entry(multiboot_info: *const u8) -> ! {
                 drivers::framebuffer::FramebufferError::AddressNotMapped => {
                     "framebuffer map failed"
                 }
+                drivers::framebuffer::FramebufferError::BackBufferAllocationFailed => {
+                    "framebuffer back buffer allocation failed"
+                }
             });
             drivers::serial::write_string("\r\n");
             halt();

@@ -12,6 +12,8 @@ pub struct Framebuffer {
     pub pitch: u32,
     pub bpp: u8,
     pixels: *mut u8,
+    display_pixels: *mut u8,
+    length: usize,
     red_position: u8,
     red_size: u8,
     green_position: u8,
@@ -29,6 +31,7 @@ pub enum FramebufferError {
     UnsupportedPixelFormat,
     FramebufferTooLarge,
     AddressNotMapped,
+    BackBufferAllocationFailed,
 }
 
 pub fn init(multiboot_info: *const u8) -> Result<Framebuffer, FramebufferError> {
@@ -108,13 +111,17 @@ pub fn init(multiboot_info: *const u8) -> Result<Framebuffer, FramebufferError> 
                 .ok_or(FramebufferError::FramebufferTooLarge)?;
             let pixels =
                 paging::map_mmio(address, length).ok_or(FramebufferError::AddressNotMapped)?;
+            let back_buffer = paging::map_kernel_buffer(length)
+                .ok_or(FramebufferError::BackBufferAllocationFailed)?;
 
             let framebuffer = Framebuffer {
                 width,
                 height,
                 pitch,
                 bpp,
-                pixels,
+                pixels: back_buffer,
+                display_pixels: pixels,
+                length,
                 red_position,
                 red_size,
                 green_position,
@@ -215,6 +222,20 @@ pub fn clear_screen(color: u32) {
         return;
     };
     fill_rect(0, 0, framebuffer.width, framebuffer.height, color);
+}
+
+pub fn present() {
+    let Some(framebuffer) = get_fb() else {
+        return;
+    };
+    unsafe {
+        for offset in 0..framebuffer.length {
+            framebuffer
+                .display_pixels
+                .add(offset)
+                .write_volatile(framebuffer.pixels.add(offset).read());
+        }
+    }
 }
 
 pub fn draw_rect(x: u32, y: u32, width: u32, height: u32, color: u32) {

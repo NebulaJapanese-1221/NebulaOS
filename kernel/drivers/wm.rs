@@ -128,6 +128,7 @@ impl WindowManager {
             self.draw_start_menu(pointer);
         }
         self.draw_cursor();
+        framebuffer::present();
     }
 
     fn draw_taskbar(&self, pointer: PointerEvent) {

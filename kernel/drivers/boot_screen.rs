@@ -2,7 +2,8 @@ use crate::drivers::{framebuffer, pit};
 
 const BACKGROUND_TOP: u32 = 0x0B1220;
 const BACKGROUND_BOTTOM: u32 = 0x182C4D;
-const ACCENT: u32 = 0x66D9EF;
+const ACCENT: u32 = 0xD8F7FF;
+const SHADOW: u32 = 0x06101F;
 const TEXT: u32 = 0xF1F5F9;
 const MUTED: u32 = 0xA8B5C9;
 const MIN_DISPLAY_TICKS: u32 = 500;
@@ -120,6 +121,7 @@ impl BootScreen {
             MUTED,
             1,
         );
+        framebuffer::present();
     }
 }
 
@@ -177,11 +179,19 @@ fn draw_cursive_alpha(x: u32, y: u32, scale: u32, color: u32) {
     ];
     for pair in path.windows(2) {
         draw_script_line(
+            x as i32 + pair[0].0 * scale as i32 + 2,
+            y as i32 + pair[0].1 * scale as i32 + 2,
+            x as i32 + pair[1].0 * scale as i32 + 2,
+            y as i32 + pair[1].1 * scale as i32 + 2,
+            scale.max(2) + 2,
+            SHADOW,
+        );
+        draw_script_line(
             x as i32 + pair[0].0 * scale as i32,
             y as i32 + pair[0].1 * scale as i32,
             x as i32 + pair[1].0 * scale as i32,
             y as i32 + pair[1].1 * scale as i32,
-            scale.max(2),
+            scale.max(2) + 1,
             color,
         );
     }
