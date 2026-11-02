@@ -13,6 +13,9 @@ KERNEL_LIB := target/$(TARGET)/release/libnebulaos.a
 ISR_OBJ := kernel/arch/isr.o
 USER_ELF := target/user-demo/demo.elf
 USER_ELF_OBJ := target/user-demo/demo_elf.o
+USER_APP_RS := $(shell find userspace/apps -type f -name '*.rs')
+USER_CARGO_TARGET := target/user-demo/cargo
+USER_CARGO_ELF := $(USER_CARGO_TARGET)/$(TARGET)/release/nebulaos-user-demo
 KERNEL_ELF := boot/kernel.elf
 ISO := nebulaos.iso
 DISK := nebulaos.disk
@@ -25,11 +28,9 @@ $(KERNEL_LIB): Cargo.toml Cargo.lock .cargo/config.toml targets/i686-unknown-neb
 $(ISR_OBJ): kernel/arch/isr.asm
 	$(NASM) -f elf32 kernel/arch/isr.asm -o $(ISR_OBJ)
 
-$(USER_ELF): userspace/demo.asm userspace/demo.ld
-	mkdir -p target/user-demo
-	$(NASM) -f elf32 userspace/demo.asm -o target/user-demo/demo.o
-	$(LD) -m elf_i386 -z max-page-size=0x100 -T userspace/demo.ld -o $(USER_ELF) target/user-demo/demo.o
-	$(OBJCOPY) --strip-all $(USER_ELF)
+$(USER_ELF): userspace/demo/Cargo.toml userspace/demo/src/main.rs userspace/demo/linker.ld userspace/mod.rs userspace/syscall.rs userspace/storage.rs $(USER_APP_RS)
+	cd userspace/demo && $(CARGO) build --release --target ../../targets/$(TARGET).json --target-dir ../../$(USER_CARGO_TARGET)
+	$(OBJCOPY) --strip-all $(USER_CARGO_ELF) $(USER_ELF)
 
 $(USER_ELF_OBJ): $(USER_ELF)
 	cd target/user-demo && $(OBJCOPY) -I binary -O elf32-i386 -B i386 demo.elf demo_elf.o

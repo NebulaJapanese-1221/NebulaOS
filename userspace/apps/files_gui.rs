@@ -1,5 +1,5 @@
 use super::gui::{Application, Button, Canvas, Event, PointerEvent, Rect, ScrollArea, TextField};
-use crate::drivers::disk::{self, FileInfo, StorageError};
+use crate::storage::{self, FileInfo, StorageError};
 
 const FILE_SLOTS: usize = 16;
 
@@ -66,7 +66,7 @@ impl FileManager {
     }
 
     fn refresh(&mut self) {
-        match disk::list_files() {
+        match storage::list_files() {
             Ok(files) => {
                 self.files = files;
                 self.status = "NEBULAFS READY";
@@ -384,7 +384,7 @@ impl Application for FileManager {
                 }
                 if save {
                     self.execute(
-                        disk::write_file(
+                        storage::write_file(
                             &self.name[..self.name_len],
                             &self.content[..self.content_len],
                         ),
@@ -396,7 +396,10 @@ impl Application for FileManager {
                     if let Some(name) = self.selected_name() {
                         let mut name_copy = [0; 16];
                         name_copy[..name.len()].copy_from_slice(name);
-                        self.execute(disk::delete_file(&name_copy[..name.len()]), "FILE DELETED");
+                        self.execute(
+                            storage::delete_file(&name_copy[..name.len()]),
+                            "FILE DELETED",
+                        );
                         self.selected = None;
                     } else {
                         self.status = "SELECT A FILE";
@@ -408,7 +411,7 @@ impl Application for FileManager {
                         let mut old_name_copy = [0; 16];
                         old_name_copy[..old_name.len()].copy_from_slice(old_name);
                         self.execute(
-                            disk::rename_file(
+                            storage::rename_file(
                                 &old_name_copy[..old_name.len()],
                                 &self.name[..self.name_len],
                             ),
@@ -425,7 +428,10 @@ impl Application for FileManager {
                     changed = true;
                 }
                 if confirm && self.format_armed {
-                    self.execute(disk::format_if_blank().map(|_| ()), "BLANK DISK FORMATTED");
+                    self.execute(
+                        storage::format_if_blank().map(|_| ()),
+                        "BLANK DISK FORMATTED",
+                    );
                     self.format_armed = false;
                     changed = true;
                 }
@@ -450,7 +456,7 @@ impl Application for FileManager {
                             self.set_name(&selected_name[..name_len]);
                             self.selected = Some(index);
                             let mut content = [0; 512];
-                            match disk::read_file(&self.name[..self.name_len], &mut content) {
+                            match storage::read_file(&self.name[..self.name_len], &mut content) {
                                 Ok(length) => {
                                     self.content_len = length.min(self.content.len());
                                     self.content[..self.content_len]

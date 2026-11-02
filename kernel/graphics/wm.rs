@@ -1,15 +1,30 @@
 use crate::drivers::framebuffer;
 use crate::drivers::mouse::MouseState;
-use crate::userspace::apps::calculator_gui::Calculator;
-use crate::userspace::apps::editor_gui::TextEditor;
-use crate::userspace::apps::files_gui::FileManager;
-use crate::userspace::apps::gui::{Application, Button, Canvas, Event, PointerEvent, Rect};
-use crate::userspace::apps::monitor_gui::SystemMonitor;
-use crate::userspace::apps::paint_gui::Paint;
-use crate::userspace::apps::settings_gui::Settings;
-use crate::userspace::apps::userdemo_gui::UserModeDemo;
-use alloc::boxed::Box;
 use alloc::vec::Vec;
+
+#[derive(Clone, Copy)]
+struct Rect {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+}
+
+impl Rect {
+    fn contains(self, x: u32, y: u32) -> bool {
+        x >= self.x
+            && y >= self.y
+            && x < self.x.saturating_add(self.width)
+            && y < self.y.saturating_add(self.height)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PointerEvent {
+    x: u32,
+    y: u32,
+    left_down: bool,
+}
 
 const WALLPAPER_TOP: u32 = 0x101C3A;
 const WALLPAPER_BOTTOM: u32 = 0x243D68;
@@ -20,19 +35,72 @@ const MUTED: u32 = 0xA8B5C9;
 const APP_COUNT: usize = 7;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 static mut DARK_THEME: bool = true;
+static mut THEME_CHANGED: bool = false;
 
 pub fn set_dark_theme(enabled: bool) {
     unsafe {
+        THEME_CHANGED |= DARK_THEME != enabled;
         DARK_THEME = enabled;
     }
 }
 
+pub fn take_theme_changed() -> bool {
+    unsafe {
+        let changed = THEME_CHANGED;
+        THEME_CHANGED = false;
+        changed
+    }
+}
+
+pub fn is_dark_theme() -> bool {
+    unsafe { DARK_THEME }
+}
+
 struct Window {
-    app: Box<dyn Application>,
+    pid: u32,
+    kind: AppKind,
     bounds: Rect,
     restore_bounds: Rect,
     minimized: bool,
     maximized: bool,
+}
+
+#[derive(Clone, Copy)]
+enum AppKind {
+    Calculator,
+    TextEditor,
+    FileManager,
+    Settings,
+    Paint,
+    SystemMonitor,
+    UserDemo,
+}
+
+impl AppKind {
+    fn from_menu_index(index: usize) -> Option<Self> {
+        Some(match index {
+            0 => Self::Calculator,
+            1 => Self::TextEditor,
+            2 => Self::FileManager,
+            3 => Self::Settings,
+            4 => Self::Paint,
+            5 => Self::SystemMonitor,
+            6 => Self::UserDemo,
+            _ => return None,
+        })
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::Calculator => "CALCULATOR",
+            Self::TextEditor => "TEXT EDITOR",
+            Self::FileManager => "FILE MANAGER",
+            Self::Settings => "SETTINGS",
+            Self::Paint => "PAINT",
+            Self::SystemMonitor => "SYSTEM MONITOR",
+            Self::UserDemo => "RING-3 DEMO",
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -57,8 +125,6 @@ pub struct WindowManager {
     capture: Capture,
     drag_offset: (u32, u32),
     start_menu_open: bool,
-    start_button: Button,
-    start_apps: [Button; APP_COUNT],
 }
 
 impl WindowManager {
@@ -72,20 +138,11 @@ impl WindowManager {
             capture: Capture::None,
             drag_offset: (0, 0),
             start_menu_open: false,
-            start_button: Button::new("START"),
-            start_apps: [
-                Button::new("CALCULATOR"),
-                Button::new("TEXT EDITOR"),
-                Button::new("FILE MANAGER"),
-                Button::new("SETTINGS"),
-                Button::new("PAINT"),
-                Button::new("SYSTEM MONITOR"),
-                Button::new("RING-3 DEMO"),
-            ],
         }
     }
 
-    pub fn render(&self) {
+    pub fn render(&mut self) {
+        self.prune_exited_windows();
         let width = framebuffer::get_width();
         let height = framebuffer::get_height();
         if width == 0 || height == 0 {
@@ -129,6 +186,23 @@ impl WindowManager {
         }
         self.draw_cursor();
         framebuffer::present();
+        for window in &self.windows {
+            if !window.minimized {
+                let area = app_area(window.bounds);
+                let _ = crate::services::user_process::request_redraw(
+                    window.pid,
+                    crate::services::process::AppRect {
+                        x: area.x,
+                        y: area.y,
+                        width: area.width,
+                        height: area.height,
+                    },
+                    pointer.x,
+                    pointer.y,
+                    pointer.left_down,
+                );
+            }
+        }
     }
 
     fn draw_taskbar(&self, pointer: PointerEvent) {
@@ -136,8 +210,7 @@ impl WindowManager {
         let height = framebuffer::get_height();
         let taskbar_y = height.saturating_sub(44);
         let start_rect = start_button_rect(height);
-        let mut canvas = FramebufferCanvas;
-        self.start_button.render(&mut canvas, start_rect, pointer);
+        draw_window_button(start_rect, "START", 0x285A72, pointer);
         let mut x = 132;
         for (index, window) in self.windows.iter().enumerate() {
             if x + 156 > width.saturating_sub(150) {
@@ -150,9 +223,8 @@ impl WindowManager {
                 height: 28,
             };
             draw_window_button(
-                &mut canvas,
                 rect,
-                window.app.title(),
+                window.kind.title(),
                 if self.focused == Some(index) {
                     0x285A72
                 } else {
@@ -179,10 +251,11 @@ impl WindowManager {
         framebuffer::draw_text(rect.x + 16, rect.y + 14, "NEBULAOS", TEXT, 1);
         framebuffer::draw_text(rect.x + 16, rect.y + 30, "VERSION", MUTED, 1);
         framebuffer::draw_text(rect.x + 76, rect.y + 30, VERSION, ACCENT, 1);
-        let mut canvas = FramebufferCanvas;
         for index in 0..APP_COUNT {
             let row = start_menu_item_rect(rect, index);
-            self.start_apps[index].render(&mut canvas, row, pointer);
+            if let Some(kind) = AppKind::from_menu_index(index) {
+                draw_window_button(row, kind.title(), 0x26374F, pointer);
+            }
         }
     }
 
@@ -199,37 +272,24 @@ impl WindowManager {
             42,
             if is_focused { PANEL } else { 0x263247 },
         );
-        framebuffer::draw_text(rect.x + 14, rect.y + 17, window.app.title(), TEXT, 1);
-        let mut canvas = FramebufferCanvas;
+        framebuffer::draw_text(rect.x + 14, rect.y + 17, window.kind.title(), TEXT, 1);
+        draw_window_button(window_button_rect(rect, 0), "X", 0xE45B67, pointer);
+        draw_window_button(window_button_rect(rect, 1), "_", 0x42546D, pointer);
         draw_window_button(
-            &mut canvas,
-            window_button_rect(rect, 0),
-            "X",
-            0xE45B67,
-            pointer,
-        );
-        draw_window_button(
-            &mut canvas,
-            window_button_rect(rect, 1),
-            "_",
-            0x42546D,
-            pointer,
-        );
-        draw_window_button(
-            &mut canvas,
             window_button_rect(rect, 2),
             if window.maximized { "o" } else { "[]" },
             0x42546D,
             pointer,
         );
         let area = app_area(rect);
-        window.app.render(&mut canvas, area, pointer);
+        framebuffer::fill_rect(area.x, area.y, area.width, area.height, 0xF2F5FA);
         if is_focused {
             framebuffer::draw_rect(rect.x, rect.y, rect.width, rect.height, ACCENT);
         }
     }
 
     pub fn handle_key(&mut self, key: u8) -> bool {
+        self.prune_exited_windows();
         if key == 27 && self.start_menu_open {
             self.start_menu_open = false;
             return true;
@@ -241,19 +301,22 @@ impl WindowManager {
         if key == 27 {
             if let Some(index) = self.focused {
                 if index < self.windows.len() {
+                    crate::services::user_process::terminate(self.windows[index].pid);
                     self.windows.remove(index);
                     self.focused = self.windows.iter().rposition(|window| !window.minimized);
                     self.capture = Capture::None;
+                    self.request_focused_redraw();
                     return true;
                 }
             }
             return false;
         }
         if let Some(index) = self.focused {
-            let window = &mut self.windows[index];
-            return window
-                .app
-                .handle_event(Event::Key(key), app_area(window.bounds));
+            let _ = crate::services::user_process::route_keyboard_event(
+                self.windows[index].pid,
+                key as u32,
+            );
+            return true;
         }
         if let Some(app_index) = match key {
             b'1'..=b'7' => Some((key - b'1') as usize),
@@ -266,7 +329,9 @@ impl WindowManager {
     }
 
     fn open_app(&mut self, index: usize) {
-        let Some(app) = make_app(index) else { return };
+        let Some(kind) = AppKind::from_menu_index(index) else {
+            return;
+        };
         let width = framebuffer::get_width();
         let height = framebuffer::get_height();
         let offset = (self.windows.len() as u32 * 28) % 140;
@@ -276,17 +341,51 @@ impl WindowManager {
             width: 420.min(width.saturating_sub(24)),
             height: 300.min(height.saturating_sub(80)),
         };
+        let app_id = index as u32;
+        let area = app_area(bounds);
+        let content = crate::services::process::AppRect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: area.height,
+        };
+        let pid = match crate::services::user_process::spawn_app(app_id, content) {
+            Ok(pid) => pid,
+            Err(error) => {
+                crate::drivers::serial::write_string("Unable to launch ");
+                crate::drivers::serial::write_string(kind.title());
+                crate::drivers::serial::write_string(": ");
+                crate::drivers::serial::write_string(match error {
+                    crate::services::user_process::UserProcessError::OutOfMemory => "out of memory",
+                    crate::services::user_process::UserProcessError::InvalidElf => "invalid ELF",
+                    crate::services::user_process::UserProcessError::NoLoadableSegments => {
+                        "no loadable ELF segments"
+                    }
+                    crate::services::user_process::UserProcessError::InvalidEntryPoint => {
+                        "invalid ELF entry point"
+                    }
+                    crate::services::user_process::UserProcessError::LoadFailed => {
+                        "ELF load failed"
+                    }
+                });
+                crate::drivers::serial::write_string(".\r\n");
+                return;
+            }
+        };
         self.windows.push(Window {
-            app,
+            pid,
+            kind,
             bounds,
             restore_bounds: bounds,
             minimized: false,
             maximized: false,
         });
         self.focused = Some(self.windows.len() - 1);
+        self.request_focused_redraw();
     }
 
     pub fn handle_mouse(&mut self, mouse: MouseState) -> bool {
+        self.prune_exited_windows();
         let x = mouse.x.max(0) as u32;
         let y = mouse.y.max(0) as u32;
         let moved = self.cursor_x != x || self.cursor_y != y;
@@ -300,8 +399,13 @@ impl WindowManager {
         } else if was_down && mouse.left {
             if let Capture::Drag(index) = self.capture {
                 if let Some(window) = self.windows.get_mut(index) {
-                    window.bounds.x = x.saturating_sub(self.drag_offset.0);
-                    window.bounds.y = y.saturating_sub(self.drag_offset.1).max(40);
+                    window.bounds.x = x
+                        .saturating_sub(self.drag_offset.0)
+                        .min(framebuffer::get_width().saturating_sub(window.bounds.width));
+                    window.bounds.y = y
+                        .saturating_sub(self.drag_offset.1)
+                        .max(40)
+                        .min(framebuffer::get_height().saturating_sub(window.bounds.height + 44));
                 }
             }
         }
@@ -316,11 +420,16 @@ impl WindowManager {
         }
         if let Some(index) = self.focused {
             if index < self.windows.len() && !self.windows[index].minimized {
-                let area = app_area(self.windows[index].bounds);
-                changed |= self.windows[index]
-                    .app
-                    .handle_event(Event::Pointer(pointer), area);
+                let _ = crate::services::user_process::route_pointer_event(
+                    self.windows[index].pid,
+                    pointer.x,
+                    pointer.y,
+                    pointer.left_down,
+                );
             }
+        }
+        if matches!(self.capture, Capture::Drag(_)) {
+            self.request_focused_redraw();
         }
         changed
     }
@@ -432,8 +541,10 @@ impl WindowManager {
                     && window_button_rect(self.windows[index].bounds, 0)
                         .contains(pointer.x, pointer.y)
                 {
+                    crate::services::user_process::terminate(self.windows[index].pid);
                     self.windows.remove(index);
                     self.focused = self.windows.iter().rposition(|window| !window.minimized);
+                    self.request_focused_redraw();
                     return true;
                 }
             }
@@ -444,6 +555,7 @@ impl WindowManager {
                         if self.focused == Some(index) {
                             self.focused =
                                 self.windows.iter().rposition(|window| !window.minimized);
+                            self.request_focused_redraw();
                         }
                         return true;
                     }
@@ -464,6 +576,7 @@ impl WindowManager {
                         };
                         window.maximized = true;
                     }
+                    self.request_focused_redraw();
                     return true;
                 }
             }
@@ -479,6 +592,44 @@ impl WindowManager {
         let window = self.windows.remove(index);
         self.windows.push(window);
         self.focused = Some(self.windows.len() - 1);
+        self.request_focused_redraw();
+    }
+
+    fn request_focused_redraw(&self) {
+        let Some(index) = self.focused else { return };
+        let Some(window) = self.windows.get(index) else {
+            return;
+        };
+        let area = app_area(window.bounds);
+        let _ = crate::services::user_process::request_redraw(
+            window.pid,
+            crate::services::process::AppRect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: area.height,
+            },
+            self.cursor_x,
+            self.cursor_y,
+            self.left_button_down,
+        );
+    }
+
+    fn prune_exited_windows(&mut self) {
+        let focused_pid = self
+            .focused
+            .and_then(|index| self.windows.get(index))
+            .map(|window| window.pid);
+        let old_len = self.windows.len();
+        self.windows
+            .retain(|window| crate::services::process::process_exists(window.pid));
+        if self.windows.len() == old_len {
+            return;
+        }
+        self.focused = focused_pid
+            .and_then(|pid| self.windows.iter().position(|window| window.pid == pid))
+            .or_else(|| self.windows.iter().rposition(|window| !window.minimized));
+        self.capture = Capture::None;
     }
 
     fn pointer(&self) -> PointerEvent {
@@ -506,33 +657,6 @@ impl WindowManager {
     }
 }
 
-fn make_app(index: usize) -> Option<Box<dyn Application>> {
-    Some(match index {
-        0 => Box::new(Calculator::new()),
-        1 => Box::new(TextEditor::new()),
-        2 => Box::new(FileManager::new()),
-        3 => Box::new(Settings::new()),
-        4 => Box::new(Paint::new()),
-        5 => Box::new(SystemMonitor::new()),
-        6 => Box::new(UserModeDemo::new()),
-        _ => return None,
-    })
-}
-
-struct FramebufferCanvas;
-
-impl Canvas for FramebufferCanvas {
-    fn fill_rect(&mut self, rect: Rect, color: u32) {
-        framebuffer::fill_rect(rect.x, rect.y, rect.width, rect.height, color);
-    }
-    fn draw_rect(&mut self, rect: Rect, color: u32) {
-        framebuffer::draw_rect(rect.x, rect.y, rect.width, rect.height, color);
-    }
-    fn draw_text(&mut self, x: u32, y: u32, text: &str, color: u32, scale: u32) {
-        framebuffer::draw_text(x, y, text, color, scale);
-    }
-}
-
 fn app_area(bounds: Rect) -> Rect {
     Rect {
         x: bounds.x,
@@ -552,17 +676,23 @@ fn window_button_rect(bounds: Rect, button: usize) -> Rect {
     }
 }
 
-fn draw_window_button(
-    canvas: &mut dyn Canvas,
-    rect: Rect,
-    label: &str,
-    color: u32,
-    pointer: PointerEvent,
-) {
+fn draw_window_button(rect: Rect, label: &str, color: u32, pointer: PointerEvent) {
     let hover = rect.contains(pointer.x, pointer.y);
-    canvas.fill_rect(rect, if hover { 0x1596B5 } else { color });
-    canvas.draw_rect(rect, if hover { ACCENT } else { 0x516786 });
-    canvas.draw_text(
+    framebuffer::fill_rect(
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height,
+        if hover { 0x1596B5 } else { color },
+    );
+    framebuffer::draw_rect(
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height,
+        if hover { ACCENT } else { 0x516786 },
+    );
+    framebuffer::draw_text(
         rect.x + 5,
         rect.y + rect.height.saturating_sub(8) / 2,
         label,

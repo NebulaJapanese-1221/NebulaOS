@@ -1,14 +1,35 @@
-use crate::memory::{frame_allocator, paging};
 use crate::arch::{gdt, tss};
+use crate::memory::{frame_allocator, paging};
 
 const MAX_PROCESSES: usize = 8;
 const STACK_FRAME_WORDS: usize = 19;
+const EVENT_QUEUE_SIZE: usize = 16;
+const REG_INTERRUPT: usize = 12;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct UserEvent {
+    pub kind: u32,
+    pub key: u32,
+    pub x: u32,
+    pub y: u32,
+    pub left_down: u32,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct AppRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ProcessState {
     Unused,
     Ready,
     Running,
+    Blocked,
     Zombie,
 }
 
@@ -18,6 +39,12 @@ struct Process {
     page_directory: u32,
     kernel_stack_frame: usize,
     kernel_stack_top: u32,
+    app_id: u32,
+    content: AppRect,
+    events: [UserEvent; EVENT_QUEUE_SIZE],
+    event_head: usize,
+    event_count: usize,
+    draw_dirty: bool,
     state: ProcessState,
 }
 
@@ -27,6 +54,23 @@ impl Process {
         page_directory: 0,
         kernel_stack_frame: 0,
         kernel_stack_top: 0,
+        app_id: 0,
+        content: AppRect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        },
+        events: [UserEvent {
+            kind: 0,
+            key: 0,
+            x: 0,
+            y: 0,
+            left_down: 0,
+        }; EVENT_QUEUE_SIZE],
+        event_head: 0,
+        event_count: 0,
+        draw_dirty: false,
         state: ProcessState::Unused,
     };
 }
@@ -53,6 +97,8 @@ pub fn add_user_process(
     user_stack: u32,
     page_directory: u32,
     kernel_stack_frame: usize,
+    app_id: u32,
+    content: AppRect,
 ) -> Option<u32> {
     unsafe {
         let flags: u32;
@@ -108,6 +154,12 @@ pub fn add_user_process(
             page_directory,
             kernel_stack_frame,
             kernel_stack_top,
+            app_id,
+            content,
+            events: [UserEvent::default(); EVENT_QUEUE_SIZE],
+            event_head: 0,
+            event_count: 0,
+            draw_dirty: false,
             state: ProcessState::Ready,
         };
         core::arch::asm!("push {0:e}", "popfd", in(reg) flags, options(preserves_flags));
@@ -115,7 +167,34 @@ pub fn add_user_process(
     }
 }
 
-pub fn terminate_current_user_process() -> bool {
+pub fn current_app_context() -> Option<(u32, AppRect)> {
+    unsafe {
+        if CURRENT_PID == 0 {
+            None
+        } else {
+            let process = &PROCESSES[CURRENT_PID - 1];
+            (process.state == ProcessState::Running).then_some((process.app_id, process.content))
+        }
+    }
+}
+
+pub fn take_current_event() -> Option<UserEvent> {
+    unsafe {
+        if CURRENT_PID == 0 {
+            return None;
+        }
+        let process = &mut PROCESSES[CURRENT_PID - 1];
+        if process.state != ProcessState::Running || process.event_count == 0 {
+            return None;
+        }
+        let event = process.events[process.event_head];
+        process.event_head = (process.event_head + 1) % EVENT_QUEUE_SIZE;
+        process.event_count -= 1;
+        Some(event)
+    }
+}
+
+pub fn block_current_user_process() -> bool {
     unsafe {
         if CURRENT_PID == 0 {
             return false;
@@ -124,14 +203,167 @@ pub fn terminate_current_user_process() -> bool {
         if process.state != ProcessState::Running {
             return false;
         }
-        process.state = ProcessState::Zombie;
+        process.state = ProcessState::Blocked;
         true
+    }
+}
+
+pub fn take_current_draw_dirty() -> bool {
+    unsafe {
+        if CURRENT_PID == 0 {
+            return false;
+        }
+        let process = &mut PROCESSES[CURRENT_PID - 1];
+        let dirty = process.state == ProcessState::Running && process.draw_dirty;
+        process.draw_dirty = false;
+        dirty
+    }
+}
+
+pub fn mark_current_draw_dirty() {
+    unsafe {
+        if CURRENT_PID != 0 && PROCESSES[CURRENT_PID - 1].state == ProcessState::Running {
+            PROCESSES[CURRENT_PID - 1].draw_dirty = true;
+        }
+    }
+}
+
+pub fn route_event(pid: u32, event: UserEvent) -> bool {
+    let flags = disable_interrupts();
+    let queued = unsafe { enqueue_event(pid, event) };
+    restore_interrupts(flags);
+    queued
+}
+
+pub fn update_content_rect(
+    pid: u32,
+    content: AppRect,
+    pointer_x: u32,
+    pointer_y: u32,
+    left_down: bool,
+) -> bool {
+    let flags = disable_interrupts();
+    let updated = unsafe {
+        match pid
+            .checked_sub(1)
+            .and_then(|index| PROCESSES.get_mut(index as usize))
+        {
+            Some(process)
+                if process.state != ProcessState::Unused
+                    && process.state != ProcessState::Zombie =>
+            {
+                process.content = content;
+                true
+            }
+            _ => false,
+        }
+    };
+    let queued = updated
+        && unsafe {
+            enqueue_event(
+                pid,
+                UserEvent {
+                    kind: 3,
+                    x: pointer_x,
+                    y: pointer_y,
+                    left_down: u32::from(left_down),
+                    ..UserEvent::default()
+                },
+            )
+        };
+    restore_interrupts(flags);
+    queued
+}
+
+pub fn process_exists(pid: u32) -> bool {
+    unsafe {
+        pid.checked_sub(1)
+            .and_then(|index| PROCESSES.get(index as usize))
+            .is_some_and(|process| {
+                process.state != ProcessState::Unused && process.state != ProcessState::Zombie
+            })
+    }
+}
+
+pub fn terminate_process(pid: u32) -> bool {
+    let flags = disable_interrupts();
+    let terminated = unsafe {
+        match pid
+            .checked_sub(1)
+            .and_then(|index| PROCESSES.get_mut(index as usize))
+        {
+            Some(process)
+                if process.state != ProcessState::Unused
+                    && process.state != ProcessState::Zombie =>
+            {
+                process.state = ProcessState::Zombie;
+                true
+            }
+            _ => false,
+        }
+    };
+    restore_interrupts(flags);
+    terminated
+}
+
+pub fn terminate_current_user_process() -> bool {
+    unsafe { CURRENT_PID != 0 && terminate_process(CURRENT_PID as u32) }
+}
+
+unsafe fn enqueue_event(pid: u32, event: UserEvent) -> bool {
+    let Some(process) = pid
+        .checked_sub(1)
+        .and_then(|index| PROCESSES.get_mut(index as usize))
+    else {
+        return false;
+    };
+    if process.state == ProcessState::Unused || process.state == ProcessState::Zombie {
+        return false;
+    }
+    if process.event_count == EVENT_QUEUE_SIZE {
+        process.event_head = (process.event_head + 1) % EVENT_QUEUE_SIZE;
+        process.event_count -= 1;
+    }
+    let tail = (process.event_head + process.event_count) % EVENT_QUEUE_SIZE;
+    process.events[tail] = event;
+    process.event_count += 1;
+    if process.state == ProcessState::Blocked {
+        process.state = ProcessState::Ready;
+    }
+    true
+}
+
+fn disable_interrupts() -> u32 {
+    let flags: u32;
+    unsafe {
+        core::arch::asm!(
+            "pushfd",
+            "pop {0:e}",
+            "cli",
+            out(reg) flags,
+            options(preserves_flags)
+        );
+    }
+    flags
+}
+
+fn restore_interrupts(flags: u32) {
+    unsafe {
+        core::arch::asm!("push {0:e}", "popfd", in(reg) flags, options(preserves_flags));
     }
 }
 
 #[no_mangle]
 pub extern "C" fn schedule_rust(current_esp: u32) -> u32 {
     unsafe {
+        let interrupt = *((current_esp as *const u32).add(REG_INTERRUPT));
+        if interrupt == 128
+            && CURRENT_PID != 0
+            && PROCESSES[CURRENT_PID - 1].state == ProcessState::Running
+        {
+            return current_esp;
+        }
+
         if CURRENT_PID == 0 {
             KERNEL_IDLE_ESP = current_esp;
         } else {

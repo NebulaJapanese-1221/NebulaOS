@@ -14,14 +14,17 @@ impl Application for SystemMonitor {
     }
 
     fn render(&self, canvas: &mut dyn Canvas, area: Rect, _pointer: PointerEvent) {
-        let ticks = crate::drivers::pit::ticks();
-        let free = crate::memory::frame_allocator::free_frame_count();
-        let total = crate::memory::frame_allocator::total_frame_count();
+        let mut stats = crate::syscall::SystemStats::default();
+        let available = crate::syscall::system_stats(&mut stats).is_ok();
         canvas.draw_text(area.x + 24, area.y + 24, "SYSTEM HEALTH", 0x1596B5, 1);
         canvas.draw_text(area.x + 24, area.y + 56, "UPTIME TICKS", 0x111827, 1);
-        draw_number(canvas, area.x + 180, area.y + 56, ticks);
+        if available {
+            draw_number(canvas, area.x + 180, area.y + 56, stats.ticks);
+        }
         canvas.draw_text(area.x + 24, area.y + 84, "FREE MEMORY FRAMES", 0x111827, 1);
-        draw_number(canvas, area.x + 180, area.y + 84, free as u32);
+        if available {
+            draw_number(canvas, area.x + 180, area.y + 84, stats.free_frames);
+        }
         canvas.draw_text(
             area.x + 24,
             area.y + 112,
@@ -29,15 +32,26 @@ impl Application for SystemMonitor {
             0x111827,
             1,
         );
-        draw_number(canvas, area.x + 180, area.y + 112, total as u32);
+        if available {
+            draw_number(canvas, area.x + 180, area.y + 112, stats.total_frames);
+        }
         canvas.draw_text(area.x + 24, area.y + 156, "CPU: IA-32", 0x111827, 1);
         canvas.draw_text(
             area.x + 24,
             area.y + 180,
-            "PROCESSES: KERNEL GUI",
+            "PROCESSES: USER MODE",
             0x111827,
             1,
         );
+        if !available {
+            canvas.draw_text(
+                area.x + 24,
+                area.y + 220,
+                "SYSTEM STATS UNAVAILABLE",
+                0xA23B45,
+                1,
+            );
+        }
     }
 
     fn handle_event(&mut self, _event: Event, _area: Rect) -> bool {

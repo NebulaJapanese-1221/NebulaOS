@@ -18,7 +18,12 @@ contains the boot screen and window manager.
 
 GUI applications implement the shared application/event/canvas API in
 `userspace/apps/gui.rs`. The window manager owns desktop/window presentation,
-focus and input routing; apps own their state and render into content areas.
+focus and input routing; each app owns its state in an isolated Ring-3
+process. The kernel preempts user processes with the timer and mediates
+graphics, input, storage, and system settings through `int 0x80` services.
+The `no_std` Rust app runtime in `userspace/demo` embeds the calculator, text
+editor, file manager, settings, paint, system monitor, and user-mode demo as
+independently launched apps.
 The desktop supports multiple windows, raise-on-click, dragging, minimize,
 maximize, and close. GUI controls include buttons, text fields, checkboxes,
 menus, scroll areas, and tab-based focus selection. Buttons activate on

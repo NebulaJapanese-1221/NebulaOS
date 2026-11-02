@@ -1,10 +1,10 @@
-use crate::drivers::disk;
 use crate::memory::{frame_allocator, paging};
-use crate::services::process;
+use crate::services::process::{self, AppRect, UserEvent};
 
 const USER_IMAGE_BASE: u32 = 0x4000_0000;
-const USER_IMAGE_LIMIT: u32 = 0x4001_0000;
+const USER_IMAGE_LIMIT: u32 = 0x4010_0000;
 const USER_STACK_TOP: u32 = 0xC000_0000;
+const USER_STACK_PAGES: u32 = 4;
 const PAGE_SIZE: u32 = 4096;
 const PT_LOAD: u32 = 1;
 const PF_WRITE: u32 = 2;
@@ -14,7 +14,6 @@ const PROGRAM_HEADER_SIZE: usize = 32;
 const MAX_PROGRAM_HEADERS: usize = 16;
 const KERNEL_PHYSICAL_LIMIT: usize = 0x0080_0000;
 const LAST_OUTPUT_CAPACITY: usize = 128;
-const DEMO_FILE_NAME: &[u8] = b"DEMO.ELF";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum UserProcessError {
@@ -23,7 +22,6 @@ pub enum UserProcessError {
     NoLoadableSegments,
     InvalidEntryPoint,
     LoadFailed,
-    Storage(disk::StorageError),
 }
 
 static mut LAST_OUTPUT: [u8; LAST_OUTPUT_CAPACITY] = [0; LAST_OUTPUT_CAPACITY];
@@ -31,37 +29,25 @@ static mut LAST_OUTPUT_LENGTH: usize = 0;
 
 unsafe extern "C" {
     #[link_name = "_binary_demo_elf_start"]
-    static USER_ELF_START: u8;
+    static USER_APP_START: u8;
     #[link_name = "_binary_demo_elf_end"]
-    static USER_ELF_END: u8;
+    static USER_APP_END: u8;
 }
 
-pub fn spawn_demo() -> Result<u32, UserProcessError> {
-    let mut image = [0u8; 512];
-    match disk::read_file(DEMO_FILE_NAME, &mut image) {
-        Ok(length) => spawn_image(&image[..length]),
-        Err(disk::StorageError::NotFound) => {
-            let image_start = core::ptr::addr_of!(USER_ELF_START);
-            let image_end = core::ptr::addr_of!(USER_ELF_END);
-            let embedded_len = image_end as usize - image_start as usize;
-            if embedded_len > image.len() {
-                return Err(UserProcessError::LoadFailed);
-            }
-            let embedded = unsafe { core::slice::from_raw_parts(image_start, embedded_len) };
-            disk::write_file(DEMO_FILE_NAME, embedded).map_err(UserProcessError::Storage)?;
-            spawn_file(DEMO_FILE_NAME)
-        }
-        Err(error) => return Err(UserProcessError::Storage(error)),
+pub fn spawn_app(app_id: u32, content: AppRect) -> Result<u32, UserProcessError> {
+    let image_start = core::ptr::addr_of!(USER_APP_START);
+    let image_end = core::ptr::addr_of!(USER_APP_END);
+    let Some(embedded_len) = (image_end as usize).checked_sub(image_start as usize) else {
+        return Err(UserProcessError::InvalidElf);
+    };
+    if embedded_len == 0 {
+        return Err(UserProcessError::InvalidElf);
     }
+    let embedded = unsafe { core::slice::from_raw_parts(image_start, embedded_len) };
+    spawn_image(embedded, app_id, content)
 }
 
-pub fn spawn_file(name: &[u8]) -> Result<u32, UserProcessError> {
-    let mut image = [0u8; 512];
-    let image_len = disk::read_file(name, &mut image).map_err(UserProcessError::Storage)?;
-    spawn_image(&image[..image_len])
-}
-
-fn spawn_image(image: &[u8]) -> Result<u32, UserProcessError> {
+fn spawn_image(image: &[u8], app_id: u32, content: AppRect) -> Result<u32, UserProcessError> {
     let page_directory =
         paging::create_user_address_space().ok_or(UserProcessError::OutOfMemory)?;
 
@@ -73,9 +59,29 @@ fn spawn_image(image: &[u8]) -> Result<u32, UserProcessError> {
         }
     };
 
-    if paging::map_user_page(page_directory, USER_STACK_TOP - PAGE_SIZE, true).is_none() {
+    for page in 1..=USER_STACK_PAGES {
+        if paging::map_user_page(page_directory, USER_STACK_TOP - page * PAGE_SIZE, true).is_none()
+        {
+            paging::destroy_user_address_space(page_directory);
+            return Err(UserProcessError::OutOfMemory);
+        }
+    }
+    let argument_stack = USER_STACK_TOP - 6 * core::mem::size_of::<u32>() as u32;
+    let Some(stack_frame) = paging::user_page_frame(page_directory, USER_STACK_TOP - PAGE_SIZE)
+    else {
         paging::destroy_user_address_space(page_directory);
-        return Err(UserProcessError::OutOfMemory);
+        return Err(UserProcessError::LoadFailed);
+    };
+    let argument_frame = (stack_frame as usize
+        + (argument_stack - (USER_STACK_TOP - PAGE_SIZE)) as usize)
+        as *mut u32;
+    unsafe {
+        *argument_frame.add(0) = 0;
+        *argument_frame.add(1) = app_id;
+        *argument_frame.add(2) = content.x;
+        *argument_frame.add(3) = content.y;
+        *argument_frame.add(4) = content.width;
+        *argument_frame.add(5) = content.height;
     }
 
     let Some(kernel_stack) = frame_allocator::alloc_frame_below(KERNEL_PHYSICAL_LIMIT) else {
@@ -85,16 +91,60 @@ fn spawn_image(image: &[u8]) -> Result<u32, UserProcessError> {
     unsafe {
         core::ptr::write_bytes(kernel_stack as *mut u8, 0, PAGE_SIZE as usize);
     }
-    let Some(pid) = process::add_user_process(entry, USER_STACK_TOP, page_directory, kernel_stack)
-    else {
+    let Some(pid) = process::add_user_process(
+        entry,
+        argument_stack,
+        page_directory,
+        kernel_stack,
+        app_id,
+        content,
+    ) else {
         paging::destroy_user_address_space(page_directory);
         frame_allocator::free_frame(kernel_stack);
         return Err(UserProcessError::OutOfMemory);
     };
-    crate::drivers::serial::write_string("Queued storage-backed ring-3 process PID ");
+    crate::drivers::serial::write_string("Queued ring-3 application PID ");
     crate::drivers::serial::write_dec(pid);
     crate::drivers::serial::write_string(".\r\n");
     Ok(pid)
+}
+
+pub fn route_keyboard_event(pid: u32, key: u32) -> bool {
+    process::route_event(
+        pid,
+        UserEvent {
+            kind: 1,
+            key,
+            ..UserEvent::default()
+        },
+    )
+}
+
+pub fn route_pointer_event(pid: u32, x: u32, y: u32, left_down: bool) -> bool {
+    process::route_event(
+        pid,
+        UserEvent {
+            kind: 2,
+            x,
+            y,
+            left_down: u32::from(left_down),
+            ..UserEvent::default()
+        },
+    )
+}
+
+pub fn request_redraw(
+    pid: u32,
+    content: AppRect,
+    pointer_x: u32,
+    pointer_y: u32,
+    left_down: bool,
+) -> bool {
+    process::update_content_rect(pid, content, pointer_x, pointer_y, left_down)
+}
+
+pub fn terminate(pid: u32) -> bool {
+    process::terminate_process(pid)
 }
 
 pub fn record_syscall_output(bytes: &[u8]) {
@@ -167,8 +217,11 @@ fn load_elf(image: &[u8], page_directory: u32) -> Result<u32, UserProcessError> 
         let memory_size = read_u32(image, header_offset + 20)? as usize;
         let flags = read_u32(image, header_offset + 24)?;
 
-        if file_size > memory_size || memory_size == 0 {
+        if file_size > memory_size {
             return Err(UserProcessError::InvalidElf);
+        }
+        if memory_size == 0 {
+            continue;
         }
         let file_end = file_offset
             .checked_add(file_size)

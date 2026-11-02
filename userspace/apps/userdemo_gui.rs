@@ -1,4 +1,3 @@
-use crate::drivers::{disk, user_process};
 use crate::userspace::apps::gui::{Application, Button, Canvas, Event, PointerEvent, Rect};
 
 const TEXT: u32 = 0x111827;
@@ -14,7 +13,7 @@ impl UserModeDemo {
     pub const fn new() -> Self {
         Self {
             run_button: Button::new("START USER PROCESS"),
-            status: "Loads DEMO.ELF from NebulaFS at ring 3.",
+            status: "GUI apps are isolated Ring-3 processes.",
         }
     }
 }
@@ -29,7 +28,7 @@ impl Application for UserModeDemo {
         canvas.draw_text(
             area.x + 16,
             area.y + 42,
-            "Stored ELF; private memory and timer scheduling.",
+            "Rust ELF; private memory and timer scheduling.",
             MUTED,
             1,
         );
@@ -44,11 +43,7 @@ impl Application for UserModeDemo {
             pointer,
         );
         canvas.draw_text(area.x + 16, area.y + 128, self.status, ACCENT, 1);
-        let mut output_buffer = [0u8; 64];
-        let output_len = user_process::copy_last_output(&mut output_buffer);
-        if let Ok(output) = core::str::from_utf8(&output_buffer[..output_len]) {
-            canvas.draw_text(area.x + 16, area.y + 152, output, TEXT, 1);
-        }
+        canvas.draw_text(area.x + 16, area.y + 152, self.status, TEXT, 1);
     }
 
     fn handle_event(&mut self, event: Event, area: Rect) -> bool {
@@ -68,32 +63,7 @@ impl Application for UserModeDemo {
         if !run {
             return false;
         }
-        self.status = match user_process::spawn_demo() {
-            Ok(_) => "Storage ELF queued; timer preemption is active.",
-            Err(user_process::UserProcessError::OutOfMemory) => {
-                "Could not allocate process memory."
-            }
-            Err(user_process::UserProcessError::InvalidElf) => {
-                "ELF header or program table rejected."
-            }
-            Err(user_process::UserProcessError::NoLoadableSegments) => {
-                "ELF has no loadable segments."
-            }
-            Err(user_process::UserProcessError::InvalidEntryPoint) => {
-                "ELF entry is not executable."
-            }
-            Err(user_process::UserProcessError::LoadFailed) => "Could not map the ELF image.",
-            Err(user_process::UserProcessError::Storage(disk::StorageError::NoDisk)) => {
-                "Attach an IDE data disk first."
-            }
-            Err(user_process::UserProcessError::Storage(disk::StorageError::NotFormatted)) => {
-                "Format a blank disk in File Manager first."
-            }
-            Err(user_process::UserProcessError::Storage(disk::StorageError::NotFound)) => {
-                "Could not find or install DEMO.ELF."
-            }
-            Err(user_process::UserProcessError::Storage(_)) => "NebulaFS could not load DEMO.ELF.",
-        };
+        self.status = "This application itself is running in Ring 3.";
         true
     }
 }

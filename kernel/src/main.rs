@@ -14,7 +14,7 @@ mod graphics;
 mod memory;
 #[path = "../services/mod.rs"]
 mod services;
-#[path = "../../userspace/mod.rs"]
+#[path = "../userspace.rs"]
 mod userspace;
 
 use core::arch::asm;
@@ -105,10 +105,17 @@ pub extern "C" fn kernel_entry(multiboot_info: *const u8) -> ! {
     boot_screen.update(graphics::boot_screen::BootStage::DesktopReady);
     boot_screen.wait_until_minimum_duration();
     desktop.render();
+    let mut last_periodic_redraw = drivers::pit::ticks();
     drivers::serial::write_string("Graphical desktop ready.\r\n");
 
     loop {
         let mut redraw = false;
+        let ticks = drivers::pit::ticks();
+        if ticks.wrapping_sub(last_periodic_redraw) >= 100 {
+            last_periodic_redraw = ticks;
+            redraw = true;
+        }
+        redraw |= graphics::wm::take_theme_changed();
         if let Some(key) = drivers::keyboard::poll_key() {
             redraw |= desktop.handle_key(key);
         }
