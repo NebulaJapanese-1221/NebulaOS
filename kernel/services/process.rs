@@ -1,5 +1,5 @@
-use crate::drivers::paging;
-use crate::{memory::frame_allocator, tss};
+use crate::memory::{frame_allocator, paging};
+use crate::arch::{gdt, tss};
 
 const MAX_PROCESSES: usize = 8;
 const STACK_FRAME_WORDS: usize = 19;
@@ -86,7 +86,7 @@ pub fn add_user_process(
         let kernel_stack_top = (kernel_stack_frame + 4096) as u32;
         let saved_esp = kernel_stack_top - (STACK_FRAME_WORDS * core::mem::size_of::<u32>()) as u32;
         let frame = saved_esp as *mut u32;
-        let user_data = crate::gdt::user_data_selector() as u32;
+        let user_data = gdt::user_data_selector() as u32;
 
         *frame.add(0) = user_data;
         *frame.add(1) = user_data;
@@ -98,7 +98,7 @@ pub fn add_user_process(
         *frame.add(12) = 32;
         *frame.add(13) = 0;
         *frame.add(14) = entry;
-        *frame.add(15) = crate::gdt::user_code_selector() as u32;
+        *frame.add(15) = gdt::user_code_selector() as u32;
         *frame.add(16) = 0x202;
         *frame.add(17) = user_stack;
         *frame.add(18) = user_data;

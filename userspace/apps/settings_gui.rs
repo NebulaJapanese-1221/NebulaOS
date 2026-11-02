@@ -76,7 +76,7 @@ impl Application for Settings {
                     pointer,
                 );
                 if toggled {
-                    crate::drivers::wm::set_dark_theme(self.dark_theme.checked);
+                    crate::graphics::wm::set_dark_theme(self.dark_theme.checked);
                 }
                 let selected = self.mouse_speed.handle_pointer(
                     Rect {
@@ -99,7 +99,7 @@ impl Application for Settings {
             }
             Event::Key(b' ') if self.focus.selected() == 0 => {
                 self.dark_theme.checked = !self.dark_theme.checked;
-                crate::drivers::wm::set_dark_theme(self.dark_theme.checked);
+                crate::graphics::wm::set_dark_theme(self.dark_theme.checked);
                 true
             }
             Event::Key(b'-' | b'[') if self.focus.selected() == 1 => {

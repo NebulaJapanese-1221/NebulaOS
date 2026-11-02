@@ -1,5 +1,5 @@
-use crate::drivers::font;
-use crate::drivers::paging;
+use crate::graphics::font;
+use crate::memory::paging;
 use core::ptr;
 
 const MULTIBOOT_INFO_MAX_SIZE: usize = 1024 * 1024;

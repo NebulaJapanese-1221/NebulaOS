@@ -1,5 +1,6 @@
-use crate::drivers::{disk, paging, process};
-use crate::memory::frame_allocator;
+use crate::drivers::disk;
+use crate::memory::{frame_allocator, paging};
+use crate::services::process;
 
 const USER_IMAGE_BASE: u32 = 0x4000_0000;
 const USER_IMAGE_LIMIT: u32 = 0x4001_0000;

@@ -10,6 +10,12 @@ brighter stroke and dark offset shadow for improved contrast. Its progress bar m
 graphics, storage, input, and desktop initialization stages, and it remains
 visible for at least five seconds.
 
+Kernel code is organized by responsibility: `kernel/drivers` contains
+hardware-facing drivers, `kernel/memory` contains allocation and paging,
+`kernel/arch` contains CPU tables and interrupt-controller support,
+`kernel/services` contains process and syscall services, and `kernel/graphics`
+contains the boot screen and window manager.
+
 GUI applications implement the shared application/event/canvas API in
 `userspace/apps/gui.rs`. The window manager owns desktop/window presentation,
 focus and input routing; apps own their state and render into content areas.

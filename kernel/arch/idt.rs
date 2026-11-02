@@ -1,6 +1,6 @@
 // Interrupt Descriptor Table
 
-use crate::gdt;
+use crate::arch::gdt;
 
 #[repr(C, packed)]
 #[derive(Clone, Copy)]

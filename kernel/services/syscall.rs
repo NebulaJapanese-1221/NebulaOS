@@ -29,7 +29,7 @@ pub extern "C" fn isr_handler_rust(
         crate::drivers::pit::pit_tick();
     } else if interrupt_num < 32 && !regs_ptr.is_null() && unsafe { *regs_ptr.add(REG_CS) & 3 == 3 }
     {
-        crate::drivers::user_process::exit_from_syscall(regs_ptr, 0x8000_0000 | interrupt_num);
+        crate::services::user_process::exit_from_syscall(regs_ptr, 0x8000_0000 | interrupt_num);
     }
 
     0
@@ -47,7 +47,7 @@ fn handle_syscall(regs_ptr: *mut u32) -> u32 {
                 let address = *regs_ptr.add(REG_EBX);
                 let len = *regs_ptr.add(REG_ECX) as usize;
                 if len > MAX_SYSCALL_WRITE
-                    || !crate::drivers::paging::user_range_is_mapped(address, len)
+                    || !crate::memory::paging::user_range_is_mapped(address, len)
                 {
                     u32::MAX
                 } else {
@@ -59,13 +59,13 @@ fn handle_syscall(regs_ptr: *mut u32) -> u32 {
                             len,
                         );
                     }
-                    crate::drivers::wm::console_write(&buffer[..len]);
-                    crate::drivers::user_process::record_syscall_output(&buffer[..len]);
+                    crate::graphics::wm::console_write(&buffer[..len]);
+                    crate::services::user_process::record_syscall_output(&buffer[..len]);
                     len as u32
                 }
             }
             SYSCALL_EXIT => {
-                if crate::drivers::user_process::exit_from_syscall(regs_ptr, *regs_ptr.add(REG_EBX))
+                if crate::services::user_process::exit_from_syscall(regs_ptr, *regs_ptr.add(REG_EBX))
                 {
                     0
                 } else {

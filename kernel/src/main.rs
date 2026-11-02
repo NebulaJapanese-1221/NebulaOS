@@ -6,14 +6,14 @@ extern crate alloc;
 
 #[path = "../drivers/mod.rs"]
 mod drivers;
-#[path = "../gdt.rs"]
-mod gdt;
-#[path = "../idt.rs"]
-mod idt;
+#[path = "../arch/mod.rs"]
+mod arch;
+#[path = "../graphics/mod.rs"]
+mod graphics;
 #[path = "../memory/mod.rs"]
 mod memory;
-#[path = "../tss.rs"]
-mod tss;
+#[path = "../services/mod.rs"]
+mod services;
 #[path = "../../userspace/mod.rs"]
 mod userspace;
 
@@ -28,17 +28,17 @@ fn panic(_info: &PanicInfo) -> ! {
 
 #[no_mangle]
 pub extern "C" fn kernel_entry(multiboot_info: *const u8) -> ! {
-    gdt::init();
+    arch::gdt::init();
     drivers::serial::init();
     drivers::serial::write_string("NebulaOS kernel started.\r\n");
 
-    tss::init(0x90000);
+    arch::tss::init(0x90000);
     memory::init();
-    drivers::paging::init();
-    drivers::process::init();
-    drivers::allocator::init();
-    idt::init();
-    drivers::pic::remap(0x20, 0x28);
+    memory::paging::init();
+    services::process::init();
+    memory::allocator::init();
+    arch::idt::init();
+    arch::pic::remap(0x20, 0x28);
     drivers::pit::init(100);
 
     let framebuffer = match drivers::framebuffer::init(multiboot_info) {
@@ -75,7 +75,7 @@ pub extern "C" fn kernel_entry(multiboot_info: *const u8) -> ! {
     drivers::serial::write_string("x");
     drivers::serial::write_dec(framebuffer.height);
     drivers::serial::write_string("\r\n");
-    let mut boot_screen = drivers::boot_screen::BootScreen::new();
+    let mut boot_screen = graphics::boot_screen::BootScreen::new();
     match drivers::disk::init() {
         Ok(()) => drivers::serial::write_string(if drivers::disk::is_formatted() {
             "IDE storage ready; NebulaFS mounted.\r\n"
@@ -87,7 +87,7 @@ pub extern "C" fn kernel_entry(multiboot_info: *const u8) -> ! {
         ),
         Err(_) => drivers::serial::write_string("IDE storage initialization failed.\r\n"),
     }
-    boot_screen.update(drivers::boot_screen::BootStage::StorageReady);
+    boot_screen.update(graphics::boot_screen::BootStage::StorageReady);
 
     drivers::keyboard::init();
     if drivers::mouse::init() {
@@ -95,14 +95,14 @@ pub extern "C" fn kernel_entry(multiboot_info: *const u8) -> ! {
     } else {
         drivers::serial::write_string("PS/2 mouse unavailable; keyboard navigation enabled.\r\n");
     }
-    boot_screen.update(drivers::boot_screen::BootStage::InputReady);
+    boot_screen.update(graphics::boot_screen::BootStage::InputReady);
 
-    drivers::pic::unmask_irq(0);
+    arch::pic::unmask_irq(0);
     unsafe {
         asm!("sti");
     }
-    let mut desktop = drivers::wm::WindowManager::new();
-    boot_screen.update(drivers::boot_screen::BootStage::DesktopReady);
+    let mut desktop = graphics::wm::WindowManager::new();
+    boot_screen.update(graphics::boot_screen::BootStage::DesktopReady);
     boot_screen.wait_until_minimum_duration();
     desktop.render();
     drivers::serial::write_string("Graphical desktop ready.\r\n");
