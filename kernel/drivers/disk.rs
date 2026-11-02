@@ -180,7 +180,7 @@ pub fn is_available() -> bool {
     unsafe { DISK_READY }
 }
 pub fn is_formatted() -> bool {
-    unsafe { FORMATTED }
+    is_available() && unsafe { FORMATTED }
 }
 
 pub fn format_if_blank() -> Result<(), StorageError> {

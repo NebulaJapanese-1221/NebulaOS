@@ -10,10 +10,6 @@ pub struct Settings {
 }
 
 impl Settings {
-    pub fn new() -> Self {
-        Self::new_with_state(true, 2)
-    }
-
     pub fn new_with_state(dark_theme: bool, mouse_sensitivity: u32) -> Self {
         let selected_speed = match mouse_sensitivity {
             1 => 0,

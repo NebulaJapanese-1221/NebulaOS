@@ -4,10 +4,10 @@
 
 extern crate alloc;
 
-#[path = "../drivers/mod.rs"]
-mod drivers;
 #[path = "../arch/mod.rs"]
 mod arch;
+#[path = "../drivers/mod.rs"]
+mod drivers;
 #[path = "../graphics/mod.rs"]
 mod graphics;
 #[path = "../memory/mod.rs"]
@@ -23,6 +23,15 @@ use core::panic::PanicInfo;
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     drivers::serial::write_string("Kernel panic.\r\n");
+    let mut output = [0; 128];
+    let length = services::user_process::copy_last_output(&mut output);
+    if length != 0 {
+        drivers::serial::write_string("Captured user output: ");
+        for byte in &output[..length] {
+            drivers::serial::write_byte(*byte);
+        }
+        drivers::serial::write_string("\r\n");
+    }
     halt()
 }
 
@@ -39,6 +48,7 @@ pub extern "C" fn kernel_entry(multiboot_info: *const u8) -> ! {
     memory::allocator::init();
     arch::idt::init();
     arch::pic::remap(0x20, 0x28);
+    arch::pic::mask_irq(0);
     drivers::pit::init(100);
 
     let framebuffer = match drivers::framebuffer::init(multiboot_info) {

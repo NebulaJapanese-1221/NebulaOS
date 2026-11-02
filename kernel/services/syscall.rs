@@ -40,6 +40,10 @@ pub extern "C" fn isr_handler_rust(
         crate::services::user_process::exit_from_syscall(regs_ptr, 0x8000_0000 | interrupt_num);
     }
 
+    if (32..48).contains(&interrupt_num) {
+        crate::arch::pic::eoi((interrupt_num - 32) as u8);
+    }
+
     0
 }
 

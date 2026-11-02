@@ -16,10 +16,13 @@ impl Application for SystemMonitor {
     fn render(&self, canvas: &mut dyn Canvas, area: Rect, _pointer: PointerEvent) {
         let mut stats = crate::syscall::SystemStats::default();
         let available = crate::syscall::system_stats(&mut stats).is_ok();
+        let uptime = crate::syscall::uptime_ticks();
         canvas.draw_text(area.x + 24, area.y + 24, "SYSTEM HEALTH", 0x1596B5, 1);
         canvas.draw_text(area.x + 24, area.y + 56, "UPTIME TICKS", 0x111827, 1);
-        if available {
-            draw_number(canvas, area.x + 180, area.y + 56, stats.ticks);
+        if let Ok(ticks) = uptime {
+            draw_number(canvas, area.x + 180, area.y + 56, ticks);
+        } else {
+            canvas.draw_text(area.x + 180, area.y + 56, "UNAVAILABLE", 0xA23B45, 1);
         }
         canvas.draw_text(area.x + 24, area.y + 84, "FREE MEMORY FRAMES", 0x111827, 1);
         if available {

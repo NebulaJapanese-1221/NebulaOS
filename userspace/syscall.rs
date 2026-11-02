@@ -82,6 +82,7 @@ pub struct SystemStats {
     pub total_frames: u32,
 }
 
+#[cfg(feature = "user-app")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SyscallError {
     MessageTooLong,
@@ -89,6 +90,7 @@ pub enum SyscallError {
     InvalidArgument,
 }
 
+#[cfg(feature = "user-app")]
 pub fn write(message: &[u8]) -> Result<(), SyscallError> {
     if message.len() > MAX_WRITE_LENGTH {
         return Err(SyscallError::MessageTooLong);
@@ -102,6 +104,7 @@ pub fn write(message: &[u8]) -> Result<(), SyscallError> {
     }
 }
 
+#[cfg(feature = "user-app")]
 pub fn uptime_ticks() -> Result<u32, SyscallError> {
     let ticks = invoke(SYSCALL_GET_TICKS, 0, 0);
     if ticks == u32::MAX {
@@ -111,6 +114,7 @@ pub fn uptime_ticks() -> Result<u32, SyscallError> {
     }
 }
 
+#[cfg(feature = "user-app")]
 pub fn exit(code: u32) -> Result<(), SyscallError> {
     if invoke(SYSCALL_EXIT, code, 0) == u32::MAX {
         Err(SyscallError::Unavailable)
@@ -119,6 +123,7 @@ pub fn exit(code: u32) -> Result<(), SyscallError> {
     }
 }
 
+#[cfg(feature = "user-app")]
 pub fn draw(command: &mut DrawCommand) -> Result<(), SyscallError> {
     let number = match command.kind {
         0 => SYSCALL_DRAW_FILL_RECT,
@@ -129,6 +134,7 @@ pub fn draw(command: &mut DrawCommand) -> Result<(), SyscallError> {
     call_struct(number, command)
 }
 
+#[cfg(feature = "user-app")]
 pub fn poll_event(event: &mut AppEvent) -> Result<bool, SyscallError> {
     let result = invoke(SYSCALL_POLL_EVENT, event as *mut AppEvent as u32, 0);
     match result {
@@ -138,6 +144,7 @@ pub fn poll_event(event: &mut AppEvent) -> Result<bool, SyscallError> {
     }
 }
 
+#[cfg(feature = "user-app")]
 pub fn app_context(context: &mut AppContext) -> Result<(), SyscallError> {
     if invoke(
         SYSCALL_GET_APP_CONTEXT,
@@ -151,6 +158,7 @@ pub fn app_context(context: &mut AppContext) -> Result<(), SyscallError> {
     }
 }
 
+#[cfg(feature = "user-app")]
 pub fn storage(request: &mut StorageRequest) -> u32 {
     let number = match request.op {
         0 => SYSCALL_STORAGE_LIST,
@@ -164,10 +172,12 @@ pub fn storage(request: &mut StorageRequest) -> u32 {
     invoke(number, request as *mut StorageRequest as u32, 0)
 }
 
+#[cfg(feature = "user-app")]
 pub fn system_stats(stats: &mut SystemStats) -> Result<(), SyscallError> {
     call_struct(SYSCALL_SYSTEM_STATS, stats)
 }
 
+#[cfg(feature = "user-app")]
 pub fn set_dark_theme(enabled: bool) -> Result<(), SyscallError> {
     if invoke(SYSCALL_SET_WALLPAPER_THEME, u32::from(enabled), 0) == 0 {
         Ok(())
@@ -176,6 +186,7 @@ pub fn set_dark_theme(enabled: bool) -> Result<(), SyscallError> {
     }
 }
 
+#[cfg(feature = "user-app")]
 pub fn set_mouse_sensitivity(sensitivity: u32) -> Result<(), SyscallError> {
     if !matches!(sensitivity, 1 | 2 | 4) {
         return Err(SyscallError::InvalidArgument);
@@ -187,6 +198,7 @@ pub fn set_mouse_sensitivity(sensitivity: u32) -> Result<(), SyscallError> {
     }
 }
 
+#[cfg(feature = "user-app")]
 fn call_struct<T>(number: u32, value: &mut T) -> Result<(), SyscallError> {
     if invoke(number, value as *mut T as u32, 0) == 0 {
         Ok(())
@@ -195,6 +207,7 @@ fn call_struct<T>(number: u32, value: &mut T) -> Result<(), SyscallError> {
     }
 }
 
+#[cfg(feature = "user-app")]
 #[inline]
 fn invoke(number: u32, first_argument: u32, second_argument: u32) -> u32 {
     let mut result = number;

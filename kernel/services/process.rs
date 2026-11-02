@@ -244,18 +244,22 @@ pub fn update_content_rect(
 ) -> bool {
     let flags = disable_interrupts();
     let updated = unsafe {
-        match pid
-            .checked_sub(1)
-            .and_then(|index| PROCESSES.get_mut(index as usize))
-        {
-            Some(process)
-                if process.state != ProcessState::Unused
-                    && process.state != ProcessState::Zombie =>
-            {
+        let Some(index) = pid.checked_sub(1).map(|index| index as usize) else {
+            restore_interrupts(flags);
+            return false;
+        };
+        if index < MAX_PROCESSES {
+            let process = &mut *core::ptr::addr_of_mut!(PROCESSES)
+                .cast::<Process>()
+                .add(index);
+            if process.state != ProcessState::Unused && process.state != ProcessState::Zombie {
                 process.content = content;
                 true
+            } else {
+                false
             }
-            _ => false,
+        } else {
+            false
         }
     };
     let queued = updated
@@ -277,29 +281,35 @@ pub fn update_content_rect(
 
 pub fn process_exists(pid: u32) -> bool {
     unsafe {
-        pid.checked_sub(1)
-            .and_then(|index| PROCESSES.get(index as usize))
-            .is_some_and(|process| {
-                process.state != ProcessState::Unused && process.state != ProcessState::Zombie
-            })
+        let Some(index) = pid.checked_sub(1).map(|index| index as usize) else {
+            return false;
+        };
+        index < MAX_PROCESSES && {
+            let process = &*core::ptr::addr_of!(PROCESSES).cast::<Process>().add(index);
+            process.state != ProcessState::Unused && process.state != ProcessState::Zombie
+        }
     }
 }
 
 pub fn terminate_process(pid: u32) -> bool {
     let flags = disable_interrupts();
     let terminated = unsafe {
-        match pid
-            .checked_sub(1)
-            .and_then(|index| PROCESSES.get_mut(index as usize))
-        {
-            Some(process)
-                if process.state != ProcessState::Unused
-                    && process.state != ProcessState::Zombie =>
-            {
+        let Some(index) = pid.checked_sub(1).map(|index| index as usize) else {
+            restore_interrupts(flags);
+            return false;
+        };
+        if index < MAX_PROCESSES {
+            let process = &mut *core::ptr::addr_of_mut!(PROCESSES)
+                .cast::<Process>()
+                .add(index);
+            if process.state != ProcessState::Unused && process.state != ProcessState::Zombie {
                 process.state = ProcessState::Zombie;
                 true
+            } else {
+                false
             }
-            _ => false,
+        } else {
+            false
         }
     };
     restore_interrupts(flags);
@@ -311,12 +321,15 @@ pub fn terminate_current_user_process() -> bool {
 }
 
 unsafe fn enqueue_event(pid: u32, event: UserEvent) -> bool {
-    let Some(process) = pid
-        .checked_sub(1)
-        .and_then(|index| PROCESSES.get_mut(index as usize))
-    else {
+    let Some(index) = pid.checked_sub(1).map(|index| index as usize) else {
         return false;
     };
+    if index >= MAX_PROCESSES {
+        return false;
+    }
+    let process = &mut *core::ptr::addr_of_mut!(PROCESSES)
+        .cast::<Process>()
+        .add(index);
     if process.state == ProcessState::Unused || process.state == ProcessState::Zombie {
         return false;
     }

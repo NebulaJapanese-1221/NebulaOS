@@ -56,14 +56,14 @@ pub fn init() {
         GDT_PTR.base = ptr::addr_of!(GDT) as u32;
 
         // Null descriptor
-        gdt_set_entry(0, 0, 0, 0, 0);
+        gdt_set_entry((SEG_NULL >> 3) as usize, 0, 0, 0, 0);
         // Kernel code segment: base=0, limit=4GB, present, ring0, code, executable, readable
-        gdt_set_entry(1, 0, 0xFFFFF, 0x9A, 0xCF);
+        gdt_set_entry((SEG_KERNEL_CODE >> 3) as usize, 0, 0xFFFFF, 0x9A, 0xCF);
         // Kernel data segment: base=0, limit=4GB, present, ring0, data, writable
-        gdt_set_entry(2, 0, 0xFFFFF, 0x92, 0xCF);
+        gdt_set_entry((SEG_KERNEL_DATA >> 3) as usize, 0, 0xFFFFF, 0x92, 0xCF);
         // User code/data segments: same flat address space, privilege level 3.
-        gdt_set_entry(4, 0, 0xFFFFF, 0xFA, 0xCF);
-        gdt_set_entry(5, 0, 0xFFFFF, 0xF2, 0xCF);
+        gdt_set_entry((SEG_USER_CODE >> 3) as usize, 0, 0xFFFFF, 0xFA, 0xCF);
+        gdt_set_entry((SEG_USER_DATA >> 3) as usize, 0, 0xFFFFF, 0xF2, 0xCF);
 
         load_gdt(ptr::addr_of!(GDT_PTR));
     }

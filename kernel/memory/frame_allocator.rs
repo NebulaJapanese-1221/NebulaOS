@@ -64,6 +64,33 @@ pub fn alloc_frame_below(limit: usize) -> Option<usize> {
     }
 }
 
+pub fn alloc_contiguous_frames_below(count: usize, limit: usize) -> Option<usize> {
+    if count == 0 {
+        return None;
+    }
+
+    unsafe {
+        let frame_limit = limit
+            .saturating_sub(MEMORY_START)
+            .min(MEMORY_END - MEMORY_START)
+            / FRAME_SIZE;
+        if count > frame_limit {
+            return None;
+        }
+
+        for start in 0..=frame_limit - count {
+            if (start..start + count).all(|index| !get_bit(index)) {
+                for index in start..start + count {
+                    set_bit(index);
+                }
+                ALLOCATED_FRAMES += count;
+                return Some(MEMORY_START + start * FRAME_SIZE);
+            }
+        }
+    }
+    None
+}
+
 pub fn free_frame(addr: usize) {
     unsafe {
         if addr < MEMORY_START || addr >= MEMORY_END {

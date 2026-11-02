@@ -24,15 +24,8 @@ pub fn init() {
 }
 
 pub fn write_byte(byte: u8) {
-    unsafe {
-        core::arch::asm!(
-            "2: in al, dx",
-            "test al, 0x20",
-            "jz 2b",
-            in("dx") 0x3F8 + 5,
-            out("al") _,
-            options(nostack)
-        );
+    while port_byte_in(0x3F8 + 5) & 0x20 == 0 {
+        core::hint::spin_loop();
     }
     port_byte_out(0x3F8, byte);
 }

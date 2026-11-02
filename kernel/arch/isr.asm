@@ -139,20 +139,6 @@ isr_common:
     call isr_handler_rust
     add esp, 12
 
-    ; Send EOI for PIC hardware interrupts (32-47)
-    cmp dword [esp + 48], 32
-    jl near .no_eoi
-    cmp dword [esp + 48], 48
-    jge near .no_eoi
-    cmp dword [esp + 48], 40
-    jl near .no_slave
-    mov al, 0x20
-    out 0xA0, al
-.no_slave:
-    mov al, 0x20
-    out 0x20, al
-.no_eoi:
-
     ; Switch after handling the interrupt so faults and exits can mark a task dead.
     mov eax, [esp + 48]
     cmp eax, 32

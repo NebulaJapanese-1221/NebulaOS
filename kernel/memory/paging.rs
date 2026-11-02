@@ -250,8 +250,8 @@ pub fn map_kernel_buffer(length: usize) -> Option<*mut u8> {
     }
 
     let page_count = length.checked_add(PAGE_SIZE - 1)? / PAGE_SIZE;
-    let end = (KERNEL_BUFFER_VIRTUAL_BASE as usize)
-        .checked_add(page_count.checked_mul(PAGE_SIZE)?)?;
+    let end =
+        (KERNEL_BUFFER_VIRTUAL_BASE as usize).checked_add(page_count.checked_mul(PAGE_SIZE)?)?;
     if end > MMIO_VIRTUAL_BASE as usize {
         return None;
     }
@@ -264,8 +264,7 @@ pub fn map_kernel_buffer(length: usize) -> Option<*mut u8> {
 
         let mut mapped_pages = 0;
         while mapped_pages < page_count {
-            let virtual_address =
-                KERNEL_BUFFER_VIRTUAL_BASE as usize + mapped_pages * PAGE_SIZE;
+            let virtual_address = KERNEL_BUFFER_VIRTUAL_BASE as usize + mapped_pages * PAGE_SIZE;
             let directory_index = virtual_address >> 22;
             let table_index = (virtual_address >> 12) & 0x3FF;
             let mut table_entry = (*page_directory).entries[directory_index];

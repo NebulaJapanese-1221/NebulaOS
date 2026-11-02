@@ -5,7 +5,6 @@ const PIT_COMMAND: u16 = 0x43;
 
 const PIT_SEL_CHANNEL0: u8 = 0x00;
 const PIT_ACCESS_LOHI: u8 = 0x30;
-const PIT_MODE_SQUARE_WAVE: u8 = 0x06;
 const PIT_MODE_RATE_GENERATOR: u8 = 0x04;
 
 const PIT_BASE_FREQ: u32 = 1_193_182;
@@ -20,7 +19,7 @@ fn port_byte_out(port: u16, data: u8) {
 
 pub fn init(frequency: u32) {
     let divisor = PIT_BASE_FREQ / frequency;
-    let mode_byte = PIT_SEL_CHANNEL0 | PIT_ACCESS_LOHI | PIT_MODE_SQUARE_WAVE;
+    let mode_byte = PIT_SEL_CHANNEL0 | PIT_ACCESS_LOHI | PIT_MODE_RATE_GENERATOR;
 
     port_byte_out(PIT_COMMAND, mode_byte);
     port_byte_out(PIT_CHANNEL0, (divisor & 0xFF) as u8);

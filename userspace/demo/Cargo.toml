@@ -3,6 +3,10 @@ name = "nebulaos-user-demo"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["user-app"]
+user-app = []
+
 [profile.release]
 opt-level = "z"
 panic = "abort"

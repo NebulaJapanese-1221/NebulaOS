@@ -1,12 +1,14 @@
 // Global heap allocator
 
 use core::alloc::{GlobalAlloc, Layout};
-use core::ptr::{self, null_mut};
+use core::ptr::null_mut;
 
 use crate::memory::frame_allocator;
 
 const HEAP_SIZE: usize = 64 * 1024; // 64KB initial heap
-const HEAP_START: usize = 0x00300000;
+const PAGE_SIZE: usize = 4096;
+const IDENTITY_MAPPED_LIMIT: usize = 0x0080_0000;
+const WORD_ALIGNMENT: usize = core::mem::size_of::<usize>();
 
 struct HeapBlock {
     size: usize,
@@ -17,24 +19,17 @@ struct HeapBlock {
 static mut HEAP_HEAD: *mut HeapBlock = null_mut();
 static mut HEAP_INITIALIZED: bool = false;
 
-fn align_up(addr: usize, align: usize) -> usize {
-    (addr + align - 1) & !(align - 1)
+fn align_up(addr: usize, align: usize) -> Option<usize> {
+    addr.checked_add(align - 1)
+        .map(|value| value & !(align - 1))
 }
 
 pub fn init() {
     unsafe {
-        // Allocate pages for the heap
-        let pages_needed = HEAP_SIZE / 4096;
-        let mut addr = HEAP_START;
-        for _ in 0..pages_needed {
-            let frame = frame_allocator::alloc_frame().expect("out of memory for heap");
-            // Identity map - heap is in higher half, but for now identity map
-            // In a full paging setup we'd map virtual to physical
-            let _ = frame;
-            addr += 4096;
-        }
-
-        let heap_start = HEAP_START;
+        let pages_needed = HEAP_SIZE / PAGE_SIZE;
+        let heap_start =
+            frame_allocator::alloc_contiguous_frames_below(pages_needed, IDENTITY_MAPPED_LIMIT)
+                .expect("out of memory for heap");
         let block = &mut *(heap_start as *mut HeapBlock);
         block.size = HEAP_SIZE - core::mem::size_of::<HeapBlock>();
         block.free = true;
@@ -56,19 +51,58 @@ unsafe impl GlobalAlloc for HeapAllocator {
             return null_mut();
         }
 
-        let size = align_up(layout.size(), core::mem::size_of::<usize>());
-        let align = layout.align();
+        let Some(size) = align_up(layout.size().max(1), WORD_ALIGNMENT) else {
+            return null_mut();
+        };
+        let alignment = layout.align().max(core::mem::align_of::<HeapBlock>());
 
         let mut current = HEAP_HEAD;
         while !current.is_null() {
             let block = &*current;
-            if block.free && block.size >= size {
-                let block_mut = &mut *(current as *mut HeapBlock);
+            if block.free {
+                let block_address = current as usize;
+                let header_size = core::mem::size_of::<HeapBlock>();
+                let Some(mut payload_address) = align_up(block_address + header_size, alignment)
+                else {
+                    return null_mut();
+                };
+                let mut aligned_block = payload_address - header_size;
+                let prefix_size = aligned_block - block_address;
+                if prefix_size != 0 && prefix_size < header_size + WORD_ALIGNMENT {
+                    let Some(aligned_payload) =
+                        align_up(block_address + header_size * 2 + WORD_ALIGNMENT, alignment)
+                    else {
+                        return null_mut();
+                    };
+                    payload_address = aligned_payload;
+                    aligned_block = payload_address - header_size;
+                }
+
+                let block_end = block_address + header_size + block.size;
+                if payload_address
+                    .checked_add(size)
+                    .is_none_or(|end| end > block_end)
+                {
+                    current = block.next;
+                    continue;
+                }
+
+                if aligned_block != block_address {
+                    let block_mut = &mut *(current as *mut HeapBlock);
+                    let aligned_free = aligned_block as *mut HeapBlock;
+                    (*aligned_free).size = block_end - aligned_block - header_size;
+                    (*aligned_free).free = true;
+                    (*aligned_free).next = block_mut.next;
+                    block_mut.size = aligned_block - block_address - header_size;
+                    block_mut.next = aligned_free;
+                    current = aligned_free;
+                }
+
+                let block_mut = &mut *current;
                 // Split if large enough
-                if block.size > size + core::mem::size_of::<HeapBlock>() {
-                    let remaining = block.size - size - core::mem::size_of::<HeapBlock>();
-                    let new_block = (current as usize + core::mem::size_of::<HeapBlock>() + size)
-                        as *mut HeapBlock;
+                if block_mut.size > size + header_size {
+                    let remaining = block_mut.size - size - header_size;
+                    let new_block = (current as usize + header_size + size) as *mut HeapBlock;
                     let new_block_mut = &mut *(new_block);
                     new_block_mut.size = remaining;
                     new_block_mut.free = true;
@@ -77,7 +111,7 @@ unsafe impl GlobalAlloc for HeapAllocator {
                     block_mut.next = new_block;
                 }
                 block_mut.free = false;
-                return (current as usize + core::mem::size_of::<HeapBlock>()) as *mut u8;
+                return (current as usize + header_size) as *mut u8;
             }
             current = block.next;
         }
@@ -113,4 +147,4 @@ impl HeapAllocator {
 }
 
 #[global_allocator]
-static ALLOCATOR: HeapAllocator = HeapAllocator;
+static ALLOCATOR: HeapAllocator = HeapAllocator::new();

@@ -180,6 +180,23 @@ impl Application for FileManager {
             if let Ok(name) = core::str::from_utf8(&file.name[..name_len]) {
                 canvas.draw_text(rect.x + 6, rect.y + 7, name, 0x111827, 1);
             }
+            draw_file_length(canvas, rect.x + 150, rect.y + 7, file.length);
+        }
+
+        fn draw_file_length(canvas: &mut dyn Canvas, x: u32, y: u32, mut length: u16) {
+            let mut buffer = [0u8; 5];
+            let mut index = buffer.len();
+            loop {
+                index -= 1;
+                buffer[index] = b'0' + (length % 10) as u8;
+                length /= 10;
+                if length == 0 {
+                    break;
+                }
+            }
+            if let Ok(text) = core::str::from_utf8(&buffer[index..]) {
+                canvas.draw_text(x, y, text, 0x516786, 1);
+            }
         }
 
         let right = area.x + 226;

@@ -8,9 +8,11 @@ name = "nebulaos"
 path = "kernel/src/main.rs"
 crate-type = ["staticlib"]
 
+[features]
+user-app = []
+
 [profile.release]
 opt-level = "z"
 panic = "abort"
 lto = true
 codegen-units = 1
-

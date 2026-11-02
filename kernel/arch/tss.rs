@@ -45,7 +45,7 @@ static mut TSS: Tss = Tss {
     prev_task: 0,
     _reserved0: 0,
     esp0: 0,
-    ss0: 0x10,
+    ss0: super::gdt::kernel_data_selector(),
     _reserved1: 0,
     esp1: 0,
     ss1: 0,
@@ -64,17 +64,17 @@ static mut TSS: Tss = Tss {
     ebp: 0,
     esi: 0,
     edi: 0,
-    es: 0x10,
+    es: super::gdt::kernel_data_selector(),
     _reserved4: 0,
-    cs: 0x08,
+    cs: super::gdt::kernel_code_selector(),
     _reserved5: 0,
-    ss: 0x10,
+    ss: super::gdt::kernel_data_selector(),
     _reserved6: 0,
-    ds: 0x10,
+    ds: super::gdt::kernel_data_selector(),
     _reserved7: 0,
-    fs: 0x10,
+    fs: super::gdt::kernel_data_selector(),
     _reserved8: 0,
-    gs: 0x10,
+    gs: super::gdt::kernel_data_selector(),
     _reserved9: 0,
     ldt: 0,
     _reserved10: 0,
@@ -84,7 +84,7 @@ static mut TSS: Tss = Tss {
 pub fn init(kernel_stack_top: u32) {
     unsafe {
         TSS.esp0 = kernel_stack_top;
-        TSS.ss0 = 0x10; // kernel data segment
+        TSS.ss0 = super::gdt::kernel_data_selector();
         TSS.iopb_offset = core::mem::size_of::<Tss>() as u16;
 
         // Set up TSS descriptor in GDT
@@ -95,7 +95,7 @@ pub fn init(kernel_stack_top: u32) {
         super::gdt::gdt_set_entry(3, base, limit, 0x89, 0x00);
 
         // Load TR
-        load_tr(0x18);
+        load_tr(super::gdt::tss_selector());
     }
 }
 

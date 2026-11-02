@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+#[path = "../../../kernel/memory/mem.rs"]
+mod memory_routines;
 #[path = "../../storage.rs"]
 mod storage;
 #[path = "../../mod.rs"]
@@ -55,6 +57,18 @@ impl UserApp {
             Self::Paint(app) => app.render(canvas, area, pointer),
             Self::Monitor(app) => app.render(canvas, area, pointer),
             Self::UserMode(app) => app.render(canvas, area, pointer),
+        }
+    }
+
+    fn title(&self) -> &'static str {
+        match self {
+            Self::Calculator(app) => app.title(),
+            Self::Editor(app) => app.title(),
+            Self::Files(app) => app.title(),
+            Self::Settings(app) => app.title(),
+            Self::Paint(app) => app.title(),
+            Self::Monitor(app) => app.title(),
+            Self::UserMode(app) => app.title(),
         }
     }
 
@@ -162,6 +176,9 @@ pub extern "C" fn _start(app_id: u32, x: u32, y: u32, width: u32, height: u32) -
     let Some(mut app) = UserApp::new(app_id, context) else {
         terminate(1);
     };
+    if syscall::write(app.title().as_bytes()).is_err() {
+        terminate(1);
+    }
     let mut area = Rect {
         x,
         y,
