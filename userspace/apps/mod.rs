@@ -7,3 +7,4 @@ pub mod gui;
 pub mod monitor_gui;
 pub mod paint_gui;
 pub mod settings_gui;
+pub mod userdemo_gui;

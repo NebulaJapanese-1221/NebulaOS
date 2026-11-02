@@ -33,9 +33,22 @@ impl FileManager {
             content: [0; 128],
             content_len: 0,
             selected: None,
-            files: [FileInfo { name: [0; 16], length: 0 }; FILE_SLOTS],
-            name_field: TextField::new(Rect { x: 0, y: 0, width: 0, height: 0 }),
-            content_field: TextField::new(Rect { x: 0, y: 0, width: 0, height: 0 }),
+            files: [FileInfo {
+                name: [0; 16],
+                length: 0,
+            }; FILE_SLOTS],
+            name_field: TextField::new(Rect {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+            }),
+            content_field: TextField::new(Rect {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+            }),
             list_scroll: ScrollArea::new(),
             new_button: Button::new("NEW"),
             save_button: Button::new("SAVE"),
@@ -98,34 +111,71 @@ impl FileManager {
 
     fn row_rect(area: Rect, index: usize, offset: u32) -> Rect {
         Rect {
-            x: area.x + 18, y: (area.y + 82 + index as u32 * 23).saturating_sub(offset),
-            width: 190, height: 21,
+            x: area.x + 18,
+            y: (area.y + 82 + index as u32 * 23).saturating_sub(offset),
+            width: 190,
+            height: 21,
         }
     }
 }
 
 impl Application for FileManager {
-    fn title(&self) -> &'static str { "FILE MANAGER" }
+    fn title(&self) -> &'static str {
+        "FILE MANAGER"
+    }
 
     fn render(&self, canvas: &mut dyn Canvas, area: Rect, pointer: PointerEvent) {
         canvas.draw_text(area.x + 18, area.y + 10, "NAME", 0x1596B5, 1);
-        let name_rect = Rect { x: area.x + 18, y: area.y + 26, width: 170, height: 26 };
+        let name_rect = Rect {
+            x: area.x + 18,
+            y: area.y + 26,
+            width: 170,
+            height: 26,
+        };
         let mut name_field = TextField::new(name_rect);
         name_field.focused = self.name_field.focused;
-        name_field.render(canvas, core::str::from_utf8(&self.name[..self.name_len]).unwrap_or(""));
-        let content_rect = Rect { x: area.x + 226, y: area.y + 170, width: 164, height: 54 };
+        name_field.render(
+            canvas,
+            core::str::from_utf8(&self.name[..self.name_len]).unwrap_or(""),
+        );
+        let content_rect = Rect {
+            x: area.x + 226,
+            y: area.y + 170,
+            width: 164,
+            height: 54,
+        };
         let mut content_field = TextField::new(content_rect);
         content_field.focused = self.content_field.focused;
-        content_field.render(canvas, core::str::from_utf8(&self.content[..self.content_len]).unwrap_or(""));
+        content_field.render(
+            canvas,
+            core::str::from_utf8(&self.content[..self.content_len]).unwrap_or(""),
+        );
 
-        let list = Rect { x: area.x + 18, y: area.y + 58, width: 190, height: area.height.saturating_sub(72) };
-        self.list_scroll.render(canvas, list, FILE_SLOTS as u32 * 23);
+        let list = Rect {
+            x: area.x + 18,
+            y: area.y + 58,
+            width: 190,
+            height: area.height.saturating_sub(72),
+        };
+        self.list_scroll
+            .render(canvas, list, FILE_SLOTS as u32 * 23);
         for (index, file) in self.files.iter().enumerate() {
-            if file.name[0] == 0 { continue; }
+            if file.name[0] == 0 {
+                continue;
+            }
             let rect = Self::row_rect(area, index, self.list_scroll.offset);
             let list_bottom = area.y + area.height.saturating_sub(14);
-            if rect.y + rect.height <= area.y + 82 || rect.y >= list_bottom { continue; }
-            canvas.fill_rect(rect, if self.selected == Some(index) { 0xB8DCE7 } else { 0xE2E8F0 });
+            if rect.y + rect.height <= area.y + 82 || rect.y >= list_bottom {
+                continue;
+            }
+            canvas.fill_rect(
+                rect,
+                if self.selected == Some(index) {
+                    0xB8DCE7
+                } else {
+                    0xE2E8F0
+                },
+            );
             let name_len = file.name.iter().position(|byte| *byte == 0).unwrap_or(16);
             if let Ok(name) = core::str::from_utf8(&file.name[..name_len]) {
                 canvas.draw_text(rect.x + 6, rect.y + 7, name, 0x111827, 1);
@@ -133,15 +183,73 @@ impl Application for FileManager {
         }
 
         let right = area.x + 226;
-        draw_button(canvas, &self.new_button, Rect { x: right, y: area.y + 26, width: 78, height: 26 }, pointer);
-        draw_button(canvas, &self.save_button, Rect { x: right + 86, y: area.y + 26, width: 78, height: 26 }, pointer);
-        draw_button(canvas, &self.delete_button, Rect { x: right, y: area.y + 62, width: 78, height: 26 }, pointer);
-        draw_button(canvas, &self.rename_button, Rect { x: right + 86, y: area.y + 62, width: 78, height: 26 }, pointer);
-        draw_button(canvas, &self.format_button, Rect { x: right, y: area.y + 98, width: 100, height: 26 }, pointer);
+        draw_button(
+            canvas,
+            &self.new_button,
+            Rect {
+                x: right,
+                y: area.y + 26,
+                width: 78,
+                height: 26,
+            },
+            pointer,
+        );
+        draw_button(
+            canvas,
+            &self.save_button,
+            Rect {
+                x: right + 86,
+                y: area.y + 26,
+                width: 78,
+                height: 26,
+            },
+            pointer,
+        );
+        draw_button(
+            canvas,
+            &self.delete_button,
+            Rect {
+                x: right,
+                y: area.y + 62,
+                width: 78,
+                height: 26,
+            },
+            pointer,
+        );
+        draw_button(
+            canvas,
+            &self.rename_button,
+            Rect {
+                x: right + 86,
+                y: area.y + 62,
+                width: 78,
+                height: 26,
+            },
+            pointer,
+        );
+        draw_button(
+            canvas,
+            &self.format_button,
+            Rect {
+                x: right,
+                y: area.y + 98,
+                width: 100,
+                height: 26,
+            },
+            pointer,
+        );
         if self.format_armed {
-            draw_button(canvas, &self.confirm_format_button, Rect {
-                x: right, y: area.y + 134, width: 150, height: 26,
-            }, pointer);
+            draw_button(
+                canvas,
+                &self.confirm_format_button,
+                Rect {
+                    x: right,
+                    y: area.y + 134,
+                    width: 150,
+                    height: 26,
+                },
+                pointer,
+            );
         }
         canvas.draw_text(right, area.y + 232, self.status, 0xA23B45, 1);
         canvas.draw_text(right, area.y + 248, "16 FILES, 512B EACH", 0x111827, 1);
@@ -167,7 +275,9 @@ impl Application for FileManager {
                 self.content_len -= 1;
                 true
             }
-            Event::Key(b'\n') if self.content_field.focused && self.content_len < self.content.len() => {
+            Event::Key(b'\n')
+                if self.content_field.focused && self.content_len < self.content.len() =>
+            {
                 self.content[self.content_len] = b'\n';
                 self.content_len += 1;
                 true
@@ -177,28 +287,93 @@ impl Application for FileManager {
                 self.name_len += 1;
                 true
             }
-            Event::Key(key @ (32..=126)) if self.content_field.focused && self.content_len < self.content.len() => {
+            Event::Key(key @ (32..=126))
+                if self.content_field.focused && self.content_len < self.content.len() =>
+            {
                 self.content[self.content_len] = key;
                 self.content_len += 1;
                 true
             }
-            Event::Key(key @ (b'[' | b']')) => self.list_scroll.handle_key(key, FILE_SLOTS as u32 * 23, area.height.saturating_sub(72)),
+            Event::Key(key @ (b'[' | b']')) => self.list_scroll.handle_key(
+                key,
+                FILE_SLOTS as u32 * 23,
+                area.height.saturating_sub(72),
+            ),
             Event::Key(_) => false,
             Event::Pointer(pointer) => {
-                self.name_field.rect = Rect { x: area.x + 18, y: area.y + 26, width: 170, height: 26 };
+                self.name_field.rect = Rect {
+                    x: area.x + 18,
+                    y: area.y + 26,
+                    width: 170,
+                    height: 26,
+                };
                 let mut changed = self.name_field.handle_pointer(pointer);
-                self.content_field.rect = Rect { x: area.x + 226, y: area.y + 170, width: 164, height: 54 };
+                self.content_field.rect = Rect {
+                    x: area.x + 226,
+                    y: area.y + 170,
+                    width: 164,
+                    height: 54,
+                };
                 changed |= self.content_field.handle_pointer(pointer);
                 let right = area.x + 226;
-                let new = self.new_button.handle_pointer(Rect { x: right, y: area.y + 26, width: 78, height: 26 }, pointer);
-                let save = self.save_button.handle_pointer(Rect { x: right + 86, y: area.y + 26, width: 78, height: 26 }, pointer);
-                let delete = self.delete_button.handle_pointer(Rect { x: right, y: area.y + 62, width: 78, height: 26 }, pointer);
-                let rename = self.rename_button.handle_pointer(Rect { x: right + 86, y: area.y + 62, width: 78, height: 26 }, pointer);
-                let format = self.format_button.handle_pointer(Rect { x: right, y: area.y + 98, width: 100, height: 26 }, pointer);
-                let confirm = self.confirm_format_button.handle_pointer(Rect { x: right, y: area.y + 134, width: 150, height: 26 }, pointer);
+                let new = self.new_button.handle_pointer(
+                    Rect {
+                        x: right,
+                        y: area.y + 26,
+                        width: 78,
+                        height: 26,
+                    },
+                    pointer,
+                );
+                let save = self.save_button.handle_pointer(
+                    Rect {
+                        x: right + 86,
+                        y: area.y + 26,
+                        width: 78,
+                        height: 26,
+                    },
+                    pointer,
+                );
+                let delete = self.delete_button.handle_pointer(
+                    Rect {
+                        x: right,
+                        y: area.y + 62,
+                        width: 78,
+                        height: 26,
+                    },
+                    pointer,
+                );
+                let rename = self.rename_button.handle_pointer(
+                    Rect {
+                        x: right + 86,
+                        y: area.y + 62,
+                        width: 78,
+                        height: 26,
+                    },
+                    pointer,
+                );
+                let format = self.format_button.handle_pointer(
+                    Rect {
+                        x: right,
+                        y: area.y + 98,
+                        width: 100,
+                        height: 26,
+                    },
+                    pointer,
+                );
+                let confirm = self.confirm_format_button.handle_pointer(
+                    Rect {
+                        x: right,
+                        y: area.y + 134,
+                        width: 150,
+                        height: 26,
+                    },
+                    pointer,
+                );
                 if new {
-                    if self.name_len == 0 { self.status = "ENTER A FILE NAME"; }
-                    else {
+                    if self.name_len == 0 {
+                        self.status = "ENTER A FILE NAME";
+                    } else {
                         self.content_len = 0;
                         self.content_field.focused = true;
                         self.name_field.focused = false;
@@ -208,7 +383,13 @@ impl Application for FileManager {
                     changed = true;
                 }
                 if save {
-                    self.execute(disk::write_file(&self.name[..self.name_len], &self.content[..self.content_len]), "FILE SAVED");
+                    self.execute(
+                        disk::write_file(
+                            &self.name[..self.name_len],
+                            &self.content[..self.content_len],
+                        ),
+                        "FILE SAVED",
+                    );
                     changed = true;
                 }
                 if delete {
@@ -217,7 +398,9 @@ impl Application for FileManager {
                         name_copy[..name.len()].copy_from_slice(name);
                         self.execute(disk::delete_file(&name_copy[..name.len()]), "FILE DELETED");
                         self.selected = None;
-                    } else { self.status = "SELECT A FILE"; }
+                    } else {
+                        self.status = "SELECT A FILE";
+                    }
                     changed = true;
                 }
                 if rename {
@@ -225,10 +408,15 @@ impl Application for FileManager {
                         let mut old_name_copy = [0; 16];
                         old_name_copy[..old_name.len()].copy_from_slice(old_name);
                         self.execute(
-                            disk::rename_file(&old_name_copy[..old_name.len()], &self.name[..self.name_len]),
+                            disk::rename_file(
+                                &old_name_copy[..old_name.len()],
+                                &self.name[..self.name_len],
+                            ),
                             "FILE RENAMED",
                         );
-                    } else { self.status = "SELECT A FILE"; }
+                    } else {
+                        self.status = "SELECT A FILE";
+                    }
                     changed = true;
                 }
                 if format {
@@ -251,16 +439,22 @@ impl Application for FileManager {
                 } else if !pointer.left_down && self.row_down && row == self.row_armed {
                     if let Some(index) = row {
                         if self.files[index].name[0] != 0 {
-                            let name_len = self.files[index].name.iter().position(|byte| *byte == 0).unwrap_or(16);
+                            let name_len = self.files[index]
+                                .name
+                                .iter()
+                                .position(|byte| *byte == 0)
+                                .unwrap_or(16);
                             let mut selected_name = [0; 16];
-                            selected_name[..name_len].copy_from_slice(&self.files[index].name[..name_len]);
+                            selected_name[..name_len]
+                                .copy_from_slice(&self.files[index].name[..name_len]);
                             self.set_name(&selected_name[..name_len]);
                             self.selected = Some(index);
                             let mut content = [0; 512];
                             match disk::read_file(&self.name[..self.name_len], &mut content) {
                                 Ok(length) => {
                                     self.content_len = length.min(self.content.len());
-                                    self.content[..self.content_len].copy_from_slice(&content[..self.content_len]);
+                                    self.content[..self.content_len]
+                                        .copy_from_slice(&content[..self.content_len]);
                                     self.status = "FILE SELECTED";
                                 }
                                 Err(_) => self.status = "FILE READ ERROR",

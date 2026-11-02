@@ -56,7 +56,8 @@ impl Application for TextEditor {
         if self.input_len == 0 {
             canvas.draw_text(editor.x + 12, editor.y + 14, "TYPE TO EDIT", 0xA8B5C9, 1);
         }
-        self.clear_button.render(canvas, Self::clear_rect(area), pointer);
+        self.clear_button
+            .render(canvas, Self::clear_rect(area), pointer);
     }
 
     fn handle_event(&mut self, event: Event, area: Rect) -> bool {
@@ -77,7 +78,10 @@ impl Application for TextEditor {
             }
             Event::Key(_) => false,
             Event::Pointer(pointer) => {
-                if self.clear_button.handle_pointer(Self::clear_rect(area), pointer) {
+                if self
+                    .clear_button
+                    .handle_pointer(Self::clear_rect(area), pointer)
+                {
                     self.input_len = 0;
                     true
                 } else {

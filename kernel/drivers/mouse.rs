@@ -24,7 +24,9 @@ static mut PACKET_INDEX: usize = 0;
 static mut SENSITIVITY: i32 = 2;
 
 pub fn set_sensitivity(value: i32) {
-    unsafe { SENSITIVITY = value.clamp(1, 4); }
+    unsafe {
+        SENSITIVITY = value.clamp(1, 4);
+    }
 }
 
 fn port_byte_out(port: u16, data: u8) {

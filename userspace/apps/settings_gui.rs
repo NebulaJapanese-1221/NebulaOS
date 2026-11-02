@@ -10,39 +10,84 @@ pub struct Settings {
 
 impl Settings {
     pub fn new() -> Self {
-        Self { dark_theme: Checkbox::new(true), mouse_speed: Menu::new(1), focus: FocusGroup::new(0) }
+        Self {
+            dark_theme: Checkbox::new(true),
+            mouse_speed: Menu::new(1),
+            focus: FocusGroup::new(0),
+        }
     }
 }
 
 impl Application for Settings {
-    fn title(&self) -> &'static str { "SETTINGS" }
+    fn title(&self) -> &'static str {
+        "SETTINGS"
+    }
 
     fn render(&self, canvas: &mut dyn Canvas, area: Rect, _pointer: PointerEvent) {
         canvas.draw_text(area.x + 24, area.y + 20, "APPEARANCE", 0x1596B5, 1);
-        self.dark_theme.render(canvas, Rect {
-            x: area.x + 24, y: area.y + 48, width: 16, height: 16,
-        }, "DARK WALLPAPER");
+        self.dark_theme.render(
+            canvas,
+            Rect {
+                x: area.x + 24,
+                y: area.y + 48,
+                width: 16,
+                height: 16,
+            },
+            "DARK WALLPAPER",
+        );
         canvas.draw_text(area.x + 24, area.y + 92, "DISPLAY MODE", 0x1596B5, 1);
-        canvas.draw_text(area.x + 24, area.y + 112, "1024 X 768 (SET BY GRUB AT BOOT)", 0x111827, 1);
+        canvas.draw_text(
+            area.x + 24,
+            area.y + 112,
+            "1024 X 768 (SET BY GRUB AT BOOT)",
+            0x111827,
+            1,
+        );
         canvas.draw_text(area.x + 24, area.y + 150, "MOUSE SPEED", 0x1596B5, 1);
-        self.mouse_speed.render(canvas, Rect {
-            x: area.x + 24, y: area.y + 174, width: 150, height: 3 * 28,
-        }, &SPEEDS);
-        canvas.draw_text(area.x + 24, area.y + 270, "KEYBOARD: US QWERTY", 0x111827, 1);
+        self.mouse_speed.render(
+            canvas,
+            Rect {
+                x: area.x + 24,
+                y: area.y + 174,
+                width: 150,
+                height: 3 * 28,
+            },
+            &SPEEDS,
+        );
+        canvas.draw_text(
+            area.x + 24,
+            area.y + 270,
+            "KEYBOARD: US QWERTY",
+            0x111827,
+            1,
+        );
     }
 
     fn handle_event(&mut self, event: Event, area: Rect) -> bool {
         match event {
             Event::Pointer(pointer) => {
-                let toggled = self.dark_theme.handle_pointer(Rect {
-                    x: area.x + 24, y: area.y + 48, width: 16, height: 16,
-                }, pointer);
+                let toggled = self.dark_theme.handle_pointer(
+                    Rect {
+                        x: area.x + 24,
+                        y: area.y + 48,
+                        width: 16,
+                        height: 16,
+                    },
+                    pointer,
+                );
                 if toggled {
                     crate::drivers::wm::set_dark_theme(self.dark_theme.checked);
                 }
-                let selected = self.mouse_speed.handle_pointer(Rect {
-                    x: area.x + 24, y: area.y + 174, width: 150, height: 3 * 28,
-                }, &SPEEDS, pointer);
+                let selected = self.mouse_speed.handle_pointer(
+                    Rect {
+                        x: area.x + 24,
+                        y: area.y + 174,
+                        width: 150,
+                        height: 3 * 28,
+                    },
+                    &SPEEDS,
+                    pointer,
+                );
                 if selected {
                     crate::drivers::mouse::set_sensitivity([1, 2, 4][self.mouse_speed.selected]);
                 }

@@ -7,6 +7,7 @@ use crate::userspace::apps::gui::{Application, Button, Canvas, Event, PointerEve
 use crate::userspace::apps::monitor_gui::SystemMonitor;
 use crate::userspace::apps::paint_gui::Paint;
 use crate::userspace::apps::settings_gui::Settings;
+use crate::userspace::apps::userdemo_gui::UserModeDemo;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
@@ -16,11 +17,14 @@ const PANEL: u32 = 0x111827;
 const ACCENT: u32 = 0x66D9EF;
 const TEXT: u32 = 0xF1F5F9;
 const MUTED: u32 = 0xA8B5C9;
-const APP_COUNT: usize = 6;
+const APP_COUNT: usize = 7;
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 static mut DARK_THEME: bool = true;
 
 pub fn set_dark_theme(enabled: bool) {
-    unsafe { DARK_THEME = enabled; }
+    unsafe {
+        DARK_THEME = enabled;
+    }
 }
 
 struct Window {
@@ -34,12 +38,14 @@ struct Window {
 #[derive(Clone, Copy)]
 enum Capture {
     None,
-    Launch(usize),
     Drag(usize),
     Close(usize),
     Minimize(usize),
     Maximize(usize),
-    Restore(usize),
+    StartMenu,
+    StartApp(usize),
+    TaskbarWindow(usize),
+    DismissStart,
 }
 
 pub struct WindowManager {
@@ -50,7 +56,9 @@ pub struct WindowManager {
     focused: Option<usize>,
     capture: Capture,
     drag_offset: (u32, u32),
-    shortcuts: [Button; APP_COUNT],
+    start_menu_open: bool,
+    start_button: Button,
+    start_apps: [Button; APP_COUNT],
 }
 
 impl WindowManager {
@@ -63,10 +71,16 @@ impl WindowManager {
             focused: None,
             capture: Capture::None,
             drag_offset: (0, 0),
-            shortcuts: [
-                Button::new("CALCULATOR"), Button::new("TEXT EDITOR"),
-                Button::new("FILE MANAGER"), Button::new("SETTINGS"),
-                Button::new("PAINT"), Button::new("SYSTEM MONITOR"),
+            start_menu_open: false,
+            start_button: Button::new("START"),
+            start_apps: [
+                Button::new("CALCULATOR"),
+                Button::new("TEXT EDITOR"),
+                Button::new("FILE MANAGER"),
+                Button::new("SETTINGS"),
+                Button::new("PAINT"),
+                Button::new("SYSTEM MONITOR"),
+                Button::new("RING-3 DEMO"),
             ],
         }
     }
@@ -74,7 +88,9 @@ impl WindowManager {
     pub fn render(&self) {
         let width = framebuffer::get_width();
         let height = framebuffer::get_height();
-        if width == 0 || height == 0 { return; }
+        if width == 0 || height == 0 {
+            return;
+        }
         let (wallpaper_top, wallpaper_bottom) = unsafe {
             if DARK_THEME {
                 (WALLPAPER_TOP, WALLPAPER_BOTTOM)
@@ -84,45 +100,88 @@ impl WindowManager {
         };
         framebuffer::clear_screen(wallpaper_top);
         for y in 0..height {
-            framebuffer::fill_rect(0, y, width, 1, blend_rgb(
-                wallpaper_top, wallpaper_bottom, y * 255 / height,
-            ));
+            framebuffer::fill_rect(
+                0,
+                y,
+                width,
+                1,
+                blend_rgb(wallpaper_top, wallpaper_bottom, y * 255 / height),
+            );
         }
         framebuffer::fill_rect(0, 0, width, 40, PANEL);
-        framebuffer::fill_rect(0, height.saturating_sub(42), width, 42, PANEL);
+        framebuffer::fill_rect(0, height.saturating_sub(44), width, 44, PANEL);
         framebuffer::fill_rect(22, 12, 16, 16, ACCENT);
         framebuffer::fill_rect(26, 16, 8, 8, PANEL);
         framebuffer::draw_text(48, 16, "NEBULAOS", TEXT, 2);
-        framebuffer::draw_text(200, 17, "DESKTOP", MUTED, 1);
+        framebuffer::draw_text(200, 17, "VERSION ", MUTED, 1);
+        framebuffer::draw_text(254, 17, VERSION, ACCENT, 1);
         framebuffer::draw_text(width.saturating_sub(152), 17, "SYSTEM READY", ACCENT, 1);
 
         let pointer = self.pointer();
-        self.draw_shortcuts(pointer);
         for index in 0..self.windows.len() {
             if !self.windows[index].minimized {
                 self.draw_window(index, pointer);
             }
         }
-        self.draw_minimized_apps(pointer);
+        self.draw_taskbar(pointer);
+        if self.start_menu_open {
+            self.draw_start_menu(pointer);
+        }
         self.draw_cursor();
     }
 
-    fn draw_shortcuts(&self, pointer: PointerEvent) {
+    fn draw_taskbar(&self, pointer: PointerEvent) {
         let width = framebuffer::get_width();
         let height = framebuffer::get_height();
-        let card_width = 176;
-        let card_height = 116;
-        let gap = 16;
-        let grid_width = 3 * card_width + 2 * gap;
-        let origin_x = width.saturating_sub(grid_width) / 2;
-        let origin_y = (height / 2).saturating_sub(132);
+        let taskbar_y = height.saturating_sub(44);
+        let start_rect = start_button_rect(height);
+        let mut canvas = FramebufferCanvas;
+        self.start_button.render(&mut canvas, start_rect, pointer);
+        let mut x = 132;
+        for (index, window) in self.windows.iter().enumerate() {
+            if x + 156 > width.saturating_sub(150) {
+                break;
+            }
+            let rect = Rect {
+                x,
+                y: taskbar_y + 8,
+                width: 148,
+                height: 28,
+            };
+            draw_window_button(
+                &mut canvas,
+                rect,
+                window.app.title(),
+                if self.focused == Some(index) {
+                    0x285A72
+                } else {
+                    0x26374F
+                },
+                pointer,
+            );
+            x += 156;
+        }
+        framebuffer::draw_text(
+            width.saturating_sub(132),
+            taskbar_y + 18,
+            VERSION,
+            ACCENT,
+            1,
+        );
+    }
+
+    fn draw_start_menu(&self, pointer: PointerEvent) {
+        let rect = start_menu_rect(framebuffer::get_height());
+        framebuffer::fill_rect(rect.x + 5, rect.y + 5, rect.width, rect.height, 0x080D16);
+        framebuffer::fill_rect(rect.x, rect.y, rect.width, rect.height, PANEL);
+        framebuffer::draw_rect(rect.x, rect.y, rect.width, rect.height, 0x516786);
+        framebuffer::draw_text(rect.x + 16, rect.y + 14, "NEBULAOS", TEXT, 1);
+        framebuffer::draw_text(rect.x + 16, rect.y + 30, "VERSION", MUTED, 1);
+        framebuffer::draw_text(rect.x + 76, rect.y + 30, VERSION, ACCENT, 1);
+        let mut canvas = FramebufferCanvas;
         for index in 0..APP_COUNT {
-            let rect = shortcut_rect(index, origin_x, origin_y, card_width, card_height, gap);
-            let mut canvas = FramebufferCanvas;
-            self.shortcuts[index].draw_chrome(&mut canvas, rect, pointer);
-            framebuffer::fill_rect(rect.x + 18, rect.y + 18, 38, 38, app_color(index));
-            framebuffer::draw_text(rect.x + 18, rect.y + 75, app_name(index), TEXT, 1);
-            framebuffer::draw_text(rect.x + 18, rect.y + 96, "OPEN APP", MUTED, 1);
+            let row = start_menu_item_rect(rect, index);
+            self.start_apps[index].render(&mut canvas, row, pointer);
         }
     }
 
@@ -132,12 +191,36 @@ impl WindowManager {
         let is_focused = self.focused == Some(index);
         framebuffer::fill_rect(rect.x + 6, rect.y + 8, rect.width, rect.height, 0x080D16);
         framebuffer::fill_rect(rect.x, rect.y, rect.width, rect.height, 0xF2F5FA);
-        framebuffer::fill_rect(rect.x, rect.y, rect.width, 42, if is_focused { PANEL } else { 0x263247 });
+        framebuffer::fill_rect(
+            rect.x,
+            rect.y,
+            rect.width,
+            42,
+            if is_focused { PANEL } else { 0x263247 },
+        );
         framebuffer::draw_text(rect.x + 14, rect.y + 17, window.app.title(), TEXT, 1);
         let mut canvas = FramebufferCanvas;
-        draw_window_button(&mut canvas, window_button_rect(rect, 0), "X", 0xE45B67, pointer);
-        draw_window_button(&mut canvas, window_button_rect(rect, 1), "_", 0x42546D, pointer);
-        draw_window_button(&mut canvas, window_button_rect(rect, 2), if window.maximized { "o" } else { "[]" }, 0x42546D, pointer);
+        draw_window_button(
+            &mut canvas,
+            window_button_rect(rect, 0),
+            "X",
+            0xE45B67,
+            pointer,
+        );
+        draw_window_button(
+            &mut canvas,
+            window_button_rect(rect, 1),
+            "_",
+            0x42546D,
+            pointer,
+        );
+        draw_window_button(
+            &mut canvas,
+            window_button_rect(rect, 2),
+            if window.maximized { "o" } else { "[]" },
+            0x42546D,
+            pointer,
+        );
         let area = app_area(rect);
         window.app.render(&mut canvas, area, pointer);
         if is_focused {
@@ -145,19 +228,15 @@ impl WindowManager {
         }
     }
 
-    fn draw_minimized_apps(&self, pointer: PointerEvent) {
-        let height = framebuffer::get_height();
-        let mut x = 16;
-        for window in &self.windows {
-            if !window.minimized { continue; }
-            let rect = Rect { x, y: height.saturating_sub(34), width: 148, height: 24 };
-            let mut canvas = FramebufferCanvas;
-            draw_window_button(&mut canvas, rect, window.app.title(), 0x26374F, pointer);
-            x += 156;
-        }
-    }
-
     pub fn handle_key(&mut self, key: u8) -> bool {
+        if key == 27 && self.start_menu_open {
+            self.start_menu_open = false;
+            return true;
+        }
+        if key == b'\t' && self.focused.is_none() {
+            self.start_menu_open = !self.start_menu_open;
+            return true;
+        }
         if key == 27 {
             if let Some(index) = self.focused {
                 if index < self.windows.len() {
@@ -171,9 +250,14 @@ impl WindowManager {
         }
         if let Some(index) = self.focused {
             let window = &mut self.windows[index];
-            return window.app.handle_event(Event::Key(key), app_area(window.bounds));
+            return window
+                .app
+                .handle_event(Event::Key(key), app_area(window.bounds));
         }
-        if let Some(app_index) = match key { b'1'..=b'6' => Some((key - b'1') as usize), _ => None } {
+        if let Some(app_index) = match key {
+            b'1'..=b'7' => Some((key - b'1') as usize),
+            _ => None,
+        } {
             self.open_app(app_index);
             return true;
         }
@@ -192,7 +276,11 @@ impl WindowManager {
             height: 300.min(height.saturating_sub(80)),
         };
         self.windows.push(Window {
-            app, bounds, restore_bounds: bounds, minimized: false, maximized: false,
+            app,
+            bounds,
+            restore_bounds: bounds,
+            minimized: false,
+            maximized: false,
         });
         self.focused = Some(self.windows.len() - 1);
     }
@@ -222,73 +310,127 @@ impl WindowManager {
             changed |= self.capture_release(pointer);
             self.capture = Capture::None;
         }
+        if self.start_menu_open {
+            return changed;
+        }
         if let Some(index) = self.focused {
             if index < self.windows.len() && !self.windows[index].minimized {
                 let area = app_area(self.windows[index].bounds);
-                changed |= self.windows[index].app.handle_event(Event::Pointer(pointer), area);
+                changed |= self.windows[index]
+                    .app
+                    .handle_event(Event::Pointer(pointer), area);
             }
         }
         changed
     }
 
     fn capture_press(&mut self, pointer: PointerEvent) -> Capture {
+        if self.start_menu_open {
+            let menu = start_menu_rect(framebuffer::get_height());
+            if start_button_rect(framebuffer::get_height()).contains(pointer.x, pointer.y) {
+                return Capture::StartMenu;
+            }
+            for index in 0..APP_COUNT {
+                if start_menu_item_rect(menu, index).contains(pointer.x, pointer.y) {
+                    return Capture::StartApp(index);
+                }
+            }
+            return Capture::DismissStart;
+        }
+        let taskbar_y = framebuffer::get_height().saturating_sub(44);
+        if pointer.y >= taskbar_y {
+            if start_button_rect(framebuffer::get_height()).contains(pointer.x, pointer.y) {
+                return Capture::StartMenu;
+            }
+            let mut taskbar_x = 132;
+            for index in 0..self.windows.len() {
+                if taskbar_x + 156 > framebuffer::get_width().saturating_sub(150) {
+                    break;
+                }
+                let rect = Rect {
+                    x: taskbar_x,
+                    y: taskbar_y + 8,
+                    width: 148,
+                    height: 28,
+                };
+                if rect.contains(pointer.x, pointer.y) {
+                    return Capture::TaskbarWindow(index);
+                }
+                taskbar_x += 156;
+            }
+            return Capture::None;
+        }
         for index in (0..self.windows.len()).rev() {
-            if self.windows[index].minimized { continue; }
+            if self.windows[index].minimized {
+                continue;
+            }
             let bounds = self.windows[index].bounds;
-            if !bounds.contains(pointer.x, pointer.y) { continue; }
+            if !bounds.contains(pointer.x, pointer.y) {
+                continue;
+            }
             self.focus_window(index);
             let focused = self.windows.len() - 1;
-            if window_button_rect(bounds, 0).contains(pointer.x, pointer.y) { return Capture::Close(focused); }
-            if window_button_rect(bounds, 1).contains(pointer.x, pointer.y) { return Capture::Minimize(focused); }
-            if window_button_rect(bounds, 2).contains(pointer.x, pointer.y) { return Capture::Maximize(focused); }
+            if window_button_rect(bounds, 0).contains(pointer.x, pointer.y) {
+                return Capture::Close(focused);
+            }
+            if window_button_rect(bounds, 1).contains(pointer.x, pointer.y) {
+                return Capture::Minimize(focused);
+            }
+            if window_button_rect(bounds, 2).contains(pointer.x, pointer.y) {
+                return Capture::Maximize(focused);
+            }
             if pointer.y < bounds.y + 42 {
                 self.drag_offset = (pointer.x - bounds.x, pointer.y - bounds.y);
                 return Capture::Drag(focused);
             }
             return Capture::None;
         }
-        let mut minimized_slot = 0;
-        for index in 0..self.windows.len() {
-            if self.windows[index].minimized {
-                let rect = Rect {
-                    x: 16 + minimized_slot * 156,
-                    y: framebuffer::get_height().saturating_sub(34),
-                    width: 148,
-                    height: 24,
-                };
-                if rect.contains(pointer.x, pointer.y) {
-                    self.focus_window(index);
-                    return Capture::Restore(self.windows.len() - 1);
-                }
-                minimized_slot += 1;
-            }
-        }
-        let width = framebuffer::get_width();
-        let height = framebuffer::get_height();
-        let origin_x = width.saturating_sub(3 * 176 + 2 * 16) / 2;
-        let origin_y = (height / 2).saturating_sub(132);
-        for index in 0..APP_COUNT {
-            if shortcut_rect(index, origin_x, origin_y, 176, 116, 16).contains(pointer.x, pointer.y) {
-                return Capture::Launch(index);
-            }
-        }
         Capture::None
     }
 
     fn capture_release(&mut self, pointer: PointerEvent) -> bool {
         match self.capture {
-            Capture::Launch(index) => {
-                let width = framebuffer::get_width();
-                let height = framebuffer::get_height();
-                let origin_x = width.saturating_sub(3 * 176 + 2 * 16) / 2;
-                let origin_y = (height / 2).saturating_sub(132);
-                if shortcut_rect(index, origin_x, origin_y, 176, 116, 16).contains(pointer.x, pointer.y) {
-                    self.open_app(index);
+            Capture::StartMenu => {
+                if start_button_rect(framebuffer::get_height()).contains(pointer.x, pointer.y) {
+                    self.start_menu_open = !self.start_menu_open;
                     return true;
                 }
             }
+            Capture::StartApp(index) => {
+                let menu = start_menu_rect(framebuffer::get_height());
+                if start_menu_item_rect(menu, index).contains(pointer.x, pointer.y) {
+                    self.open_app(index);
+                    self.start_menu_open = false;
+                    return true;
+                }
+            }
+            Capture::DismissStart => {
+                self.start_menu_open = false;
+                return true;
+            }
+            Capture::TaskbarWindow(index) => {
+                let taskbar_y = framebuffer::get_height().saturating_sub(44);
+                let rect = Rect {
+                    x: 132 + index as u32 * 156,
+                    y: taskbar_y + 8,
+                    width: 148,
+                    height: 28,
+                };
+                if rect.contains(pointer.x, pointer.y) {
+                    if let Some(window) = self.windows.get_mut(index) {
+                        if window.minimized {
+                            window.minimized = false;
+                        }
+                        self.focus_window(index);
+                        return true;
+                    }
+                }
+            }
             Capture::Close(index) => {
-                if index < self.windows.len() && window_button_rect(self.windows[index].bounds, 0).contains(pointer.x, pointer.y) {
+                if index < self.windows.len()
+                    && window_button_rect(self.windows[index].bounds, 0)
+                        .contains(pointer.x, pointer.y)
+                {
                     self.windows.remove(index);
                     self.focused = self.windows.iter().rposition(|window| !window.minimized);
                     return true;
@@ -299,7 +441,8 @@ impl WindowManager {
                     if window_button_rect(window.bounds, 1).contains(pointer.x, pointer.y) {
                         window.minimized = true;
                         if self.focused == Some(index) {
-                            self.focused = self.windows.iter().rposition(|window| !window.minimized);
+                            self.focused =
+                                self.windows.iter().rposition(|window| !window.minimized);
                         }
                         return true;
                     }
@@ -313,18 +456,13 @@ impl WindowManager {
                     } else {
                         window.restore_bounds = window.bounds;
                         window.bounds = Rect {
-                            x: 8, y: 44,
+                            x: 8,
+                            y: 44,
                             width: framebuffer::get_width().saturating_sub(16),
                             height: framebuffer::get_height().saturating_sub(92),
                         };
                         window.maximized = true;
                     }
-                    return true;
-                }
-            }
-            Capture::Restore(index) => {
-                if let Some(window) = self.windows.get_mut(index) {
-                    window.minimized = false;
                     return true;
                 }
             }
@@ -334,20 +472,34 @@ impl WindowManager {
     }
 
     fn focus_window(&mut self, index: usize) {
-        if index >= self.windows.len() { return; }
+        if index >= self.windows.len() {
+            return;
+        }
         let window = self.windows.remove(index);
         self.windows.push(window);
         self.focused = Some(self.windows.len() - 1);
     }
 
     fn pointer(&self) -> PointerEvent {
-        PointerEvent { x: self.cursor_x, y: self.cursor_y, left_down: self.left_button_down }
+        PointerEvent {
+            x: self.cursor_x,
+            y: self.cursor_y,
+            left_down: self.left_button_down,
+        }
     }
 
     fn draw_cursor(&self) {
         for row in 0..16 {
             for column in 0..(row / 2 + 1) {
-                framebuffer::put_pixel(self.cursor_x + column, self.cursor_y + row, if column == 0 || column == row / 2 { 0x101820 } else { TEXT });
+                framebuffer::put_pixel(
+                    self.cursor_x + column,
+                    self.cursor_y + row,
+                    if column == 0 || column == row / 2 {
+                        0x101820
+                    } else {
+                        TEXT
+                    },
+                );
             }
         }
     }
@@ -361,6 +513,7 @@ fn make_app(index: usize) -> Option<Box<dyn Application>> {
         3 => Box::new(Settings::new()),
         4 => Box::new(Paint::new()),
         5 => Box::new(SystemMonitor::new()),
+        6 => Box::new(UserModeDemo::new()),
         _ => return None,
     })
 }
@@ -368,37 +521,80 @@ fn make_app(index: usize) -> Option<Box<dyn Application>> {
 struct FramebufferCanvas;
 
 impl Canvas for FramebufferCanvas {
-    fn fill_rect(&mut self, rect: Rect, color: u32) { framebuffer::fill_rect(rect.x, rect.y, rect.width, rect.height, color); }
-    fn draw_rect(&mut self, rect: Rect, color: u32) { framebuffer::draw_rect(rect.x, rect.y, rect.width, rect.height, color); }
-    fn draw_text(&mut self, x: u32, y: u32, text: &str, color: u32, scale: u32) { framebuffer::draw_text(x, y, text, color, scale); }
+    fn fill_rect(&mut self, rect: Rect, color: u32) {
+        framebuffer::fill_rect(rect.x, rect.y, rect.width, rect.height, color);
+    }
+    fn draw_rect(&mut self, rect: Rect, color: u32) {
+        framebuffer::draw_rect(rect.x, rect.y, rect.width, rect.height, color);
+    }
+    fn draw_text(&mut self, x: u32, y: u32, text: &str, color: u32, scale: u32) {
+        framebuffer::draw_text(x, y, text, color, scale);
+    }
 }
 
 fn app_area(bounds: Rect) -> Rect {
-    Rect { x: bounds.x, y: bounds.y + 42, width: bounds.width, height: bounds.height.saturating_sub(42) }
+    Rect {
+        x: bounds.x,
+        y: bounds.y + 42,
+        width: bounds.width,
+        height: bounds.height.saturating_sub(42),
+    }
 }
 
 fn window_button_rect(bounds: Rect, button: usize) -> Rect {
     let x = bounds.x + bounds.width.saturating_sub(34 + button as u32 * 30);
-    Rect { x, y: bounds.y + 10, width: 22, height: 22 }
+    Rect {
+        x,
+        y: bounds.y + 10,
+        width: 22,
+        height: 22,
+    }
 }
 
-fn draw_window_button(canvas: &mut dyn Canvas, rect: Rect, label: &str, color: u32, pointer: PointerEvent) {
+fn draw_window_button(
+    canvas: &mut dyn Canvas,
+    rect: Rect,
+    label: &str,
+    color: u32,
+    pointer: PointerEvent,
+) {
     let hover = rect.contains(pointer.x, pointer.y);
     canvas.fill_rect(rect, if hover { 0x1596B5 } else { color });
     canvas.draw_rect(rect, if hover { ACCENT } else { 0x516786 });
-    canvas.draw_text(rect.x + 5, rect.y + rect.height.saturating_sub(8) / 2, label, TEXT, 1);
+    canvas.draw_text(
+        rect.x + 5,
+        rect.y + rect.height.saturating_sub(8) / 2,
+        label,
+        TEXT,
+        1,
+    );
 }
 
-fn shortcut_rect(index: usize, x: u32, y: u32, width: u32, height: u32, gap: u32) -> Rect {
-    Rect { x: x + (index % 3) as u32 * (width + gap), y: y + (index / 3) as u32 * (height + gap), width, height }
+fn start_button_rect(height: u32) -> Rect {
+    Rect {
+        x: 10,
+        y: height.saturating_sub(38),
+        width: 104,
+        height: 30,
+    }
 }
 
-fn app_name(index: usize) -> &'static str {
-    match index { 0 => "CALCULATOR", 1 => "TEXT EDITOR", 2 => "FILE MANAGER", 3 => "SETTINGS", 4 => "PAINT", _ => "SYSTEM MONITOR" }
+fn start_menu_rect(height: u32) -> Rect {
+    Rect {
+        x: 10,
+        y: height.saturating_sub(44 + 280),
+        width: 250,
+        height: 280,
+    }
 }
 
-fn app_color(index: usize) -> u32 {
-    match index { 0 => 0xF7B955, 1 => ACCENT, 2 => 0x8ED081, 3 => 0xB29DDB, 4 => 0xE45B67, _ => 0x66D9EF }
+fn start_menu_item_rect(menu: Rect, index: usize) -> Rect {
+    Rect {
+        x: menu.x + 10,
+        y: menu.y + 52 + index as u32 * 29,
+        width: menu.width - 20,
+        height: 26,
+    }
 }
 
 fn blend_rgb(from: u32, to: u32, amount: u32) -> u32 {
@@ -417,7 +613,9 @@ static mut CONSOLE_Y: u32 = 0;
 pub fn console_write(bytes: &[u8]) {
     let width = framebuffer::get_width();
     let height = framebuffer::get_height();
-    if width == 0 || height < 180 { return; }
+    if width == 0 || height < 180 {
+        return;
+    }
     unsafe {
         let left = 24;
         let top = height - 178;
@@ -432,7 +630,9 @@ pub fn console_write(bytes: &[u8]) {
         let left = left + 12;
         let right = left + (width / 2).min(620) - 24;
         for &byte in bytes {
-            if byte == b'\r' { continue; }
+            if byte == b'\r' {
+                continue;
+            }
             if byte == b'\n' || CONSOLE_X + 6 >= right {
                 CONSOLE_X = left;
                 CONSOLE_Y += 12;
@@ -440,7 +640,9 @@ pub fn console_write(bytes: &[u8]) {
                     framebuffer::fill_rect(left, top + 30, (width / 2).min(620) - 24, 58, PANEL);
                     CONSOLE_Y = top + 30;
                 }
-                if byte == b'\n' { continue; }
+                if byte == b'\n' {
+                    continue;
+                }
             }
             if byte.is_ascii() {
                 let glyph = [byte];

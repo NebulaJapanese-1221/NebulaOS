@@ -85,6 +85,7 @@ pub fn init(kernel_stack_top: u32) {
     unsafe {
         TSS.esp0 = kernel_stack_top;
         TSS.ss0 = 0x10; // kernel data segment
+        TSS.iopb_offset = core::mem::size_of::<Tss>() as u16;
 
         // Set up TSS descriptor in GDT
         let base = core::ptr::addr_of!(TSS) as u32;

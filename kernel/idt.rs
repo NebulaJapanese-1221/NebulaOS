@@ -32,6 +32,7 @@ static mut IDT_PTR: IdtPtr = IdtPtr { limit: 0, base: 0 };
 
 const IDT_PRESENT: u8 = 0x80;
 const IDT_RING0: u8 = 0x00;
+const IDT_RING3: u8 = 0x60;
 const IDT_32BIT_INTERRUPT: u8 = 0x0E;
 const IDT_32BIT_TRAP: u8 = 0x0F;
 
@@ -58,9 +59,9 @@ pub fn init() {
         for i in 0..IDT_ENTRIES {
             let offset = isr_stub_table[i];
             let type_attr = if i == 128 {
-                IDT_32BIT_TRAP
+                IDT_RING3 | IDT_32BIT_TRAP
             } else {
-                IDT_32BIT_INTERRUPT
+                IDT_RING0 | IDT_32BIT_INTERRUPT
             };
             idt_set_entry(i, offset, gdt::kernel_code_selector(), type_attr);
         }

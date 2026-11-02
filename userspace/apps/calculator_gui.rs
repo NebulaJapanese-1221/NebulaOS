@@ -1,8 +1,7 @@
 use super::gui::{Application, Button, Canvas, Event, PointerEvent, Rect};
 
 const KEY_VALUES: [u8; 16] = [
-    b'7', b'8', b'9', b'/', b'4', b'5', b'6', b'*', b'1', b'2', b'3', b'-', b'C', b'0', b'=',
-    b'+',
+    b'7', b'8', b'9', b'/', b'4', b'5', b'6', b'*', b'1', b'2', b'3', b'-', b'C', b'0', b'=', b'+',
 ];
 
 pub struct Calculator {
@@ -21,10 +20,22 @@ impl Calculator {
             result: [0; 32],
             result_len: 0,
             buttons: [
-                Button::new("7"), Button::new("8"), Button::new("9"), Button::new("/"),
-                Button::new("4"), Button::new("5"), Button::new("6"), Button::new("*"),
-                Button::new("1"), Button::new("2"), Button::new("3"), Button::new("-"),
-                Button::new("C"), Button::new("0"), Button::new("="), Button::new("+"),
+                Button::new("7"),
+                Button::new("8"),
+                Button::new("9"),
+                Button::new("/"),
+                Button::new("4"),
+                Button::new("5"),
+                Button::new("6"),
+                Button::new("*"),
+                Button::new("1"),
+                Button::new("2"),
+                Button::new("3"),
+                Button::new("-"),
+                Button::new("C"),
+                Button::new("0"),
+                Button::new("="),
+                Button::new("+"),
             ],
         }
     }

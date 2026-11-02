@@ -67,7 +67,8 @@ unsafe impl GlobalAlloc for HeapAllocator {
                 // Split if large enough
                 if block.size > size + core::mem::size_of::<HeapBlock>() {
                     let remaining = block.size - size - core::mem::size_of::<HeapBlock>();
-                    let new_block = (current as usize + core::mem::size_of::<HeapBlock>() + size) as *mut HeapBlock;
+                    let new_block = (current as usize + core::mem::size_of::<HeapBlock>() + size)
+                        as *mut HeapBlock;
                     let new_block_mut = &mut *(new_block);
                     new_block_mut.size = remaining;
                     new_block_mut.free = true;

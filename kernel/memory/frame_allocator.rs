@@ -1,8 +1,8 @@
 // Memory management - frame allocator
 
 const FRAME_SIZE: usize = 4096;
-const MEMORY_START: usize = 0x100000;   // 1MB
-const MEMORY_END: usize = 0x10000000;   // 256MB
+const MEMORY_START: usize = 0x100000; // 1MB
+const MEMORY_END: usize = 0x10000000; // 256MB
 const TOTAL_FRAMES: usize = (MEMORY_END - MEMORY_START) / FRAME_SIZE;
 const BITMAP_SIZE: usize = (TOTAL_FRAMES + 7) / 8;
 
@@ -31,14 +31,29 @@ fn clear_bit(index: usize) {
 }
 
 fn get_bit(index: usize) -> bool {
-    unsafe {
-        BITMAP[index / 8] & (1 << (index % 8)) != 0
-    }
+    unsafe { BITMAP[index / 8] & (1 << (index % 8)) != 0 }
 }
 
 pub fn alloc_frame() -> Option<usize> {
     unsafe {
         for i in 0..TOTAL_FRAMES {
+            if !get_bit(i) {
+                set_bit(i);
+                ALLOCATED_FRAMES += 1;
+                return Some(MEMORY_START + i * FRAME_SIZE);
+            }
+        }
+        None
+    }
+}
+
+pub fn alloc_frame_below(limit: usize) -> Option<usize> {
+    unsafe {
+        let frame_limit = limit
+            .saturating_sub(MEMORY_START)
+            .min(MEMORY_END - MEMORY_START)
+            / FRAME_SIZE;
+        for i in 0..frame_limit {
             if !get_bit(i) {
                 set_bit(i);
                 ALLOCATED_FRAMES += 1;
@@ -55,15 +70,16 @@ pub fn free_frame(addr: usize) {
             return;
         }
         let index = (addr - MEMORY_START) / FRAME_SIZE;
+        if !get_bit(index) {
+            return;
+        }
         clear_bit(index);
         ALLOCATED_FRAMES -= 1;
     }
 }
 
 pub fn free_frame_count() -> usize {
-    unsafe {
-        TOTAL_FRAMES - ALLOCATED_FRAMES
-    }
+    unsafe { TOTAL_FRAMES - ALLOCATED_FRAMES }
 }
 
 pub fn total_frame_count() -> usize {

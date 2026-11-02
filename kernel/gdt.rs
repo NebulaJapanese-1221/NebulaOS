@@ -36,6 +36,8 @@ const SEG_NULL: u16 = 0x00;
 const SEG_KERNEL_CODE: u16 = 0x08;
 const SEG_KERNEL_DATA: u16 = 0x10;
 const SEG_TSS: u16 = 0x18;
+const SEG_USER_CODE: u16 = 0x20 | 0x03;
+const SEG_USER_DATA: u16 = 0x28 | 0x03;
 
 pub(super) fn gdt_set_entry(index: usize, base: u32, limit: u32, access: u8, gran: u8) {
     unsafe {
@@ -59,6 +61,9 @@ pub fn init() {
         gdt_set_entry(1, 0, 0xFFFFF, 0x9A, 0xCF);
         // Kernel data segment: base=0, limit=4GB, present, ring0, data, writable
         gdt_set_entry(2, 0, 0xFFFFF, 0x92, 0xCF);
+        // User code/data segments: same flat address space, privilege level 3.
+        gdt_set_entry(4, 0, 0xFFFFF, 0xFA, 0xCF);
+        gdt_set_entry(5, 0, 0xFFFFF, 0xF2, 0xCF);
 
         load_gdt(ptr::addr_of!(GDT_PTR));
     }
@@ -78,4 +83,12 @@ pub const fn kernel_data_selector() -> u16 {
 
 pub const fn tss_selector() -> u16 {
     SEG_TSS
+}
+
+pub const fn user_code_selector() -> u16 {
+    SEG_USER_CODE
+}
+
+pub const fn user_data_selector() -> u16 {
+    SEG_USER_DATA
 }

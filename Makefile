@@ -3,6 +3,7 @@
 CARGO ?= cargo
 NASM ?= nasm
 LD ?= ld
+OBJCOPY ?= objcopy
 QEMU ?= qemu-system-i386
 GRUB_MKRESCUE ?= grub-mkrescue
 XORRISO ?= xorriso
@@ -10,6 +11,8 @@ XORRISO ?= xorriso
 TARGET ?= i686-unknown-nebula
 KERNEL_LIB := target/$(TARGET)/release/libnebulaos.a
 ISR_OBJ := kernel/arch/isr.o
+USER_ELF := target/user-demo/demo.elf
+USER_ELF_OBJ := target/user-demo/demo_elf.o
 KERNEL_ELF := boot/kernel.elf
 ISO := nebulaos.iso
 DISK := nebulaos.disk
@@ -22,8 +25,17 @@ $(KERNEL_LIB): Cargo.toml Cargo.lock .cargo/config.toml targets/i686-unknown-neb
 $(ISR_OBJ): kernel/arch/isr.asm
 	$(NASM) -f elf32 kernel/arch/isr.asm -o $(ISR_OBJ)
 
-$(KERNEL_ELF): $(KERNEL_LIB) $(ISR_OBJ) linker.ld
-	$(LD) -m elf_i386 -T linker.ld -o $(KERNEL_ELF) $(ISR_OBJ) $(KERNEL_LIB)
+$(USER_ELF): userspace/demo.asm userspace/demo.ld
+	mkdir -p target/user-demo
+	$(NASM) -f elf32 userspace/demo.asm -o target/user-demo/demo.o
+	$(LD) -m elf_i386 -z max-page-size=0x100 -T userspace/demo.ld -o $(USER_ELF) target/user-demo/demo.o
+	$(OBJCOPY) --strip-all $(USER_ELF)
+
+$(USER_ELF_OBJ): $(USER_ELF)
+	cd target/user-demo && $(OBJCOPY) -I binary -O elf32-i386 -B i386 demo.elf demo_elf.o
+
+$(KERNEL_ELF): $(KERNEL_LIB) $(ISR_OBJ) $(USER_ELF_OBJ) linker.ld
+	$(LD) -m elf_i386 -T linker.ld -o $(KERNEL_ELF) $(ISR_OBJ) $(KERNEL_LIB) $(USER_ELF_OBJ)
 
 $(ISO): $(KERNEL_ELF) Makefile
 	mkdir -p boot/iso/boot/grub

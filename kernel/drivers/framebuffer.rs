@@ -42,10 +42,17 @@ pub fn init(multiboot_info: *const u8) -> Result<Framebuffer, FramebufferError> 
     }
 
     let mut tag_offset = 8usize;
-    while tag_offset.checked_add(8).is_some_and(|end| end <= total_size) {
+    while tag_offset
+        .checked_add(8)
+        .is_some_and(|end| end <= total_size)
+    {
         let tag_type = unsafe { read_u32(multiboot_info, tag_offset) };
         let tag_size = unsafe { read_u32(multiboot_info, tag_offset + 4) as usize };
-        if tag_size < 8 || tag_offset.checked_add(tag_size).is_none_or(|end| end > total_size) {
+        if tag_size < 8
+            || tag_offset
+                .checked_add(tag_size)
+                .is_none_or(|end| end > total_size)
+        {
             return Err(FramebufferError::InvalidBootInformation);
         }
 
@@ -99,8 +106,8 @@ pub fn init(multiboot_info: *const u8) -> Result<Framebuffer, FramebufferError> 
             address
                 .checked_add(length as u32)
                 .ok_or(FramebufferError::FramebufferTooLarge)?;
-            let pixels = paging::map_mmio(address, length)
-                .ok_or(FramebufferError::AddressNotMapped)?;
+            let pixels =
+                paging::map_mmio(address, length).ok_or(FramebufferError::AddressNotMapped)?;
 
             let framebuffer = Framebuffer {
                 width,
@@ -125,7 +132,12 @@ pub fn init(multiboot_info: *const u8) -> Result<Framebuffer, FramebufferError> 
             break;
         }
         tag_offset = tag_offset
-            .checked_add(tag_size.checked_add(7).ok_or(FramebufferError::InvalidBootInformation)? & !7)
+            .checked_add(
+                tag_size
+                    .checked_add(7)
+                    .ok_or(FramebufferError::InvalidBootInformation)?
+                    & !7,
+            )
             .ok_or(FramebufferError::InvalidBootInformation)?;
     }
 
@@ -191,7 +203,8 @@ pub fn fill_rect(x: u32, y: u32, width: u32, height: u32, color: u32) {
     let pixel = pack_color(framebuffer, color);
     for row in y.min(framebuffer.height)..bottom {
         for column in x.min(framebuffer.width)..right {
-            let offset = row as usize * framebuffer.pitch as usize + column as usize * bytes_per_pixel;
+            let offset =
+                row as usize * framebuffer.pitch as usize + column as usize * bytes_per_pixel;
             write_pixel(framebuffer, offset, bytes_per_pixel, pixel);
         }
     }
@@ -209,9 +222,21 @@ pub fn draw_rect(x: u32, y: u32, width: u32, height: u32, color: u32) {
         return;
     }
     fill_rect(x, y, width, 2.min(height), color);
-    fill_rect(x, y.saturating_add(height - 2.min(height)), width, 2.min(height), color);
+    fill_rect(
+        x,
+        y.saturating_add(height - 2.min(height)),
+        width,
+        2.min(height),
+        color,
+    );
     fill_rect(x, y, 2.min(width), height, color);
-    fill_rect(x.saturating_add(width - 2.min(width)), y, 2.min(width), height, color);
+    fill_rect(
+        x.saturating_add(width - 2.min(width)),
+        y,
+        2.min(width),
+        height,
+        color,
+    );
 }
 
 pub fn draw_text(mut x: u32, y: u32, text: &str, color: u32, scale: u32) {

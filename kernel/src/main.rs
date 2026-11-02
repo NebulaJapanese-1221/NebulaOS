@@ -6,14 +6,14 @@ extern crate alloc;
 
 #[path = "../drivers/mod.rs"]
 mod drivers;
-#[path = "../memory/mod.rs"]
-mod memory;
 #[path = "../gdt.rs"]
 mod gdt;
-#[path = "../tss.rs"]
-mod tss;
 #[path = "../idt.rs"]
 mod idt;
+#[path = "../memory/mod.rs"]
+mod memory;
+#[path = "../tss.rs"]
+mod tss;
 #[path = "../../userspace/mod.rs"]
 mod userspace;
 
@@ -35,6 +35,7 @@ pub extern "C" fn kernel_entry(multiboot_info: *const u8) -> ! {
     tss::init(0x90000);
     memory::init();
     drivers::paging::init();
+    drivers::process::init();
     drivers::allocator::init();
     idt::init();
     drivers::pic::remap(0x20, 0x28);
@@ -45,13 +46,21 @@ pub extern "C" fn kernel_entry(multiboot_info: *const u8) -> ! {
         Err(error) => {
             drivers::serial::write_string("Framebuffer initialization failed: ");
             drivers::serial::write_string(match error {
-                drivers::framebuffer::FramebufferError::InvalidBootInformation => "invalid boot info",
-                drivers::framebuffer::FramebufferError::NoRgbFramebuffer => "RGB framebuffer missing",
+                drivers::framebuffer::FramebufferError::InvalidBootInformation => {
+                    "invalid boot info"
+                }
+                drivers::framebuffer::FramebufferError::NoRgbFramebuffer => {
+                    "RGB framebuffer missing"
+                }
                 drivers::framebuffer::FramebufferError::UnsupportedPixelFormat => {
                     "unsupported pixel format"
                 }
-                drivers::framebuffer::FramebufferError::FramebufferTooLarge => "framebuffer too large",
-                drivers::framebuffer::FramebufferError::AddressNotMapped => "framebuffer map failed",
+                drivers::framebuffer::FramebufferError::FramebufferTooLarge => {
+                    "framebuffer too large"
+                }
+                drivers::framebuffer::FramebufferError::AddressNotMapped => {
+                    "framebuffer map failed"
+                }
             });
             drivers::serial::write_string("\r\n");
             halt();
@@ -63,17 +72,19 @@ pub extern "C" fn kernel_entry(multiboot_info: *const u8) -> ! {
     drivers::serial::write_string("x");
     drivers::serial::write_dec(framebuffer.height);
     drivers::serial::write_string("\r\n");
+    let mut boot_screen = drivers::boot_screen::BootScreen::new();
     match drivers::disk::init() {
         Ok(()) => drivers::serial::write_string(if drivers::disk::is_formatted() {
             "IDE storage ready; NebulaFS mounted.\r\n"
         } else {
             "IDE storage ready; disk needs explicit formatting.\r\n"
         }),
-        Err(drivers::disk::StorageError::NoDisk) => {
-            drivers::serial::write_string("No IDE disk detected; file manager storage unavailable.\r\n")
-        }
+        Err(drivers::disk::StorageError::NoDisk) => drivers::serial::write_string(
+            "No IDE disk detected; file manager storage unavailable.\r\n",
+        ),
         Err(_) => drivers::serial::write_string("IDE storage initialization failed.\r\n"),
     }
+    boot_screen.update(drivers::boot_screen::BootStage::StorageReady);
 
     drivers::keyboard::init();
     if drivers::mouse::init() {
@@ -81,11 +92,16 @@ pub extern "C" fn kernel_entry(multiboot_info: *const u8) -> ! {
     } else {
         drivers::serial::write_string("PS/2 mouse unavailable; keyboard navigation enabled.\r\n");
     }
+    boot_screen.update(drivers::boot_screen::BootStage::InputReady);
 
-    let mut desktop = drivers::wm::WindowManager::new();
-    desktop.render();
     drivers::pic::unmask_irq(0);
-    unsafe { asm!("sti"); }
+    unsafe {
+        asm!("sti");
+    }
+    let mut desktop = drivers::wm::WindowManager::new();
+    boot_screen.update(drivers::boot_screen::BootStage::DesktopReady);
+    boot_screen.wait_until_minimum_duration();
+    desktop.render();
     drivers::serial::write_string("Graphical desktop ready.\r\n");
 
     loop {
@@ -99,12 +115,16 @@ pub extern "C" fn kernel_entry(multiboot_info: *const u8) -> ! {
         if redraw {
             desktop.render();
         }
-        unsafe { asm!("hlt", options(nomem, nostack)); }
+        unsafe {
+            asm!("hlt", options(nomem, nostack));
+        }
     }
 }
 
 fn halt() -> ! {
     loop {
-        unsafe { asm!("cli", "hlt", options(nomem, nostack)); }
+        unsafe {
+            asm!("cli", "hlt", options(nomem, nostack));
+        }
     }
 }

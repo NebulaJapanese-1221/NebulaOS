@@ -23,11 +23,21 @@ impl Paint {
     }
 
     fn canvas_rect(area: Rect) -> Rect {
-        Rect { x: area.x + 120, y: area.y + 16, width: area.width.saturating_sub(140), height: area.height.saturating_sub(32) }
+        Rect {
+            x: area.x + 120,
+            y: area.y + 16,
+            width: area.width.saturating_sub(140),
+            height: area.height.saturating_sub(32),
+        }
     }
 
     fn clear_rect(area: Rect) -> Rect {
-        Rect { x: area.x + 16, y: area.y + 160, width: 82, height: 26 }
+        Rect {
+            x: area.x + 16,
+            y: area.y + 160,
+            width: 82,
+            height: 26,
+        }
     }
 
     fn draw_line(&mut self, from: (u32, u32), to: (u32, u32), paper: Rect) {
@@ -52,16 +62,26 @@ impl Paint {
                 color,
             );
             self.mark_count += 1;
-            if x0 == x1 && y0 == y1 { break; }
+            if x0 == x1 && y0 == y1 {
+                break;
+            }
             let twice = 2 * error;
-            if twice >= dy { error += dy; x0 += sx; }
-            if twice <= dx { error += dx; y0 += sy; }
+            if twice >= dy {
+                error += dy;
+                x0 += sx;
+            }
+            if twice <= dx {
+                error += dx;
+                y0 += sy;
+            }
         }
     }
 }
 
 impl Application for Paint {
-    fn title(&self) -> &'static str { "PAINT" }
+    fn title(&self) -> &'static str {
+        "PAINT"
+    }
 
     fn render(&self, canvas: &mut dyn Canvas, area: Rect, pointer: PointerEvent) {
         let paper = Self::canvas_rect(area);
@@ -71,25 +91,49 @@ impl Application for Paint {
             let x = paper.x + x as u32;
             let y = paper.y + y as u32;
             if paper.contains(x, y) {
-                canvas.fill_rect(Rect { x, y, width: 3, height: 3 }, color);
+                canvas.fill_rect(
+                    Rect {
+                        x,
+                        y,
+                        width: 3,
+                        height: 3,
+                    },
+                    color,
+                );
             }
         }
         canvas.draw_text(area.x + 16, area.y + 18, "COLOR", 0xF1F5F9, 1);
-        self.color_menu.render(canvas, Rect {
-            x: area.x + 16, y: area.y + 38, width: 82, height: 5 * 28,
-        }, &COLOR_NAMES);
-        self.clear_button.render(canvas, Self::clear_rect(area), pointer);
+        self.color_menu.render(
+            canvas,
+            Rect {
+                x: area.x + 16,
+                y: area.y + 38,
+                width: 82,
+                height: 5 * 28,
+            },
+            &COLOR_NAMES,
+        );
+        self.clear_button
+            .render(canvas, Self::clear_rect(area), pointer);
     }
 
     fn handle_event(&mut self, event: Event, area: Rect) -> bool {
         match event {
             Event::Pointer(pointer) => {
                 let mut changed = self.color_menu.handle_pointer(
-                    Rect { x: area.x + 16, y: area.y + 38, width: 82, height: 5 * 28 },
+                    Rect {
+                        x: area.x + 16,
+                        y: area.y + 38,
+                        width: 82,
+                        height: 5 * 28,
+                    },
                     &COLOR_NAMES,
                     pointer,
                 );
-                if self.clear_button.handle_pointer(Self::clear_rect(area), pointer) {
+                if self
+                    .clear_button
+                    .handle_pointer(Self::clear_rect(area), pointer)
+                {
                     self.mark_count = 0;
                     self.previous = None;
                     changed = true;
@@ -108,7 +152,10 @@ impl Application for Paint {
                 }
                 changed
             }
-            Event::Key(b'c' | b'C') => { self.mark_count = 0; true }
+            Event::Key(b'c' | b'C') => {
+                self.mark_count = 0;
+                true
+            }
             Event::Key(_) => false,
         }
     }

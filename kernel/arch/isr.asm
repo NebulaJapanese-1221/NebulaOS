@@ -19,6 +19,7 @@ extern schedule_rust
 extern isr_handler_rust
 extern __bss_start
 extern __bss_end
+extern SCHEDULED_CR3
 
 section .multiboot2
 align 8
@@ -128,22 +129,10 @@ isr_common:
     mov eax, [esp + 48]
     mov edx, [esp + 52]
 
-    ; Check if this is the timer IRQ (interrupt 32)
-    cmp eax, 32
-    jne .no_schedule
-
-    ; Timer tick - run scheduler
-    push esp          ; argument: current saved stack pointer
-    call schedule_rust
-    add esp, 4        ; clean up argument
-    mov esp, eax      ; switch to next process stack
-
-.no_schedule:
-    mov eax, [esp + 48]
-    mov edx, [esp + 52]
-
     ; Call Rust interrupt handler
     ; Args: interrupt_num (eax), error_code (edx), regs_ptr (esp)
+    mov eax, [esp + 48]
+    mov edx, [esp + 52]
     push esp          ; 3rd arg: pointer to saved registers
     push edx          ; 2nd arg: error_code
     push eax          ; 1st arg: interrupt_num
@@ -164,6 +153,24 @@ isr_common:
     out 0x20, al
 .no_eoi:
 
+    ; Switch after handling the interrupt so faults and exits can mark a task dead.
+    mov eax, [esp + 48]
+    cmp eax, 32
+    je .schedule
+    cmp eax, 128
+    je .schedule
+    cmp eax, 32
+    jge .no_schedule
+    test dword [esp + 60], 3
+    jz .no_schedule
+.schedule:
+    push esp
+    call schedule_rust
+    add esp, 4
+    mov ecx, [SCHEDULED_CR3]
+    mov cr3, ecx
+    mov esp, eax
+.no_schedule:
     pop gs
     pop fs
     pop es
@@ -199,5 +206,7 @@ load_page_dir:
 load_tr:
     mov ax, [esp + 4]
     ltr ax
-    ; Just return eax unchanged for now (single process)
     ret
+
+; Enter one ring-3 ELF process. The return path is the int 0x80 exit syscall.
+; Arguments: entry point, user stack, user CR3, user code selector, user data selector.

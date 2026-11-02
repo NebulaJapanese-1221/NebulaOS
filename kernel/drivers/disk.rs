@@ -19,7 +19,10 @@ pub struct FileInfo {
 }
 
 impl FileInfo {
-    const EMPTY: Self = Self { name: [0; 16], length: 0 };
+    const EMPTY: Self = Self {
+        name: [0; 16],
+        length: 0,
+    };
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -39,23 +42,31 @@ static mut DISK_READY: bool = false;
 static mut FORMATTED: bool = false;
 
 fn out8(port: u16, value: u8) {
-    unsafe { core::arch::asm!("out dx, al", in("dx") port, in("al") value); }
+    unsafe {
+        core::arch::asm!("out dx, al", in("dx") port, in("al") value);
+    }
 }
 
 fn in8(port: u16) -> u8 {
     let value: u8;
-    unsafe { core::arch::asm!("in al, dx", in("dx") port, out("al") value); }
+    unsafe {
+        core::arch::asm!("in al, dx", in("dx") port, out("al") value);
+    }
     value
 }
 
 fn in16(port: u16) -> u16 {
     let value: u16;
-    unsafe { core::arch::asm!("in ax, dx", in("dx") port, out("ax") value); }
+    unsafe {
+        core::arch::asm!("in ax, dx", in("dx") port, out("ax") value);
+    }
     value
 }
 
 fn out16(port: u16, value: u16) {
-    unsafe { core::arch::asm!("out dx, ax", in("dx") port, in("ax") value); }
+    unsafe {
+        core::arch::asm!("out dx, ax", in("dx") port, in("ax") value);
+    }
 }
 
 fn wait_ready(require_data: bool) -> Result<u8, StorageError> {
@@ -84,7 +95,9 @@ fn select_sector(lba: u32) -> Result<(), StorageError> {
         return Err(StorageError::Io);
     }
     out8(DRIVE, 0xE0 | ((lba >> 24) as u8 & 0x0F));
-    for _ in 0..4 { let _ = in8(STATUS); }
+    for _ in 0..4 {
+        let _ = in8(STATUS);
+    }
     out8(SECTOR_COUNT, 1);
     out8(LBA_LOW, lba as u8);
     out8(LBA_MID, (lba >> 8) as u8);
@@ -110,7 +123,10 @@ fn write_sector(lba: u32, buffer: &[u8; 512]) -> Result<(), StorageError> {
     out8(COMMAND, 0x30);
     wait_ready(true)?;
     for word in 0..256 {
-        out16(DATA, u16::from_le_bytes([buffer[word * 2], buffer[word * 2 + 1]]));
+        out16(
+            DATA,
+            u16::from_le_bytes([buffer[word * 2], buffer[word * 2 + 1]]),
+        );
     }
     out8(0x3F6, 0);
     wait_ready(false)?;
@@ -122,7 +138,9 @@ fn write_sector(lba: u32, buffer: &[u8; 512]) -> Result<(), StorageError> {
 
 pub fn init() -> Result<(), StorageError> {
     out8(DRIVE, 0xA0);
-    for _ in 0..4 { let _ = in8(STATUS); }
+    for _ in 0..4 {
+        let _ = in8(STATUS);
+    }
     out8(SECTOR_COUNT, 0);
     out8(LBA_LOW, 0);
     out8(LBA_MID, 0);
@@ -136,8 +154,12 @@ pub fn init() -> Result<(), StorageError> {
     let mut sectors = 0u32;
     for index in 0..256 {
         let word = in16(DATA);
-        if index == 60 { sectors = word as u32; }
-        if index == 61 { sectors |= (word as u32) << 16; }
+        if index == 60 {
+            sectors = word as u32;
+        }
+        if index == 61 {
+            sectors |= (word as u32) << 16;
+        }
     }
     if sectors <= DATA_START + FILE_SLOTS as u32 {
         return Err(StorageError::Io);
@@ -148,15 +170,23 @@ pub fn init() -> Result<(), StorageError> {
     }
     let mut header = [0; 512];
     read_sector(0, &mut header)?;
-    unsafe { FORMATTED = &header[..8] == MAGIC; }
+    unsafe {
+        FORMATTED = &header[..8] == MAGIC;
+    }
     Ok(())
 }
 
-pub fn is_available() -> bool { unsafe { DISK_READY } }
-pub fn is_formatted() -> bool { unsafe { FORMATTED } }
+pub fn is_available() -> bool {
+    unsafe { DISK_READY }
+}
+pub fn is_formatted() -> bool {
+    unsafe { FORMATTED }
+}
 
 pub fn format_if_blank() -> Result<(), StorageError> {
-    if !unsafe { DISK_READY } { return Err(StorageError::NoDisk); }
+    if !unsafe { DISK_READY } {
+        return Err(StorageError::NoDisk);
+    }
     let mut header = [0; 512];
     read_sector(0, &mut header)?;
     if header.iter().any(|byte| *byte != 0 && *byte != 0xFF) {
@@ -166,7 +196,9 @@ pub fn format_if_blank() -> Result<(), StorageError> {
     header[8..12].copy_from_slice(&1u32.to_le_bytes());
     write_sector(0, &header)?;
     write_sector(DIRECTORY_SECTOR, &[0; 512])?;
-    unsafe { FORMATTED = true; }
+    unsafe {
+        FORMATTED = true;
+    }
     Ok(())
 }
 
@@ -190,15 +222,25 @@ pub fn read_file(name: &[u8], output: &mut [u8; 512]) -> Result<usize, StorageEr
     let entry = &directory[slot * 32..slot * 32 + 32];
     let length = u16::from_le_bytes([entry[16], entry[17]]) as usize;
     let data_sector = entry[18] as u32;
+    if length > output.len() || data_sector >= FILE_SLOTS as u32 {
+        return Err(StorageError::Io);
+    }
     read_sector(DATA_START + data_sector, output)?;
     Ok(length)
 }
 
 pub fn write_file(name: &[u8], content: &[u8]) -> Result<(), StorageError> {
-    if name.is_empty() || name.len() > 15 || name.iter().any(|b| !b.is_ascii_alphanumeric() && *b != b'.' && *b != b'_' && *b != b'-') {
+    if name.is_empty()
+        || name.len() > 15
+        || name
+            .iter()
+            .any(|b| !b.is_ascii_alphanumeric() && *b != b'.' && *b != b'_' && *b != b'-')
+    {
         return Err(StorageError::InvalidName);
     }
-    if content.len() > 512 { return Err(StorageError::FileTooLarge); }
+    if content.len() > 512 {
+        return Err(StorageError::FileTooLarge);
+    }
     require_formatted()?;
     let mut directory = [0; 512];
     read_sector(DIRECTORY_SECTOR, &mut directory)?;
@@ -207,7 +249,8 @@ pub fn write_file(name: &[u8], content: &[u8]) -> Result<(), StorageError> {
         let stored_len = entry[..16].iter().position(|byte| *byte == 0).unwrap_or(16);
         entry[19] == 1 && &entry[..stored_len] == name
     });
-    let slot = existing.or_else(|| (0..FILE_SLOTS).find(|index| directory[index * 32 + 19] != 1))
+    let slot = existing
+        .or_else(|| (0..FILE_SLOTS).find(|index| directory[index * 32 + 19] != 1))
         .ok_or(StorageError::DirectoryFull)?;
     let mut data = [0; 512];
     data[..content.len()].copy_from_slice(content);
@@ -228,12 +271,19 @@ pub fn delete_file(name: &[u8]) -> Result<(), StorageError> {
 }
 
 pub fn rename_file(old_name: &[u8], new_name: &[u8]) -> Result<(), StorageError> {
-    if new_name.is_empty() || new_name.len() > 15 || new_name.iter().any(|b| !b.is_ascii_alphanumeric() && *b != b'.' && *b != b'_' && *b != b'-') {
+    if new_name.is_empty()
+        || new_name.len() > 15
+        || new_name
+            .iter()
+            .any(|b| !b.is_ascii_alphanumeric() && *b != b'.' && *b != b'_' && *b != b'-')
+    {
         return Err(StorageError::InvalidName);
     }
     let (mut directory, slot) = find_entry(old_name)?;
     for index in 0..FILE_SLOTS {
-        if index == slot { continue; }
+        if index == slot {
+            continue;
+        }
         let entry = &directory[index * 32..index * 32 + 32];
         let stored_len = entry[..16].iter().position(|byte| *byte == 0).unwrap_or(16);
         if entry[19] == 1 && &entry[..stored_len] == new_name {
@@ -247,8 +297,12 @@ pub fn rename_file(old_name: &[u8], new_name: &[u8]) -> Result<(), StorageError>
 }
 
 fn require_formatted() -> Result<(), StorageError> {
-    if !unsafe { DISK_READY } { return Err(StorageError::NoDisk); }
-    if !unsafe { FORMATTED } { return Err(StorageError::NotFormatted); }
+    if !unsafe { DISK_READY } {
+        return Err(StorageError::NoDisk);
+    }
+    if !unsafe { FORMATTED } {
+        return Err(StorageError::NotFormatted);
+    }
     Ok(())
 }
 
