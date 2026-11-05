@@ -59,6 +59,10 @@ pub extern "C" fn kernel_entry(multiboot_info: *const u8) -> ! {
     arch::pic::remap(0x20, 0x28);
     arch::pic::mask_irq(0);
     drivers::pit::init(100);
+    drivers::pci::init();
+    drivers::rtc::init();
+    drivers::audio::init();
+    arch::smp::init(multiboot_info);
 
     let framebuffer = match drivers::framebuffer::init(multiboot_info) {
         Ok(framebuffer) => framebuffer,

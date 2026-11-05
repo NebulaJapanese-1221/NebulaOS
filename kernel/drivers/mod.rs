@@ -15,9 +15,12 @@
 // You should have received a copy of the GNU General Public License
 // along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
 
+pub mod audio;
 pub mod disk;
 pub mod framebuffer;
 pub mod keyboard;
 pub mod mouse;
+pub mod pci;
 pub mod pit;
+pub mod rtc;
 pub mod serial;
