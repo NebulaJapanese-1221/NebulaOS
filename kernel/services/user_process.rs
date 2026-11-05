@@ -175,6 +175,7 @@ pub fn copy_last_output(destination: &mut [u8]) -> usize {
 }
 
 pub fn exit_from_syscall(_registers: *mut u32, _code: u32) -> bool {
+    crate::graphics::wm::request_desktop_redraw();
     process::terminate_current_user_process()
 }
 

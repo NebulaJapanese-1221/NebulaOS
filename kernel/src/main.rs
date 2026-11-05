@@ -21,18 +21,8 @@ use core::arch::asm;
 use core::panic::PanicInfo;
 
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    drivers::serial::write_string("Kernel panic.\r\n");
-    let mut output = [0; 128];
-    let length = services::user_process::copy_last_output(&mut output);
-    if length != 0 {
-        drivers::serial::write_string("Captured user output: ");
-        for byte in &output[..length] {
-            drivers::serial::write_byte(*byte);
-        }
-        drivers::serial::write_string("\r\n");
-    }
-    halt()
+fn panic(info: &PanicInfo) -> ! {
+    services::error::handle_panic(info)
 }
 
 #[no_mangle]
@@ -126,6 +116,7 @@ pub extern "C" fn kernel_entry(multiboot_info: *const u8) -> ! {
             desktop.refresh_periodic_apps();
         }
         redraw |= graphics::wm::take_theme_changed();
+        redraw |= graphics::wm::take_desktop_redraw_request();
         if let Some(key) = drivers::keyboard::poll_key() {
             redraw |= desktop.handle_key(key);
         }

@@ -1,4 +1,14 @@
 // Serial port driver
+use core::fmt::{self, Write};
+
+struct SerialWriter;
+
+impl Write for SerialWriter {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        write_string(value);
+        Ok(())
+    }
+}
 
 fn port_byte_out(port: u16, data: u8) {
     unsafe {
@@ -41,6 +51,7 @@ pub fn write_dec(mut val: u32) {
         write_byte(b'0');
         return;
     }
+
     let mut buf = [0u8; 10];
     let mut pos = 10;
     while val > 0 {
@@ -51,4 +62,20 @@ pub fn write_dec(mut val: u32) {
     for i in pos..10 {
         write_byte(buf[i]);
     }
+}
+
+pub fn write_hex(value: u32) {
+    write_string("0x");
+    for shift in (0..8).rev() {
+        let digit = ((value >> (shift * 4)) & 0xF) as u8;
+        write_byte(if digit < 10 {
+            b'0' + digit
+        } else {
+            b'A' + digit - 10
+        });
+    }
+}
+
+pub fn write_fmt(arguments: fmt::Arguments<'_>) {
+    let _ = SerialWriter.write_fmt(arguments);
 }

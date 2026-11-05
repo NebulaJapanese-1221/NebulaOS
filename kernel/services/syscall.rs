@@ -26,11 +26,7 @@ static mut MOUSE_SENSITIVITY: u32 = 2;
 // error_code: the error code (0 if none)
 // regs_ptr: pointer to saved registers on the stack
 #[no_mangle]
-pub extern "C" fn isr_handler_rust(
-    interrupt_num: u32,
-    _error_code: u32,
-    regs_ptr: *mut u32,
-) -> u32 {
+pub extern "C" fn isr_handler_rust(interrupt_num: u32, error_code: u32, regs_ptr: *mut u32) -> u32 {
     if interrupt_num == 128 {
         return handle_syscall(regs_ptr);
     }
@@ -38,9 +34,19 @@ pub extern "C" fn isr_handler_rust(
     if interrupt_num == 32 {
         crate::drivers::pit::pit_tick();
         crate::services::process::wake_sleeping_processes(crate::drivers::pit::ticks());
-    } else if interrupt_num < 32 && !regs_ptr.is_null() && unsafe { *regs_ptr.add(REG_CS) & 3 == 3 }
-    {
-        crate::services::user_process::exit_from_syscall(regs_ptr, 0x8000_0000 | interrupt_num);
+    } else if interrupt_num < 32 {
+        if regs_ptr.is_null() {
+            crate::graphics::system_screen::show(
+                "SYSTEM ERROR",
+                "CPU exception with invalid register state.",
+            );
+            loop {
+                unsafe {
+                    core::arch::asm!("cli", "hlt", options(nomem, nostack));
+                }
+            }
+        }
+        crate::services::error::handle_exception(interrupt_num, error_code, regs_ptr);
     }
 
     if (32..48).contains(&interrupt_num) {
@@ -80,6 +86,7 @@ fn handle_syscall(regs_ptr: *mut u32) -> u32 {
                 }
             }
             SYSCALL_EXIT => {
+                crate::services::error::report_user_exit(*regs_ptr.add(REG_EBX));
                 if crate::services::user_process::exit_from_syscall(
                     regs_ptr,
                     *regs_ptr.add(REG_EBX),

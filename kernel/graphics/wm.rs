@@ -36,6 +36,21 @@ const APP_COUNT: usize = 8;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 static mut DARK_THEME: bool = true;
 static mut THEME_CHANGED: bool = false;
+static mut DESKTOP_REDRAW_REQUESTED: bool = false;
+
+pub fn request_desktop_redraw() {
+    unsafe {
+        DESKTOP_REDRAW_REQUESTED = true;
+    }
+}
+
+pub fn take_desktop_redraw_request() -> bool {
+    unsafe {
+        let requested = DESKTOP_REDRAW_REQUESTED;
+        DESKTOP_REDRAW_REQUESTED = false;
+        requested
+    }
+}
 
 pub fn set_dark_theme(enabled: bool) {
     unsafe {
@@ -442,14 +457,16 @@ impl WindowManager {
         if self.start_menu_open {
             return changed;
         }
-        if let Some(index) = self.focused {
-            if index < self.windows.len() && !self.windows[index].minimized {
-                let _ = crate::services::user_process::route_pointer_event(
-                    self.windows[index].pid,
-                    pointer.x,
-                    pointer.y,
-                    pointer.left_down,
-                );
+        if changed {
+            if let Some(index) = self.focused {
+                if index < self.windows.len() && !self.windows[index].minimized {
+                    let _ = crate::services::user_process::route_pointer_event(
+                        self.windows[index].pid,
+                        pointer.x,
+                        pointer.y,
+                        pointer.left_down,
+                    );
+                }
             }
         }
         if matches!(self.capture, Capture::Drag(_)) {

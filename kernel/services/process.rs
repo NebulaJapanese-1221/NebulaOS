@@ -479,9 +479,11 @@ pub extern "C" fn schedule_rust(current_esp: u32) -> u32 {
             KERNEL_IDLE_ESP = current_esp;
         } else {
             let current = &mut PROCESSES[CURRENT_PID - 1];
-            if current.state == ProcessState::Running {
+            if current.state != ProcessState::Zombie && current.state != ProcessState::Unused {
                 current.saved_esp = current_esp;
-                current.state = ProcessState::Ready;
+                if current.state == ProcessState::Running {
+                    current.state = ProcessState::Ready;
+                }
             }
         }
 
