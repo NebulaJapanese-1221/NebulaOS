@@ -1,26 +1,76 @@
-use super::gui::{Application, Canvas, Checkbox, Event, FocusGroup, Menu, PointerEvent, Rect};
+use super::gui::{Application, Button, Canvas, Checkbox, Event, Menu, PointerEvent, Rect};
 
-const SPEEDS: [&str; 3] = ["SLOW", "NORMAL", "FAST"];
+const CATEGORIES: [&str; 3] = ["DISPLAY", "MOUSE", "SYSTEM"];
+const SENSITIVITIES: [&str; 4] = ["1 - LOW", "2 - MED-LOW", "3 - MED-HIGH", "4 - HIGH"];
 
 pub struct Settings {
     dark_theme: Checkbox,
-    mouse_speed: Menu,
-    focus: FocusGroup,
+    mouse_sensitivity: Menu,
+    category_buttons: [Button; 3],
+    category: usize,
     status: &'static str,
 }
 
 impl Settings {
     pub fn new_with_state(dark_theme: bool, mouse_sensitivity: u32) -> Self {
-        let selected_speed = match mouse_sensitivity {
-            1 => 0,
-            4 => 2,
-            _ => 1,
-        };
         Self {
             dark_theme: Checkbox::new(dark_theme),
-            mouse_speed: Menu::new(selected_speed),
-            focus: FocusGroup::new(0),
+            mouse_sensitivity: Menu::new(mouse_sensitivity.saturating_sub(1).min(3) as usize),
+            category_buttons: [
+                Button::new(CATEGORIES[0]),
+                Button::new(CATEGORIES[1]),
+                Button::new(CATEGORIES[2]),
+            ],
+            category: 0,
             status: "",
+        }
+    }
+
+    fn category_rect(area: Rect, index: usize) -> Rect {
+        Rect {
+            x: area.x + 16 + index as u32 * 128,
+            y: area.y + 12,
+            width: 116,
+            height: 28,
+        }
+    }
+
+    fn display_rect(area: Rect) -> Rect {
+        Rect {
+            x: area.x + 24,
+            y: area.y + 72,
+            width: 16,
+            height: 16,
+        }
+    }
+
+    fn mouse_rect(area: Rect) -> Rect {
+        Rect {
+            x: area.x + 24,
+            y: area.y + 76,
+            width: 180,
+            height: 4 * 28,
+        }
+    }
+
+    fn change_sensitivity(&mut self, selected: usize) {
+        let selected = selected.min(SENSITIVITIES.len() - 1);
+        let old = self.mouse_sensitivity.selected;
+        self.mouse_sensitivity.selected = selected;
+        if crate::syscall::set_mouse_sensitivity((selected + 1) as u32).is_err() {
+            self.mouse_sensitivity.selected = old;
+            self.status = "SYSTEM SERVICE UNAVAILABLE";
+        } else {
+            self.status = "";
+        }
+    }
+
+    fn apply_theme(&mut self) {
+        if crate::syscall::set_dark_theme(self.dark_theme.checked).is_err() {
+            self.dark_theme.checked = !self.dark_theme.checked;
+            self.status = "SYSTEM SERVICE UNAVAILABLE";
+        } else {
+            self.status = "";
         }
     }
 }
@@ -30,127 +80,124 @@ impl Application for Settings {
         "SETTINGS"
     }
 
-    fn render(&self, canvas: &mut dyn Canvas, area: Rect, _pointer: PointerEvent) {
-        canvas.draw_text(area.x + 24, area.y + 20, "APPEARANCE", 0x1596B5, 1);
-        self.dark_theme.render(
-            canvas,
-            Rect {
-                x: area.x + 24,
-                y: area.y + 48,
-                width: 16,
-                height: 16,
-            },
-            "DARK WALLPAPER",
-        );
-        canvas.draw_text(area.x + 24, area.y + 92, "DISPLAY MODE", 0x1596B5, 1);
+    fn render(&self, canvas: &mut dyn Canvas, area: Rect, pointer: PointerEvent) {
+        for (index, button) in self.category_buttons.iter().enumerate() {
+            let rect = Self::category_rect(area, index);
+            button.draw_chrome(canvas, rect, pointer);
+            let color = if self.category == index {
+                0x66D9EF
+            } else {
+                0xF1F5F9
+            };
+            canvas.draw_text(
+                rect.x
+                    + rect
+                        .width
+                        .saturating_sub(CATEGORIES[index].len() as u32 * 6)
+                        / 2,
+                rect.y + 10,
+                CATEGORIES[index],
+                color,
+                1,
+            );
+        }
+
+        match self.category {
+            0 => {
+                canvas.draw_text(area.x + 24, area.y + 56, "WALLPAPER", 0x1596B5, 1);
+                self.dark_theme
+                    .render(canvas, Self::display_rect(area), "DARK WALLPAPER");
+                canvas.draw_text(area.x + 24, area.y + 116, "DISPLAY MODE", 0x1596B5, 1);
+                canvas.draw_text(
+                    area.x + 24,
+                    area.y + 138,
+                    "1024 X 768 (SET BY GRUB AT BOOT)",
+                    0x111827,
+                    1,
+                );
+            }
+            1 => {
+                canvas.draw_text(area.x + 24, area.y + 56, "POINTER SENSITIVITY", 0x1596B5, 1);
+                self.mouse_sensitivity
+                    .render(canvas, Self::mouse_rect(area), &SENSITIVITIES);
+                canvas.draw_text(
+                    area.x + 24,
+                    area.y + 202,
+                    "Select a level from 1 (slow) to 4 (fast).",
+                    0x111827,
+                    1,
+                );
+            }
+            _ => {
+                canvas.draw_text(area.x + 24, area.y + 56, "SYSTEM", 0x1596B5, 1);
+                canvas.draw_text(area.x + 24, area.y + 84, "KEYBOARD: US QWERTY", 0x111827, 1);
+                canvas.draw_text(area.x + 24, area.y + 108, "APPS RUN IN RING 3", 0x111827, 1);
+                canvas.draw_text(
+                    area.x + 24,
+                    area.y + 132,
+                    "USE TAB TO SWITCH CATEGORIES",
+                    0x111827,
+                    1,
+                );
+            }
+        }
         canvas.draw_text(
             area.x + 24,
-            area.y + 112,
-            "1024 X 768 (SET BY GRUB AT BOOT)",
-            0x111827,
+            area.y + area.height.saturating_sub(18),
+            self.status,
+            0xA23B45,
             1,
         );
-        canvas.draw_text(area.x + 24, area.y + 150, "MOUSE SPEED", 0x1596B5, 1);
-        self.mouse_speed.render(
-            canvas,
-            Rect {
-                x: area.x + 24,
-                y: area.y + 174,
-                width: 150,
-                height: 3 * 28,
-            },
-            &SPEEDS,
-        );
-        canvas.draw_text(
-            area.x + 24,
-            area.y + 220,
-            "KEYBOARD: US QWERTY",
-            0x111827,
-            1,
-        );
-        canvas.draw_text(area.x + 24, area.y + 238, self.status, 0xA23B45, 1);
     }
 
     fn handle_event(&mut self, event: Event, area: Rect) -> bool {
         match event {
             Event::Pointer(pointer) => {
-                let toggled = self.dark_theme.handle_pointer(
-                    Rect {
-                        x: area.x + 24,
-                        y: area.y + 48,
-                        width: 16,
-                        height: 16,
-                    },
-                    pointer,
-                );
-                if toggled {
-                    if crate::syscall::set_dark_theme(self.dark_theme.checked).is_err() {
-                        self.dark_theme.checked = !self.dark_theme.checked;
-                        self.status = "SYSTEM SERVICE UNAVAILABLE";
-                        return true;
-                    }
-                }
-                let old_speed = self.mouse_speed.selected;
-                let selected = self.mouse_speed.handle_pointer(
-                    Rect {
-                        x: area.x + 24,
-                        y: area.y + 174,
-                        width: 150,
-                        height: 3 * 28,
-                    },
-                    &SPEEDS,
-                    pointer,
-                );
-                if selected {
-                    if crate::syscall::set_mouse_sensitivity([1, 2, 4][self.mouse_speed.selected])
-                        .is_err()
+                let mut changed = false;
+                if self.category == 0 {
+                    if self
+                        .dark_theme
+                        .handle_pointer(Self::display_rect(area), pointer)
                     {
-                        self.mouse_speed.selected = old_speed;
-                        self.status = "SYSTEM SERVICE UNAVAILABLE";
-                        return true;
+                        self.apply_theme();
+                        changed = true;
                     }
                 }
-                self.status = "";
-                toggled || selected
+                if self.category == 1
+                    && self.mouse_sensitivity.handle_pointer(
+                        Self::mouse_rect(area),
+                        &SENSITIVITIES,
+                        pointer,
+                    )
+                {
+                    self.change_sensitivity(self.mouse_sensitivity.selected);
+                    changed = true;
+                }
+
+                for (index, button) in self.category_buttons.iter_mut().enumerate() {
+                    if button.handle_pointer(Self::category_rect(area, index), pointer) {
+                        changed |= self.category != index;
+                        self.category = index;
+                    }
+                }
+                changed
             }
             Event::Key(b'\t') => {
-                self.focus.next(2);
+                self.category = (self.category + 1) % CATEGORIES.len();
+                self.status = "";
                 true
             }
-            Event::Key(b' ') if self.focus.selected() == 0 => {
+            Event::Key(b' ') if self.category == 0 => {
                 self.dark_theme.checked = !self.dark_theme.checked;
-                if crate::syscall::set_dark_theme(self.dark_theme.checked).is_err() {
-                    self.dark_theme.checked = !self.dark_theme.checked;
-                    self.status = "SYSTEM SERVICE UNAVAILABLE";
-                } else {
-                    self.status = "";
-                }
+                self.apply_theme();
                 true
             }
-            Event::Key(b'-' | b'[') if self.focus.selected() == 1 => {
-                let old_speed = self.mouse_speed.selected;
-                self.mouse_speed.selected = self.mouse_speed.selected.saturating_sub(1);
-                if crate::syscall::set_mouse_sensitivity([1, 2, 4][self.mouse_speed.selected])
-                    .is_err()
-                {
-                    self.mouse_speed.selected = old_speed;
-                    self.status = "SYSTEM SERVICE UNAVAILABLE";
-                } else {
-                    self.status = "";
-                }
+            Event::Key(b'-' | b'[') if self.category == 1 => {
+                self.change_sensitivity(self.mouse_sensitivity.selected.saturating_sub(1));
                 true
             }
-            Event::Key(b'+' | b']') if self.focus.selected() == 1 => {
-                let old_speed = self.mouse_speed.selected;
-                self.mouse_speed.selected = (self.mouse_speed.selected + 1).min(2);
-                if crate::syscall::set_mouse_sensitivity([1, 2, 4][self.mouse_speed.selected])
-                    .is_err()
-                {
-                    self.mouse_speed.selected = old_speed;
-                    self.status = "SYSTEM SERVICE UNAVAILABLE";
-                } else {
-                    self.status = "";
-                }
+            Event::Key(b'+' | b']') if self.category == 1 => {
+                self.change_sensitivity((self.mouse_sensitivity.selected + 1).min(3));
                 true
             }
             Event::Key(_) => false,

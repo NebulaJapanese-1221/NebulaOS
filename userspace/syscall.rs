@@ -246,7 +246,7 @@ pub fn set_dark_theme(enabled: bool) -> Result<(), SyscallError> {
 
 #[cfg(feature = "user-app")]
 pub fn set_mouse_sensitivity(sensitivity: u32) -> Result<(), SyscallError> {
-    if !matches!(sensitivity, 1 | 2 | 4) {
+    if !matches!(sensitivity, 1..=4) {
         return Err(SyscallError::InvalidArgument);
     }
     if invoke(SYSCALL_SET_MOUSE_SENSITIVITY, sensitivity, 0) == 0 {

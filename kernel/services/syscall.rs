@@ -112,7 +112,7 @@ fn handle_syscall(regs_ptr: *mut u32) -> u32 {
                 }
             }
             SYSCALL_SET_MOUSE_SENSITIVITY => match *regs_ptr.add(REG_EBX) {
-                value @ (1 | 2 | 4) => {
+                value @ 1..=4 => {
                     crate::drivers::mouse::set_sensitivity(value as i32);
                     MOUSE_SENSITIVITY = value;
                     0

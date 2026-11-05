@@ -191,11 +191,19 @@ fn pack_color(framebuffer: Framebuffer, color: u32) -> u32 {
 
 fn write_pixel(framebuffer: Framebuffer, offset: usize, bytes_per_pixel: usize, pixel: u32) {
     unsafe {
+        if bytes_per_pixel == 4 {
+            framebuffer
+                .pixels
+                .add(offset)
+                .cast::<u32>()
+                .write_unaligned(pixel);
+            return;
+        }
         for byte in 0..bytes_per_pixel {
             framebuffer
                 .pixels
                 .add(offset + byte)
-                .write_volatile((pixel >> (byte * 8)) as u8);
+                .write((pixel >> (byte * 8)) as u8);
         }
     }
 }
@@ -229,11 +237,35 @@ pub fn present() {
         return;
     };
     unsafe {
-        for offset in 0..framebuffer.length {
+        let mut offset = 0;
+        while offset < framebuffer.length
+            && (framebuffer.display_pixels.add(offset) as usize) & 3 != 0
+        {
             framebuffer
                 .display_pixels
                 .add(offset)
                 .write_volatile(framebuffer.pixels.add(offset).read());
+            offset += 1;
+        }
+        while offset + core::mem::size_of::<u32>() <= framebuffer.length {
+            let pixel_group = framebuffer
+                .pixels
+                .add(offset)
+                .cast::<u32>()
+                .read_unaligned();
+            framebuffer
+                .display_pixels
+                .add(offset)
+                .cast::<u32>()
+                .write_volatile(pixel_group);
+            offset += core::mem::size_of::<u32>();
+        }
+        while offset < framebuffer.length {
+            framebuffer
+                .display_pixels
+                .add(offset)
+                .write_volatile(framebuffer.pixels.add(offset).read());
+            offset += 1;
         }
     }
 }

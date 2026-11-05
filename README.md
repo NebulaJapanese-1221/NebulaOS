@@ -35,6 +35,9 @@ The Ring-3 terminal supports `help`, `echo`, `clear`, `uptime`, `mem`, `ps`,
 controls only through validated kernel syscalls; reboot and shutdown display a
 system transition screen before invoking the platform controls.
 
+Settings are grouped into Display, Mouse, and System categories. Mouse
+sensitivity has four selectable levels.
+
 ## Build and run
 
 Run `make` to build `nebulaos.iso`, then `make run` to boot it in QEMU. GRUB

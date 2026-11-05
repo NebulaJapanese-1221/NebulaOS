@@ -65,7 +65,7 @@ struct Window {
     maximized: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum AppKind {
     Calculator,
     TextEditor,
@@ -191,6 +191,27 @@ impl WindowManager {
         framebuffer::present();
         for window in &self.windows {
             if !window.minimized {
+                let area = app_area(window.bounds);
+                let _ = crate::services::user_process::request_redraw(
+                    window.pid,
+                    crate::services::process::AppRect {
+                        x: area.x,
+                        y: area.y,
+                        width: area.width,
+                        height: area.height,
+                    },
+                    pointer.x,
+                    pointer.y,
+                    pointer.left_down,
+                );
+            }
+        }
+    }
+
+    pub fn refresh_periodic_apps(&self) {
+        let pointer = self.pointer();
+        for window in &self.windows {
+            if window.kind == AppKind::SystemMonitor && !window.minimized {
                 let area = app_area(window.bounds);
                 let _ = crate::services::user_process::request_redraw(
                     window.pid,

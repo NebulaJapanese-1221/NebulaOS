@@ -123,7 +123,7 @@ pub extern "C" fn kernel_entry(multiboot_info: *const u8) -> ! {
         let ticks = drivers::pit::ticks();
         if ticks.wrapping_sub(last_periodic_redraw) >= 100 {
             last_periodic_redraw = ticks;
-            redraw = true;
+            desktop.refresh_periodic_apps();
         }
         redraw |= graphics::wm::take_theme_changed();
         if let Some(key) = drivers::keyboard::poll_key() {
