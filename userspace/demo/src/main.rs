@@ -18,6 +18,7 @@ use userspace::apps::{
     monitor_gui::SystemMonitor,
     paint_gui::Paint,
     settings_gui::Settings,
+    terminal_gui::Terminal,
     userdemo_gui::UserModeDemo,
 };
 
@@ -29,6 +30,7 @@ enum UserApp {
     Paint(Paint),
     Monitor(SystemMonitor),
     UserMode(UserModeDemo),
+    Terminal(Terminal),
 }
 
 impl UserApp {
@@ -44,6 +46,7 @@ impl UserApp {
             4 => Self::Paint(Paint::new()),
             5 => Self::Monitor(SystemMonitor::new()),
             6 => Self::UserMode(UserModeDemo::new()),
+            7 => Self::Terminal(Terminal::new()),
             _ => return None,
         })
     }
@@ -57,6 +60,7 @@ impl UserApp {
             Self::Paint(app) => app.render(canvas, area, pointer),
             Self::Monitor(app) => app.render(canvas, area, pointer),
             Self::UserMode(app) => app.render(canvas, area, pointer),
+            Self::Terminal(app) => app.render(canvas, area, pointer),
         }
     }
 
@@ -69,6 +73,7 @@ impl UserApp {
             Self::Paint(app) => app.title(),
             Self::Monitor(app) => app.title(),
             Self::UserMode(app) => app.title(),
+            Self::Terminal(app) => app.title(),
         }
     }
 
@@ -81,6 +86,7 @@ impl UserApp {
             Self::Paint(app) => app.handle_event(event, area),
             Self::Monitor(app) => app.handle_event(event, area),
             Self::UserMode(app) => app.handle_event(event, area),
+            Self::Terminal(app) => app.handle_event(event, area),
         }
     }
 }

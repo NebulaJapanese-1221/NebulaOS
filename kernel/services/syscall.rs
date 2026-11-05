@@ -2,12 +2,14 @@
 
 use crate::services::process::{AppRect, UserEvent};
 use crate::userspace::syscall::{
-    AppContext, AppEvent, DrawCommand, StorageFileInfo, StorageRequest, SystemStats,
-    MAX_WRITE_LENGTH, SYSCALL_DRAW_FILL_RECT, SYSCALL_DRAW_RECT, SYSCALL_DRAW_TEXT, SYSCALL_EXIT,
-    SYSCALL_GET_APP_CONTEXT, SYSCALL_GET_TICKS, SYSCALL_POLL_EVENT, SYSCALL_PRINT,
-    SYSCALL_SET_MOUSE_SENSITIVITY, SYSCALL_SET_WALLPAPER_THEME, SYSCALL_STORAGE_DELETE,
-    SYSCALL_STORAGE_FORMAT, SYSCALL_STORAGE_LIST, SYSCALL_STORAGE_READ, SYSCALL_STORAGE_RENAME,
-    SYSCALL_STORAGE_WRITE, SYSCALL_SYSTEM_STATS,
+    AppContext, AppEvent, DeviceInfo, DrawCommand, MemoryInfo, ProcessInfo, StorageFileInfo,
+    StorageRequest, SystemStats, MAX_WRITE_LENGTH, SYSCALL_DEVICE_INFO, SYSCALL_DRAW_FILL_RECT,
+    SYSCALL_DRAW_RECT, SYSCALL_DRAW_TEXT, SYSCALL_EXIT, SYSCALL_GET_APP_CONTEXT, SYSCALL_GET_TICKS,
+    SYSCALL_MEMORY_INFO, SYSCALL_POLL_EVENT, SYSCALL_PRINT, SYSCALL_PROCESS_INFO, SYSCALL_REBOOT,
+    SYSCALL_SET_MOUSE_SENSITIVITY, SYSCALL_SET_WALLPAPER_THEME, SYSCALL_SHUTDOWN, SYSCALL_SLEEP,
+    SYSCALL_STORAGE_DELETE, SYSCALL_STORAGE_FORMAT, SYSCALL_STORAGE_LIST, SYSCALL_STORAGE_READ,
+    SYSCALL_STORAGE_RENAME, SYSCALL_STORAGE_WRITE, SYSCALL_SYSTEM_STATS, SYSCALL_TERMINATE_PROCESS,
+    SYSCALL_YIELD,
 };
 use core::mem::size_of;
 
@@ -35,6 +37,7 @@ pub extern "C" fn isr_handler_rust(
 
     if interrupt_num == 32 {
         crate::drivers::pit::pit_tick();
+        crate::services::process::wake_sleeping_processes(crate::drivers::pit::ticks());
     } else if interrupt_num < 32 && !regs_ptr.is_null() && unsafe { *regs_ptr.add(REG_CS) & 3 == 3 }
     {
         crate::services::user_process::exit_from_syscall(regs_ptr, 0x8000_0000 | interrupt_num);
@@ -116,6 +119,39 @@ fn handle_syscall(regs_ptr: *mut u32) -> u32 {
                 }
                 _ => u32::MAX,
             },
+            SYSCALL_PROCESS_INFO => write_process_info(*regs_ptr.add(REG_EBX)),
+            SYSCALL_MEMORY_INFO => write_memory_info(*regs_ptr.add(REG_EBX)),
+            SYSCALL_DEVICE_INFO => write_device_info(*regs_ptr.add(REG_EBX)),
+            SYSCALL_YIELD => {
+                if crate::services::process::yield_current_user_process() {
+                    0
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_SLEEP => {
+                let ticks = *regs_ptr.add(REG_EBX);
+                if crate::services::process::sleep_current_user_process(
+                    crate::drivers::pit::ticks(),
+                    ticks,
+                ) {
+                    0
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_TERMINATE_PROCESS => {
+                let pid = *regs_ptr.add(REG_EBX);
+                if pid != crate::services::process::current_pid()
+                    && crate::services::user_process::terminate(pid)
+                {
+                    0
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_REBOOT => crate::services::system_control::reboot(),
+            SYSCALL_SHUTDOWN => crate::services::system_control::shutdown(),
             _ => u32::MAX,
         };
         *regs_ptr.add(REG_EAX) = result;
@@ -195,6 +231,58 @@ fn write_system_stats(address: u32) -> u32 {
     };
     unsafe {
         if write_user(address, &stats) {
+            0
+        } else {
+            u32::MAX
+        }
+    }
+}
+
+fn write_process_info(address: u32) -> u32 {
+    let info: ProcessInfo = crate::services::process::process_info();
+    unsafe {
+        if write_user(address, &info) {
+            0
+        } else {
+            u32::MAX
+        }
+    }
+}
+
+fn write_memory_info(address: u32) -> u32 {
+    let free_frames = crate::memory::frame_allocator::free_frame_count() as u32;
+    let total_frames = crate::memory::frame_allocator::total_frame_count() as u32;
+    let info = MemoryInfo {
+        total_frames,
+        free_frames,
+        allocated_frames: total_frames.saturating_sub(free_frames),
+        frame_size: 4096,
+    };
+    unsafe {
+        if write_user(address, &info) {
+            0
+        } else {
+            u32::MAX
+        }
+    }
+}
+
+fn write_device_info(address: u32) -> u32 {
+    let mouse = crate::drivers::mouse::state();
+    let info = DeviceInfo {
+        framebuffer_width: crate::drivers::framebuffer::get_width(),
+        framebuffer_height: crate::drivers::framebuffer::get_height(),
+        mouse_x: mouse.x.max(0) as u32,
+        mouse_y: mouse.y.max(0) as u32,
+        mouse_buttons: u32::from(mouse.left)
+            | (u32::from(mouse.right) << 1)
+            | (u32::from(mouse.middle) << 2),
+        mouse_sensitivity: crate::drivers::mouse::sensitivity(),
+        mouse_available: u32::from(crate::drivers::mouse::is_available()),
+        storage_available: u32::from(crate::drivers::disk::is_available()),
+    };
+    unsafe {
+        if write_user(address, &info) {
             0
         } else {
             u32::MAX

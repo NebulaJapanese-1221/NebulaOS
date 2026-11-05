@@ -32,7 +32,7 @@ const PANEL: u32 = 0x111827;
 const ACCENT: u32 = 0x66D9EF;
 const TEXT: u32 = 0xF1F5F9;
 const MUTED: u32 = 0xA8B5C9;
-const APP_COUNT: usize = 7;
+const APP_COUNT: usize = 8;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 static mut DARK_THEME: bool = true;
 static mut THEME_CHANGED: bool = false;
@@ -74,6 +74,7 @@ enum AppKind {
     Paint,
     SystemMonitor,
     UserDemo,
+    Terminal,
 }
 
 impl AppKind {
@@ -86,6 +87,7 @@ impl AppKind {
             4 => Self::Paint,
             5 => Self::SystemMonitor,
             6 => Self::UserDemo,
+            7 => Self::Terminal,
             _ => return None,
         })
     }
@@ -99,6 +101,7 @@ impl AppKind {
             Self::Paint => "PAINT",
             Self::SystemMonitor => "SYSTEM MONITOR",
             Self::UserDemo => "RING-3 DEMO",
+            Self::Terminal => "TERMINAL",
         }
     }
 }
@@ -319,7 +322,7 @@ impl WindowManager {
             return true;
         }
         if let Some(app_index) = match key {
-            b'1'..=b'7' => Some((key - b'1') as usize),
+            b'1'..=b'8' => Some((key - b'1') as usize),
             _ => None,
         } {
             self.open_app(app_index);
@@ -713,9 +716,9 @@ fn start_button_rect(height: u32) -> Rect {
 fn start_menu_rect(height: u32) -> Rect {
     Rect {
         x: 10,
-        y: height.saturating_sub(44 + 280),
+        y: height.saturating_sub(44 + 292),
         width: 250,
-        height: 280,
+        height: 292,
     }
 }
 

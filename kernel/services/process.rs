@@ -1,5 +1,6 @@
 use crate::arch::{gdt, tss};
 use crate::memory::{frame_allocator, paging};
+use crate::userspace::syscall::{ProcessEntry, ProcessInfo};
 
 const MAX_PROCESSES: usize = 8;
 const STACK_FRAME_WORDS: usize = 19;
@@ -45,6 +46,8 @@ struct Process {
     event_head: usize,
     event_count: usize,
     draw_dirty: bool,
+    wake_tick: u32,
+    sleep_active: bool,
     state: ProcessState,
 }
 
@@ -71,6 +74,8 @@ impl Process {
         event_head: 0,
         event_count: 0,
         draw_dirty: false,
+        wake_tick: 0,
+        sleep_active: false,
         state: ProcessState::Unused,
     };
 }
@@ -160,6 +165,8 @@ pub fn add_user_process(
             event_head: 0,
             event_count: 0,
             draw_dirty: false,
+            wake_tick: 0,
+            sleep_active: false,
             state: ProcessState::Ready,
         };
         core::arch::asm!("push {0:e}", "popfd", in(reg) flags, options(preserves_flags));
@@ -176,6 +183,10 @@ pub fn current_app_context() -> Option<(u32, AppRect)> {
             (process.state == ProcessState::Running).then_some((process.app_id, process.content))
         }
     }
+}
+
+pub fn current_pid() -> u32 {
+    unsafe { CURRENT_PID as u32 }
 }
 
 pub fn take_current_event() -> Option<UserEvent> {
@@ -203,8 +214,94 @@ pub fn block_current_user_process() -> bool {
         if process.state != ProcessState::Running {
             return false;
         }
+        process.sleep_active = false;
         process.state = ProcessState::Blocked;
         true
+    }
+}
+
+pub fn yield_current_user_process() -> bool {
+    unsafe {
+        if CURRENT_PID == 0 {
+            return false;
+        }
+        let process = &mut *core::ptr::addr_of_mut!(PROCESSES)
+            .cast::<Process>()
+            .add(CURRENT_PID - 1);
+        if process.state != ProcessState::Running {
+            return false;
+        }
+        process.state = ProcessState::Ready;
+        true
+    }
+}
+
+pub fn sleep_current_user_process(now: u32, ticks: u32) -> bool {
+    unsafe {
+        if CURRENT_PID == 0 {
+            return false;
+        }
+        let process = &mut *core::ptr::addr_of_mut!(PROCESSES)
+            .cast::<Process>()
+            .add(CURRENT_PID - 1);
+        if process.state != ProcessState::Running {
+            return false;
+        }
+        if ticks == 0 {
+            process.sleep_active = false;
+            process.state = ProcessState::Ready;
+        } else {
+            process.wake_tick = now.wrapping_add(ticks);
+            process.sleep_active = true;
+            process.state = ProcessState::Blocked;
+        }
+        true
+    }
+}
+
+pub fn wake_sleeping_processes(now: u32) {
+    unsafe {
+        let processes = core::ptr::addr_of_mut!(PROCESSES).cast::<Process>();
+        for index in 0..MAX_PROCESSES {
+            let process = &mut *processes.add(index);
+            if process.state == ProcessState::Blocked
+                && process.sleep_active
+                && now.wrapping_sub(process.wake_tick) < 0x8000_0000
+            {
+                process.sleep_active = false;
+                process.state = ProcessState::Ready;
+            }
+        }
+    }
+}
+
+pub fn process_info() -> ProcessInfo {
+    unsafe {
+        let mut info = ProcessInfo {
+            current_pid: CURRENT_PID as u32,
+            ..ProcessInfo::default()
+        };
+        let processes = core::ptr::addr_of!(PROCESSES).cast::<Process>();
+        for index in 0..MAX_PROCESSES {
+            let process = &*processes.add(index);
+            let state = match process.state {
+                ProcessState::Unused | ProcessState::Zombie => continue,
+                ProcessState::Ready => 1,
+                ProcessState::Running => 2,
+                ProcessState::Blocked => 3,
+            };
+            let Some(output) = info.entries.get_mut(info.count as usize) else {
+                break;
+            };
+            *output = ProcessEntry {
+                pid: (index + 1) as u32,
+                app_id: process.app_id,
+                state,
+                pending_events: process.event_count as u32,
+            };
+            info.count += 1;
+        }
+        info
     }
 }
 
@@ -341,6 +438,7 @@ unsafe fn enqueue_event(pid: u32, event: UserEvent) -> bool {
     process.events[tail] = event;
     process.event_count += 1;
     if process.state == ProcessState::Blocked {
+        process.sleep_active = false;
         process.state = ProcessState::Ready;
     }
     true

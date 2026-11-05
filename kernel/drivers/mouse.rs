@@ -22,11 +22,20 @@ static mut MOUSE: MouseState = MouseState {
 static mut PACKET: [u8; PACKET_SIZE] = [0; PACKET_SIZE];
 static mut PACKET_INDEX: usize = 0;
 static mut SENSITIVITY: i32 = 2;
+static mut AVAILABLE: bool = false;
 
 pub fn set_sensitivity(value: i32) {
     unsafe {
         SENSITIVITY = value.clamp(1, 4);
     }
+}
+
+pub fn sensitivity() -> u32 {
+    unsafe { SENSITIVITY as u32 }
+}
+
+pub fn state() -> MouseState {
+    unsafe { MOUSE }
 }
 
 fn port_byte_out(port: u16, data: u8) {
@@ -80,6 +89,9 @@ pub fn init() -> bool {
         return false;
     }
     let enabled = port_byte_in(DATA_PORT) == 0xFA;
+    unsafe {
+        AVAILABLE = enabled;
+    }
     if enabled {
         unsafe {
             MOUSE.x = crate::drivers::framebuffer::get_width() as i32 / 2;
@@ -87,6 +99,10 @@ pub fn init() -> bool {
         }
     }
     enabled
+}
+
+pub fn is_available() -> bool {
+    unsafe { AVAILABLE }
 }
 
 pub fn poll() -> Option<MouseState> {

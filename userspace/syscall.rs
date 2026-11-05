@@ -17,7 +17,16 @@ pub const SYSCALL_STORAGE_FORMAT: u32 = 14;
 pub const SYSCALL_SYSTEM_STATS: u32 = 15;
 pub const SYSCALL_SET_WALLPAPER_THEME: u32 = 16;
 pub const SYSCALL_SET_MOUSE_SENSITIVITY: u32 = 17;
+pub const SYSCALL_PROCESS_INFO: u32 = 18;
+pub const SYSCALL_MEMORY_INFO: u32 = 19;
+pub const SYSCALL_DEVICE_INFO: u32 = 20;
+pub const SYSCALL_YIELD: u32 = 21;
+pub const SYSCALL_SLEEP: u32 = 22;
+pub const SYSCALL_TERMINATE_PROCESS: u32 = 23;
+pub const SYSCALL_REBOOT: u32 = 24;
+pub const SYSCALL_SHUTDOWN: u32 = 25;
 pub const MAX_WRITE_LENGTH: usize = 256;
+pub const MAX_PROCESSES: usize = 8;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -80,6 +89,55 @@ pub struct SystemStats {
     pub ticks: u32,
     pub free_frames: u32,
     pub total_frames: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct ProcessEntry {
+    pub pid: u32,
+    pub app_id: u32,
+    pub state: u32,
+    pub pending_events: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ProcessInfo {
+    pub current_pid: u32,
+    pub count: u32,
+    pub entries: [ProcessEntry; MAX_PROCESSES],
+}
+
+impl Default for ProcessInfo {
+    fn default() -> Self {
+        Self {
+            current_pid: 0,
+            count: 0,
+            entries: [ProcessEntry::default(); MAX_PROCESSES],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct MemoryInfo {
+    pub total_frames: u32,
+    pub free_frames: u32,
+    pub allocated_frames: u32,
+    pub frame_size: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct DeviceInfo {
+    pub framebuffer_width: u32,
+    pub framebuffer_height: u32,
+    pub mouse_x: u32,
+    pub mouse_y: u32,
+    pub mouse_buttons: u32,
+    pub mouse_sensitivity: u32,
+    pub mouse_available: u32,
+    pub storage_available: u32,
 }
 
 #[cfg(feature = "user-app")]
@@ -192,6 +250,69 @@ pub fn set_mouse_sensitivity(sensitivity: u32) -> Result<(), SyscallError> {
         return Err(SyscallError::InvalidArgument);
     }
     if invoke(SYSCALL_SET_MOUSE_SENSITIVITY, sensitivity, 0) == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn process_info(info: &mut ProcessInfo) -> Result<(), SyscallError> {
+    call_struct(SYSCALL_PROCESS_INFO, info)
+}
+
+#[cfg(feature = "user-app")]
+pub fn memory_info(info: &mut MemoryInfo) -> Result<(), SyscallError> {
+    call_struct(SYSCALL_MEMORY_INFO, info)
+}
+
+#[cfg(feature = "user-app")]
+pub fn device_info(info: &mut DeviceInfo) -> Result<(), SyscallError> {
+    call_struct(SYSCALL_DEVICE_INFO, info)
+}
+
+#[cfg(feature = "user-app")]
+pub fn yield_now() -> Result<(), SyscallError> {
+    if invoke(SYSCALL_YIELD, 0, 0) == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn sleep_ticks(ticks: u32) -> Result<(), SyscallError> {
+    if invoke(SYSCALL_SLEEP, ticks, 0) == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn terminate_process(pid: u32) -> Result<(), SyscallError> {
+    if pid == 0 {
+        return Err(SyscallError::InvalidArgument);
+    }
+    if invoke(SYSCALL_TERMINATE_PROCESS, pid, 0) == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn reboot() -> Result<(), SyscallError> {
+    if invoke(SYSCALL_REBOOT, 0, 0) == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn shutdown() -> Result<(), SyscallError> {
+    if invoke(SYSCALL_SHUTDOWN, 0, 0) == 0 {
         Ok(())
     } else {
         Err(SyscallError::Unavailable)
