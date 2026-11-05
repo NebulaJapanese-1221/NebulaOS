@@ -1,3 +1,20 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
+//
+// This file is part of NebulaOS.
+//
+// NebulaOS is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License.
+//
+// NebulaOS is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
+
 use super::gui::{Application, Button, Canvas, Event, Menu, PointerEvent, Rect};
 
 const COLORS: [u32; 5] = [0x111827, 0xE45B67, 0xF7B955, 0x1596B5, 0xF1F5F9];
@@ -158,5 +175,9 @@ impl Application for Paint {
             }
             Event::Key(_) => false,
         }
+    }
+
+    fn pointer_target(&self, x: u32, y: u32, area: Rect) -> Option<u32> {
+        Self::clear_rect(area).contains(x, y).then_some(0)
     }
 }

@@ -1,9 +1,27 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
+//
+// This file is part of NebulaOS.
+//
+// NebulaOS is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License.
+//
+// NebulaOS is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
+
 // Global heap allocator
 
 use core::alloc::{GlobalAlloc, Layout};
 use core::ptr::null_mut;
 
 use crate::memory::frame_allocator;
+use crate::sync::SpinLock;
 
 const HEAP_SIZE: usize = 64 * 1024; // 64KB initial heap
 const PAGE_SIZE: usize = 4096;
@@ -18,6 +36,7 @@ struct HeapBlock {
 
 static mut HEAP_HEAD: *mut HeapBlock = null_mut();
 static mut HEAP_INITIALIZED: bool = false;
+static HEAP_LOCK: SpinLock<()> = SpinLock::new(());
 
 fn align_up(addr: usize, align: usize) -> Option<usize> {
     addr.checked_add(align - 1)
@@ -47,6 +66,7 @@ fn alloc_error_handler(layout: Layout) -> ! {
 
 unsafe impl GlobalAlloc for HeapAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let _guard = HEAP_LOCK.lock();
         if !HEAP_INITIALIZED {
             return null_mut();
         }
@@ -119,6 +139,7 @@ unsafe impl GlobalAlloc for HeapAllocator {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
+        let _guard = HEAP_LOCK.lock();
         if ptr.is_null() || !HEAP_INITIALIZED {
             return;
         }

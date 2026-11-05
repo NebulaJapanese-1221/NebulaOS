@@ -1,6 +1,24 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
+//
+// This file is part of NebulaOS.
+//
+// NebulaOS is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License.
+//
+// NebulaOS is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
+
 // Task State Segment for 32-bit protected mode
 
 #[repr(C, packed)]
+#[derive(Clone, Copy)]
 pub struct Tss {
     pub prev_task: u16,
     _reserved0: u16,
@@ -41,7 +59,7 @@ pub struct Tss {
     pub iopb_offset: u16,
 }
 
-static mut TSS: Tss = Tss {
+const EMPTY_TSS: Tss = Tss {
     prev_task: 0,
     _reserved0: 0,
     esp0: 0,
@@ -81,14 +99,24 @@ static mut TSS: Tss = Tss {
     iopb_offset: 0,
 };
 
+static mut TSS: [Tss; super::smp::MAX_CPUS] = [EMPTY_TSS; super::smp::MAX_CPUS];
+
 pub fn init(kernel_stack_top: u32) {
+    init_cpu(0, kernel_stack_top);
+}
+
+pub fn init_cpu(cpu_index: usize, kernel_stack_top: u32) {
+    if cpu_index >= super::smp::MAX_CPUS {
+        return;
+    }
     unsafe {
-        TSS.esp0 = kernel_stack_top;
-        TSS.ss0 = super::gdt::kernel_data_selector();
-        TSS.iopb_offset = core::mem::size_of::<Tss>() as u16;
+        let tss = core::ptr::addr_of_mut!(TSS).cast::<Tss>().add(cpu_index);
+        (*tss).esp0 = kernel_stack_top;
+        (*tss).ss0 = super::gdt::kernel_data_selector();
+        (*tss).iopb_offset = core::mem::size_of::<Tss>() as u16;
 
         // Set up TSS descriptor in GDT
-        let base = core::ptr::addr_of!(TSS) as u32;
+        let base = tss as u32;
         let limit = core::mem::size_of::<Tss>() as u32 - 1;
 
         // TSS descriptor: base, limit, access=0x89 (available 32-bit TSS), gran=0x00
@@ -99,14 +127,16 @@ pub fn init(kernel_stack_top: u32) {
     }
 }
 
-pub fn set_kernel_stack(esp0: u32) {
-    unsafe {
-        TSS.esp0 = esp0;
+pub fn set_kernel_stack(cpu_index: usize, esp0: u32) {
+    if cpu_index < super::smp::MAX_CPUS {
+        unsafe {
+            (*core::ptr::addr_of_mut!(TSS).cast::<Tss>().add(cpu_index)).esp0 = esp0;
+        }
     }
 }
 
 pub fn tss_esp0() -> u32 {
-    unsafe { TSS.esp0 }
+    unsafe { (*core::ptr::addr_of!(TSS).cast::<Tss>()).esp0 }
 }
 
 extern "C" {

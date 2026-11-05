@@ -1,3 +1,20 @@
+; SPDX-License-Identifier: GPL-3.0-only
+; Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
+;
+; This file is part of NebulaOS.
+;
+; NebulaOS is free software: you can redistribute it and/or modify
+; it under the terms of the GNU General Public License as published by
+; the Free Software Foundation, either version 3 of the License.
+;
+; NebulaOS is distributed in the hope that it will be useful,
+; but WITHOUT ANY WARRANTY; without even the implied warranty of
+; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+; GNU General Public License for more details.
+;
+; You should have received a copy of the GNU General Public License
+; along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
+
 ; ISR stubs and common handler
 ; Interrupts without error code: push 0 + irq, jmp common
 ; Interrupts with error code (CPU pushes): push irq, jmp common
@@ -19,7 +36,6 @@ extern schedule_rust
 extern isr_handler_rust
 extern __bss_start
 extern __bss_end
-extern SCHEDULED_CR3
 
 section .multiboot2
 align 8
@@ -143,6 +159,8 @@ isr_common:
     mov eax, [esp + 48]
     cmp eax, 32
     je .schedule
+    cmp eax, 48
+    je .schedule
     cmp eax, 128
     je .schedule
     cmp eax, 32
@@ -153,8 +171,6 @@ isr_common:
     push esp
     call schedule_rust
     add esp, 4
-    mov ecx, [SCHEDULED_CR3]
-    mov cr3, ecx
     mov esp, eax
 .no_schedule:
     pop gs

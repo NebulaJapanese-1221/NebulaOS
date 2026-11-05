@@ -1,3 +1,20 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
+//
+// This file is part of NebulaOS.
+//
+// NebulaOS is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License.
+//
+// NebulaOS is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
+
 // Syscall interface (int 0x80) and interrupt handler
 
 use crate::services::process::{AppRect, UserEvent};
@@ -19,7 +36,6 @@ const REG_EBX: usize = 32 / 4;
 const REG_ECX: usize = 40 / 4;
 const REG_CS: usize = 60 / 4;
 const STORAGE_MAX_DATA: usize = 512;
-static mut MOUSE_SENSITIVITY: u32 = 2;
 
 // This is called from isr_common in assembly
 // interrupt_num: the interrupt vector
@@ -34,6 +50,8 @@ pub extern "C" fn isr_handler_rust(interrupt_num: u32, error_code: u32, regs_ptr
     if interrupt_num == 32 {
         crate::drivers::pit::pit_tick();
         crate::services::process::wake_sleeping_processes(crate::drivers::pit::ticks());
+    } else if interrupt_num == 48 {
+        crate::arch::lapic::end_of_interrupt();
     } else if interrupt_num < 32 {
         if regs_ptr.is_null() {
             crate::graphics::system_screen::show(
@@ -121,7 +139,6 @@ fn handle_syscall(regs_ptr: *mut u32) -> u32 {
             SYSCALL_SET_MOUSE_SENSITIVITY => match *regs_ptr.add(REG_EBX) {
                 value @ 1..=4 => {
                     crate::drivers::mouse::set_sensitivity(value as i32);
-                    MOUSE_SENSITIVITY = value;
                     0
                 }
                 _ => u32::MAX,
@@ -185,8 +202,13 @@ fn poll_user_event(address: u32) -> u32 {
     if !crate::memory::paging::user_range_is_mapped(address, size_of::<UserEvent>()) {
         return u32::MAX;
     }
-    if crate::services::process::take_current_draw_dirty() {
-        crate::drivers::framebuffer::present();
+    if let Some(content) = crate::services::process::take_current_draw_dirty() {
+        crate::drivers::framebuffer::present_rect(
+            content.x,
+            content.y,
+            content.width,
+            content.height,
+        );
     }
     let Some(event) = crate::services::process::take_current_event() else {
         crate::services::process::block_current_user_process();
@@ -219,7 +241,7 @@ fn write_app_context(address: u32) -> u32 {
         width: rect.width,
         height: rect.height,
         dark_theme: u32::from(crate::graphics::wm::is_dark_theme()),
-        mouse_sensitivity: unsafe { MOUSE_SENSITIVITY },
+        mouse_sensitivity: crate::drivers::mouse::sensitivity(),
     };
     unsafe {
         if write_user(address, &context) {

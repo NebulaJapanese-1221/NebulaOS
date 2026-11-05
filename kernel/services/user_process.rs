@@ -1,5 +1,23 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
+//
+// This file is part of NebulaOS.
+//
+// NebulaOS is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License.
+//
+// NebulaOS is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
+
 use crate::memory::{frame_allocator, paging};
 use crate::services::process::{self, AppRect, UserEvent};
+use crate::sync::SpinLock;
 
 const USER_IMAGE_BASE: u32 = 0x4000_0000;
 const USER_IMAGE_LIMIT: u32 = 0x4010_0000;
@@ -24,8 +42,15 @@ pub enum UserProcessError {
     LoadFailed,
 }
 
-static mut LAST_OUTPUT: [u8; LAST_OUTPUT_CAPACITY] = [0; LAST_OUTPUT_CAPACITY];
-static mut LAST_OUTPUT_LENGTH: usize = 0;
+struct LastOutput {
+    bytes: [u8; LAST_OUTPUT_CAPACITY],
+    length: usize,
+}
+
+static LAST_OUTPUT: SpinLock<LastOutput> = SpinLock::new(LastOutput {
+    bytes: [0; LAST_OUTPUT_CAPACITY],
+    length: 0,
+});
 
 unsafe extern "C" {
     #[link_name = "_binary_demo_elf_start"]
@@ -148,30 +173,19 @@ pub fn terminate(pid: u32) -> bool {
 }
 
 pub fn record_syscall_output(bytes: &[u8]) {
-    unsafe {
-        let current_length = LAST_OUTPUT_LENGTH;
-        let copy_length = bytes.len().min(LAST_OUTPUT_CAPACITY - current_length);
-        core::ptr::copy_nonoverlapping(
-            bytes.as_ptr(),
-            core::ptr::addr_of_mut!(LAST_OUTPUT)
-                .cast::<u8>()
-                .add(current_length),
-            copy_length,
-        );
-        LAST_OUTPUT_LENGTH += copy_length;
-    }
+    let mut output = LAST_OUTPUT.lock();
+    let copy_length = bytes.len().min(LAST_OUTPUT_CAPACITY - output.length);
+    let start = output.length;
+    let end = start + copy_length;
+    output.bytes[start..end].copy_from_slice(&bytes[..copy_length]);
+    output.length = end;
 }
 
 pub fn copy_last_output(destination: &mut [u8]) -> usize {
-    unsafe {
-        let length = LAST_OUTPUT_LENGTH.min(destination.len());
-        core::ptr::copy_nonoverlapping(
-            core::ptr::addr_of!(LAST_OUTPUT).cast::<u8>(),
-            destination.as_mut_ptr(),
-            length,
-        );
-        length
-    }
+    let output = LAST_OUTPUT.lock();
+    let length = output.length.min(destination.len());
+    destination[..length].copy_from_slice(&output.bytes[..length]);
+    length
 }
 
 pub fn exit_from_syscall(_registers: *mut u32, _code: u32) -> bool {

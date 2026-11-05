@@ -1,6 +1,25 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
+//
+// This file is part of NebulaOS.
+//
+// NebulaOS is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License.
+//
+// NebulaOS is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
+
 use crate::drivers::framebuffer;
 use crate::drivers::mouse::MouseState;
+use crate::sync::SpinLock;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Clone, Copy)]
 struct Rect {
@@ -34,41 +53,30 @@ const TEXT: u32 = 0xF1F5F9;
 const MUTED: u32 = 0xA8B5C9;
 const APP_COUNT: usize = 8;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-static mut DARK_THEME: bool = true;
-static mut THEME_CHANGED: bool = false;
-static mut DESKTOP_REDRAW_REQUESTED: bool = false;
+static DARK_THEME: AtomicBool = AtomicBool::new(true);
+static THEME_CHANGED: AtomicBool = AtomicBool::new(false);
+static DESKTOP_REDRAW_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 pub fn request_desktop_redraw() {
-    unsafe {
-        DESKTOP_REDRAW_REQUESTED = true;
-    }
+    DESKTOP_REDRAW_REQUESTED.store(true, Ordering::Release);
 }
 
 pub fn take_desktop_redraw_request() -> bool {
-    unsafe {
-        let requested = DESKTOP_REDRAW_REQUESTED;
-        DESKTOP_REDRAW_REQUESTED = false;
-        requested
-    }
+    DESKTOP_REDRAW_REQUESTED.swap(false, Ordering::AcqRel)
 }
 
 pub fn set_dark_theme(enabled: bool) {
-    unsafe {
-        THEME_CHANGED |= DARK_THEME != enabled;
-        DARK_THEME = enabled;
+    if DARK_THEME.swap(enabled, Ordering::AcqRel) != enabled {
+        THEME_CHANGED.store(true, Ordering::Release);
     }
 }
 
 pub fn take_theme_changed() -> bool {
-    unsafe {
-        let changed = THEME_CHANGED;
-        THEME_CHANGED = false;
-        changed
-    }
+    THEME_CHANGED.swap(false, Ordering::AcqRel)
 }
 
 pub fn is_dark_theme() -> bool {
-    unsafe { DARK_THEME }
+    DARK_THEME.load(Ordering::Acquire)
 }
 
 struct Window {
@@ -137,6 +145,7 @@ enum Capture {
 pub struct WindowManager {
     cursor_x: u32,
     cursor_y: u32,
+    cursor_type: framebuffer::CursorType,
     left_button_down: bool,
     windows: Vec<Window>,
     focused: Option<usize>,
@@ -150,6 +159,7 @@ impl WindowManager {
         Self {
             cursor_x: framebuffer::get_width() / 2,
             cursor_y: framebuffer::get_height() / 2,
+            cursor_type: framebuffer::CursorType::Arrow,
             left_button_down: false,
             windows: Vec::new(),
             focused: None,
@@ -166,12 +176,10 @@ impl WindowManager {
         if width == 0 || height == 0 {
             return;
         }
-        let (wallpaper_top, wallpaper_bottom) = unsafe {
-            if DARK_THEME {
-                (WALLPAPER_TOP, WALLPAPER_BOTTOM)
-            } else {
-                (0x526783, 0x9DB6C9)
-            }
+        let (wallpaper_top, wallpaper_bottom) = if DARK_THEME.load(Ordering::Acquire) {
+            (WALLPAPER_TOP, WALLPAPER_BOTTOM)
+        } else {
+            (0x526783, 0x9DB6C9)
         };
         framebuffer::clear_screen(wallpaper_top);
         for y in 0..height {
@@ -202,7 +210,7 @@ impl WindowManager {
         if self.start_menu_open {
             self.draw_start_menu(pointer);
         }
-        self.draw_cursor();
+        framebuffer::set_cursor(self.cursor_x, self.cursor_y, self.cursor_type);
         framebuffer::present();
         for window in &self.windows {
             if !window.minimized {
@@ -427,11 +435,15 @@ impl WindowManager {
         self.prune_exited_windows();
         let x = mouse.x.max(0) as u32;
         let y = mouse.y.max(0) as u32;
+        let previous_x = self.cursor_x;
+        let previous_y = self.cursor_y;
+        let previous_hover = self.hover_target_at(previous_x, previous_y);
         let moved = self.cursor_x != x || self.cursor_y != y;
         self.cursor_x = x;
         self.cursor_y = y;
         let was_down = self.left_button_down;
         self.left_button_down = mouse.left;
+        let button_changed = was_down != mouse.left;
         let pointer = self.pointer();
         if !was_down && mouse.left {
             self.capture = self.capture_press(pointer);
@@ -449,15 +461,20 @@ impl WindowManager {
             }
         }
 
-        let mut changed = moved || was_down != mouse.left;
+        let mut redraw = button_changed || previous_hover != self.hover_target_at(x, y);
         if was_down && !mouse.left {
-            changed |= self.capture_release(pointer);
+            redraw |= self.capture_release(pointer);
             self.capture = Capture::None;
         }
-        if self.start_menu_open {
-            return changed;
-        }
-        if changed {
+        let pointer_over_app = self.focused.is_some_and(|index| {
+            self.windows.get(index).is_some_and(|window| {
+                !window.minimized
+                    && (app_area(window.bounds).contains(x, y)
+                        || app_area(window.bounds).contains(previous_x, previous_y))
+            })
+        });
+        if !self.start_menu_open && (button_changed || (moved && (mouse.left || pointer_over_app)))
+        {
             if let Some(index) = self.focused {
                 if index < self.windows.len() && !self.windows[index].minimized {
                     let _ = crate::services::user_process::route_pointer_event(
@@ -469,10 +486,143 @@ impl WindowManager {
                 }
             }
         }
-        if matches!(self.capture, Capture::Drag(_)) {
+        if matches!(self.capture, Capture::Drag(_)) && moved {
             self.request_focused_redraw();
+            redraw = true;
         }
-        changed
+        let next_cursor_type = self.cursor_type_at(x, y);
+        let cursor_changed = moved || self.cursor_type != next_cursor_type;
+        self.cursor_type = next_cursor_type;
+        if cursor_changed {
+            framebuffer::set_cursor(x, y, next_cursor_type);
+            if !redraw {
+                framebuffer::present_cursor_update();
+            }
+        }
+        redraw
+    }
+
+    fn hover_target_at(&self, x: u32, y: u32) -> Option<(u8, usize, usize)> {
+        if start_button_rect(framebuffer::get_height()).contains(x, y) {
+            return Some((0, 0, 0));
+        }
+        if self.start_menu_open {
+            let menu = start_menu_rect(framebuffer::get_height());
+            for index in 0..APP_COUNT {
+                if start_menu_item_rect(menu, index).contains(x, y) {
+                    return Some((1, index, 0));
+                }
+            }
+            return None;
+        }
+
+        let taskbar_y = framebuffer::get_height().saturating_sub(44);
+        if y >= taskbar_y {
+            let mut taskbar_x = 132;
+            for index in 0..self.windows.len() {
+                if taskbar_x + 156 > framebuffer::get_width().saturating_sub(150) {
+                    break;
+                }
+                let rect = Rect {
+                    x: taskbar_x,
+                    y: taskbar_y + 8,
+                    width: 148,
+                    height: 28,
+                };
+                if rect.contains(x, y) {
+                    return Some((2, index, 0));
+                }
+                taskbar_x += 156;
+            }
+            return None;
+        }
+
+        for (index, window) in self.windows.iter().enumerate().rev() {
+            if window.minimized || !window.bounds.contains(x, y) {
+                continue;
+            }
+            for button in 0..3 {
+                if window_button_rect(window.bounds, button).contains(x, y) {
+                    return Some((3, index, button));
+                }
+            }
+            break;
+        }
+        None
+    }
+
+    fn cursor_type_at(&self, x: u32, y: u32) -> framebuffer::CursorType {
+        if start_button_rect(framebuffer::get_height()).contains(x, y) {
+            return framebuffer::CursorType::Hand;
+        }
+        if self.start_menu_open {
+            let menu = start_menu_rect(framebuffer::get_height());
+            if (0..APP_COUNT).any(|index| start_menu_item_rect(menu, index).contains(x, y)) {
+                return framebuffer::CursorType::Hand;
+            }
+            return framebuffer::CursorType::Arrow;
+        }
+
+        let taskbar_y = framebuffer::get_height().saturating_sub(44);
+        if y >= taskbar_y {
+            let mut taskbar_x = 132;
+            for _ in &self.windows {
+                if taskbar_x + 156 > framebuffer::get_width().saturating_sub(150) {
+                    break;
+                }
+                let rect = Rect {
+                    x: taskbar_x,
+                    y: taskbar_y + 8,
+                    width: 148,
+                    height: 28,
+                };
+                if rect.contains(x, y) {
+                    return framebuffer::CursorType::Hand;
+                }
+                taskbar_x += 156;
+            }
+            return framebuffer::CursorType::Arrow;
+        }
+
+        for window in self.windows.iter().rev() {
+            if window.minimized || !window.bounds.contains(x, y) {
+                continue;
+            }
+            if (0..3).any(|button| window_button_rect(window.bounds, button).contains(x, y)) {
+                return framebuffer::CursorType::Hand;
+            }
+            if y < window.bounds.y + 42 {
+                return framebuffer::CursorType::Move;
+            }
+            return match window.kind {
+                AppKind::TextEditor => {
+                    let area = app_area(window.bounds);
+                    let clear_button = Rect {
+                        x: area.x + area.width.saturating_sub(104),
+                        y: area.y + area.height.saturating_sub(40),
+                        width: 82,
+                        height: 28,
+                    };
+                    let editor = Rect {
+                        x: area.x + 22,
+                        y: area.y + 18,
+                        width: area.width.saturating_sub(44),
+                        height: area.height.saturating_sub(76),
+                    };
+                    if clear_button.contains(x, y) {
+                        framebuffer::CursorType::Hand
+                    } else if editor.contains(x, y) {
+                        framebuffer::CursorType::Text
+                    } else {
+                        framebuffer::CursorType::Arrow
+                    }
+                }
+                AppKind::Terminal => framebuffer::CursorType::Text,
+                AppKind::Paint => framebuffer::CursorType::Crosshair,
+                _ => framebuffer::CursorType::Hand,
+            };
+        }
+        framebuffer::CursorType::Arrow
     }
 
     fn capture_press(&mut self, pointer: PointerEvent) -> Capture {
@@ -680,22 +830,6 @@ impl WindowManager {
             left_down: self.left_button_down,
         }
     }
-
-    fn draw_cursor(&self) {
-        for row in 0..16 {
-            for column in 0..(row / 2 + 1) {
-                framebuffer::put_pixel(
-                    self.cursor_x + column,
-                    self.cursor_y + row,
-                    if column == 0 || column == row / 2 {
-                        0x101820
-                    } else {
-                        TEXT
-                    },
-                );
-            }
-        }
-    }
 }
 
 fn app_area(bounds: Rect) -> Rect {
@@ -778,9 +912,17 @@ fn blend_rgb(from: u32, to: u32, amount: u32) -> u32 {
     mix(16) << 16 | mix(8) << 8 | mix(0)
 }
 
-static mut CONSOLE_INITIALIZED: bool = false;
-static mut CONSOLE_X: u32 = 0;
-static mut CONSOLE_Y: u32 = 0;
+struct ConsoleState {
+    initialized: bool,
+    x: u32,
+    y: u32,
+}
+
+static CONSOLE: SpinLock<ConsoleState> = SpinLock::new(ConsoleState {
+    initialized: false,
+    x: 0,
+    y: 0,
+});
 
 pub fn console_write(bytes: &[u8]) {
     let width = framebuffer::get_width();
@@ -788,41 +930,40 @@ pub fn console_write(bytes: &[u8]) {
     if width == 0 || height < 180 {
         return;
     }
-    unsafe {
-        let left = 24;
-        let top = height - 178;
-        if !CONSOLE_INITIALIZED {
-            framebuffer::fill_rect(left, top, (width / 2).min(620), 96, PANEL);
-            framebuffer::draw_rect(left, top, (width / 2).min(620), 96, 0x516786);
-            framebuffer::draw_text(left + 12, top + 10, "SYSTEM CONSOLE", ACCENT, 1);
-            CONSOLE_X = left + 12;
-            CONSOLE_Y = top + 30;
-            CONSOLE_INITIALIZED = true;
+    let mut console = CONSOLE.lock();
+    let left = 24;
+    let top = height - 178;
+    if !console.initialized {
+        framebuffer::fill_rect(left, top, (width / 2).min(620), 96, PANEL);
+        framebuffer::draw_rect(left, top, (width / 2).min(620), 96, 0x516786);
+        framebuffer::draw_text(left + 12, top + 10, "SYSTEM CONSOLE", ACCENT, 1);
+        console.x = left + 12;
+        console.y = top + 30;
+        console.initialized = true;
+    }
+    let left = left + 12;
+    let right = left + (width / 2).min(620) - 24;
+    for &byte in bytes {
+        if byte == b'\r' {
+            continue;
         }
-        let left = left + 12;
-        let right = left + (width / 2).min(620) - 24;
-        for &byte in bytes {
-            if byte == b'\r' {
+        if byte == b'\n' || console.x + 6 >= right {
+            console.x = left;
+            console.y += 12;
+            if console.y + 8 >= top + 96 {
+                framebuffer::fill_rect(left, top + 30, (width / 2).min(620) - 24, 58, PANEL);
+                console.y = top + 30;
+            }
+            if byte == b'\n' {
                 continue;
             }
-            if byte == b'\n' || CONSOLE_X + 6 >= right {
-                CONSOLE_X = left;
-                CONSOLE_Y += 12;
-                if CONSOLE_Y + 8 >= top + 96 {
-                    framebuffer::fill_rect(left, top + 30, (width / 2).min(620) - 24, 58, PANEL);
-                    CONSOLE_Y = top + 30;
-                }
-                if byte == b'\n' {
-                    continue;
-                }
-            }
-            if byte.is_ascii() {
-                let glyph = [byte];
-                if let Ok(character) = core::str::from_utf8(&glyph) {
-                    framebuffer::draw_text(CONSOLE_X, CONSOLE_Y, character, TEXT, 1);
-                }
-            }
-            CONSOLE_X += 6;
         }
+        if byte.is_ascii() {
+            let glyph = [byte];
+            if let Ok(character) = core::str::from_utf8(&glyph) {
+                framebuffer::draw_text(console.x, console.y, character, TEXT, 1);
+            }
+        }
+        console.x += 6;
     }
 }

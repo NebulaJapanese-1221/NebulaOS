@@ -1,3 +1,20 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
+//
+// This file is part of NebulaOS.
+//
+// NebulaOS is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License.
+//
+// NebulaOS is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
+
 use crate::memory::frame_allocator;
 use core::ptr;
 
@@ -5,6 +22,7 @@ const PAGE_SIZE: usize = 4096;
 const ENTRIES_PER_TABLE: usize = 1024;
 const KERNEL_BUFFER_VIRTUAL_BASE: u32 = 0xD000_0000;
 const MMIO_VIRTUAL_BASE: u32 = 0xE000_0000;
+const MMIO_VIRTUAL_END: u32 = 0xF000_0000;
 const MMIO_MAX_SIZE: usize = 64 * 1024 * 1024;
 const USER_PHYSICAL_LIMIT: usize = 0x0080_0000;
 const USER_ADDRESS_MIN: u32 = 0x4000_0000;
@@ -21,6 +39,7 @@ struct PageTable {
 }
 
 static mut KERNEL_PAGE_DIR: *mut PageDirectory = ptr::null_mut();
+static mut NEXT_MMIO_VIRTUAL: u32 = MMIO_VIRTUAL_BASE;
 
 const PAGE_PRESENT: u32 = 0x0000_0001;
 const PAGE_READ_WRITE: u32 = 0x0000_0002;
@@ -215,8 +234,13 @@ pub fn map_mmio(physical_start: u32, length: usize) -> Option<*mut u8> {
             return None;
         }
 
+        let virtual_start = NEXT_MMIO_VIRTUAL;
+        let virtual_end = (virtual_start as usize).checked_add(page_count * PAGE_SIZE)?;
+        if virtual_end > MMIO_VIRTUAL_END as usize {
+            return None;
+        }
         for page in 0..page_count {
-            let virtual_address = MMIO_VIRTUAL_BASE as usize + page * PAGE_SIZE;
+            let virtual_address = virtual_start as usize + page * PAGE_SIZE;
             let directory_index = virtual_address >> 22;
             let table_index = (virtual_address >> 12) & 0x3FF;
             let mut table_entry = (*page_directory).entries[directory_index];
@@ -236,11 +260,12 @@ pub fn map_mmio(physical_start: u32, length: usize) -> Option<*mut u8> {
                 | PAGE_CACHE_DISABLE
                 | PAGE_WRITE_THROUGH;
         }
+        NEXT_MMIO_VIRTUAL = virtual_end as u32;
 
         let cr3: u32;
         core::arch::asm!("mov {0}, cr3", out(reg) cr3, options(nostack, preserves_flags));
         load_page_dir(cr3);
-        Some((MMIO_VIRTUAL_BASE as usize + page_offset) as *mut u8)
+        Some((virtual_start as usize + page_offset) as *mut u8)
     }
 }
 
@@ -324,6 +349,12 @@ unsafe fn unmap_kernel_buffer_pages(page_count: usize) {
 
 extern "C" {
     fn load_page_dir(cr3: u32);
+}
+
+pub fn activate_page_dir(page_directory: u32) {
+    unsafe {
+        load_page_dir(page_directory);
+    }
 }
 
 fn enable_paging() {

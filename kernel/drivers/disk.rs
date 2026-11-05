@@ -1,3 +1,22 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
+//
+// This file is part of NebulaOS.
+//
+// NebulaOS is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License.
+//
+// NebulaOS is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
+
+use crate::sync::SpinLock;
+
 const DATA: u16 = 0x1F0;
 const ERROR: u16 = 0x1F1;
 const SECTOR_COUNT: u16 = 0x1F2;
@@ -40,6 +59,7 @@ pub enum StorageError {
 static mut SECTORS: u32 = 0;
 static mut DISK_READY: bool = false;
 static mut FORMATTED: bool = false;
+static DISK_LOCK: SpinLock<()> = SpinLock::new(());
 
 fn out8(port: u16, value: u8) {
     unsafe {
@@ -137,6 +157,7 @@ fn write_sector(lba: u32, buffer: &[u8; 512]) -> Result<(), StorageError> {
 }
 
 pub fn init() -> Result<(), StorageError> {
+    let _guard = DISK_LOCK.lock();
     out8(DRIVE, 0xA0);
     for _ in 0..4 {
         let _ = in8(STATUS);
@@ -177,13 +198,16 @@ pub fn init() -> Result<(), StorageError> {
 }
 
 pub fn is_available() -> bool {
+    let _guard = DISK_LOCK.lock();
     unsafe { DISK_READY }
 }
 pub fn is_formatted() -> bool {
-    is_available() && unsafe { FORMATTED }
+    let _guard = DISK_LOCK.lock();
+    unsafe { DISK_READY && FORMATTED }
 }
 
 pub fn format_if_blank() -> Result<(), StorageError> {
+    let _guard = DISK_LOCK.lock();
     if !unsafe { DISK_READY } {
         return Err(StorageError::NoDisk);
     }
@@ -203,6 +227,7 @@ pub fn format_if_blank() -> Result<(), StorageError> {
 }
 
 pub fn list_files() -> Result<[FileInfo; FILE_SLOTS], StorageError> {
+    let _guard = DISK_LOCK.lock();
     require_formatted()?;
     let mut directory = [0; 512];
     read_sector(DIRECTORY_SECTOR, &mut directory)?;
@@ -218,6 +243,7 @@ pub fn list_files() -> Result<[FileInfo; FILE_SLOTS], StorageError> {
 }
 
 pub fn read_file(name: &[u8], output: &mut [u8; 512]) -> Result<usize, StorageError> {
+    let _guard = DISK_LOCK.lock();
     let (directory, slot) = find_entry(name)?;
     let entry = &directory[slot * 32..slot * 32 + 32];
     let length = u16::from_le_bytes([entry[16], entry[17]]) as usize;
@@ -230,6 +256,7 @@ pub fn read_file(name: &[u8], output: &mut [u8; 512]) -> Result<usize, StorageEr
 }
 
 pub fn write_file(name: &[u8], content: &[u8]) -> Result<(), StorageError> {
+    let _guard = DISK_LOCK.lock();
     if name.is_empty()
         || name.len() > 15
         || name
@@ -265,12 +292,14 @@ pub fn write_file(name: &[u8], content: &[u8]) -> Result<(), StorageError> {
 }
 
 pub fn delete_file(name: &[u8]) -> Result<(), StorageError> {
+    let _guard = DISK_LOCK.lock();
     let (mut directory, slot) = find_entry(name)?;
     directory[slot * 32..slot * 32 + 32].fill(0);
     write_sector(DIRECTORY_SECTOR, &directory)
 }
 
 pub fn rename_file(old_name: &[u8], new_name: &[u8]) -> Result<(), StorageError> {
+    let _guard = DISK_LOCK.lock();
     if new_name.is_empty()
         || new_name.len() > 15
         || new_name

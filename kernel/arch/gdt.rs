@@ -1,3 +1,20 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
+//
+// This file is part of NebulaOS.
+//
+// NebulaOS is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License.
+//
+// NebulaOS is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
+
 // Global Descriptor Table and Task State Segment
 
 use core::ptr;
@@ -65,6 +82,12 @@ pub fn init() {
         gdt_set_entry((SEG_USER_CODE >> 3) as usize, 0, 0xFFFFF, 0xFA, 0xCF);
         gdt_set_entry((SEG_USER_DATA >> 3) as usize, 0, 0xFFFFF, 0xF2, 0xCF);
 
+        load();
+    }
+}
+
+pub fn load() {
+    unsafe {
         load_gdt(ptr::addr_of!(GDT_PTR));
     }
 }

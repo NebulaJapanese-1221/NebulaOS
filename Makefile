@@ -1,3 +1,20 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
+#
+# This file is part of NebulaOS.
+#
+# NebulaOS is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License.
+#
+# NebulaOS is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
+
 .PHONY: all clean run iso debug data-disk
 
 CARGO ?= cargo
@@ -11,6 +28,7 @@ XORRISO ?= xorriso
 TARGET ?= i686-unknown-nebula
 KERNEL_LIB := target/$(TARGET)/release/libnebulaos.a
 ISR_OBJ := kernel/arch/isr.o
+AP_TRAMPOLINE_OBJ := kernel/arch/ap_trampoline.o
 USER_ELF := target/user-demo/demo.elf
 USER_ELF_OBJ := target/user-demo/demo_elf.o
 USER_APP_RS := $(shell find userspace/apps -type f -name '*.rs')
@@ -28,6 +46,9 @@ $(KERNEL_LIB): Cargo.toml Cargo.lock .cargo/config.toml targets/i686-unknown-neb
 $(ISR_OBJ): kernel/arch/isr.asm
 	$(NASM) -f elf32 kernel/arch/isr.asm -o $(ISR_OBJ)
 
+$(AP_TRAMPOLINE_OBJ): kernel/arch/ap_trampoline.asm
+	$(NASM) -f elf32 kernel/arch/ap_trampoline.asm -o $(AP_TRAMPOLINE_OBJ)
+
 $(USER_ELF): userspace/demo/Cargo.toml userspace/demo/src/main.rs userspace/demo/linker.ld userspace/mod.rs userspace/syscall.rs userspace/storage.rs $(USER_APP_RS)
 	cd userspace/demo && $(CARGO) build --release --target ../../targets/$(TARGET).json --target-dir ../../$(USER_CARGO_TARGET)
 	$(OBJCOPY) --strip-all $(USER_CARGO_ELF) $(USER_ELF)
@@ -35,8 +56,8 @@ $(USER_ELF): userspace/demo/Cargo.toml userspace/demo/src/main.rs userspace/demo
 $(USER_ELF_OBJ): $(USER_ELF)
 	cd target/user-demo && $(OBJCOPY) -I binary -O elf32-i386 -B i386 demo.elf demo_elf.o
 
-$(KERNEL_ELF): $(KERNEL_LIB) $(ISR_OBJ) $(USER_ELF_OBJ) linker.ld
-	$(LD) -m elf_i386 -T linker.ld -o $(KERNEL_ELF) $(ISR_OBJ) $(KERNEL_LIB) $(USER_ELF_OBJ)
+$(KERNEL_ELF): $(KERNEL_LIB) $(ISR_OBJ) $(AP_TRAMPOLINE_OBJ) $(USER_ELF_OBJ) linker.ld
+	$(LD) -m elf_i386 -T linker.ld -o $(KERNEL_ELF) $(ISR_OBJ) $(AP_TRAMPOLINE_OBJ) $(KERNEL_LIB) $(USER_ELF_OBJ)
 
 $(ISO): $(KERNEL_ELF) Makefile
 	mkdir -p boot/iso/boot/grub
@@ -62,4 +83,4 @@ debug: $(ISO)
 
 clean:
 	$(CARGO) clean
-	rm -rf boot/iso $(KERNEL_ELF) $(ISR_OBJ) nebulaos.img $(ISO)
+	rm -rf boot/iso $(KERNEL_ELF) $(ISR_OBJ) $(AP_TRAMPOLINE_OBJ) nebulaos.img $(ISO)

@@ -1,3 +1,20 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
+//
+// This file is part of NebulaOS.
+//
+// NebulaOS is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License.
+//
+// NebulaOS is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
+
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler)]
@@ -14,6 +31,8 @@ mod graphics;
 mod memory;
 #[path = "../services/mod.rs"]
 mod services;
+#[path = "../sync.rs"]
+mod sync;
 #[path = "../userspace.rs"]
 mod userspace;
 
@@ -92,6 +111,9 @@ pub extern "C" fn kernel_entry(multiboot_info: *const u8) -> ! {
     drivers::keyboard::init();
     if drivers::mouse::init() {
         drivers::serial::write_string("PS/2 mouse ready.\r\n");
+        if drivers::mouse::interrupts_enabled() {
+            arch::pic::unmask_irq(12);
+        }
     } else {
         drivers::serial::write_string("PS/2 mouse unavailable; keyboard navigation enabled.\r\n");
     }
@@ -101,6 +123,7 @@ pub extern "C" fn kernel_entry(multiboot_info: *const u8) -> ! {
     unsafe {
         asm!("sti");
     }
+    arch::smp::init(multiboot_info);
     let mut desktop = graphics::wm::WindowManager::new();
     boot_screen.update(graphics::boot_screen::BootStage::DesktopReady);
     boot_screen.wait_until_minimum_duration();

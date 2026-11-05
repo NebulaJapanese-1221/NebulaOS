@@ -1,3 +1,20 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
+//
+// This file is part of NebulaOS.
+//
+// NebulaOS is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License.
+//
+// NebulaOS is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
+
 // Programmable Interval Timer
 
 const PIT_CHANNEL0: u16 = 0x40;
@@ -9,7 +26,9 @@ const PIT_MODE_RATE_GENERATOR: u8 = 0x04;
 
 const PIT_BASE_FREQ: u32 = 1_193_182;
 
-static mut TICKS: u32 = 0;
+use core::sync::atomic::{AtomicU32, Ordering};
+
+static TICKS: AtomicU32 = AtomicU32::new(0);
 
 fn port_byte_out(port: u16, data: u8) {
     unsafe {
@@ -28,18 +47,16 @@ pub fn init(frequency: u32) {
 
 #[no_mangle]
 pub extern "C" fn pit_tick() {
-    unsafe {
-        TICKS += 1;
-    }
+    TICKS.fetch_add(1, Ordering::Relaxed);
 }
 
 pub fn ticks() -> u32 {
-    unsafe { TICKS }
+    TICKS.load(Ordering::Relaxed)
 }
 
 pub fn sleep_ticks(duration: u32) {
-    let start = unsafe { TICKS };
-    while unsafe { TICKS } - start < duration {
+    let start = ticks();
+    while ticks().wrapping_sub(start) < duration {
         core::hint::spin_loop();
     }
 }

@@ -1,3 +1,20 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 NebulaJapanese-1221 <nebulajapanese@gmail.com>
+//
+// This file is part of NebulaOS.
+//
+// NebulaOS is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License.
+//
+// NebulaOS is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
+
 #![no_std]
 #![no_main]
 
@@ -87,6 +104,19 @@ impl UserApp {
             Self::Monitor(app) => app.handle_event(event, area),
             Self::UserMode(app) => app.handle_event(event, area),
             Self::Terminal(app) => app.handle_event(event, area),
+        }
+    }
+
+    fn pointer_target(&self, x: u32, y: u32, area: Rect) -> Option<u32> {
+        match self {
+            Self::Calculator(app) => app.pointer_target(x, y, area),
+            Self::Editor(app) => app.pointer_target(x, y, area),
+            Self::Files(app) => app.pointer_target(x, y, area),
+            Self::Settings(app) => app.pointer_target(x, y, area),
+            Self::Paint(app) => app.pointer_target(x, y, area),
+            Self::Monitor(app) => app.pointer_target(x, y, area),
+            Self::UserMode(app) => app.pointer_target(x, y, area),
+            Self::Terminal(app) => app.pointer_target(x, y, area),
         }
     }
 }
@@ -191,6 +221,7 @@ pub extern "C" fn _start(app_id: u32, x: u32, y: u32, width: u32, height: u32) -
         width,
         height,
     };
+    let mut last_pointer = empty_pointer();
     let mut canvas = AppCanvas {
         failed: false,
         area,
@@ -211,13 +242,19 @@ pub extern "C" fn _start(app_id: u32, x: u32, y: u32, width: u32, height: u32) -
         match event.kind {
             1 => {
                 if app.handle_event(Event::Key(event.key as u8), area) {
-                    render(&app, area, event_pointer(event));
+                    render(&app, area, last_pointer);
                 }
             }
             2 => {
                 let pointer = event_pointer(event);
+                let old_target = app.pointer_target(last_pointer.x, last_pointer.y, area);
+                let button_changed = last_pointer.left_down != pointer.left_down;
                 app.handle_event(Event::Pointer(pointer), area);
-                render(&app, area, pointer);
+                let target_changed = old_target != app.pointer_target(pointer.x, pointer.y, area);
+                last_pointer = pointer;
+                if button_changed || target_changed {
+                    render(&app, area, pointer);
+                }
             }
             3 => {
                 let mut context = syscall::AppContext::default();
@@ -230,7 +267,8 @@ pub extern "C" fn _start(app_id: u32, x: u32, y: u32, width: u32, height: u32) -
                     width: context.width,
                     height: context.height,
                 };
-                render(&app, area, event_pointer(event));
+                last_pointer = event_pointer(event);
+                render(&app, area, last_pointer);
             }
             _ => {}
         }
