@@ -15,30 +15,44 @@
 // You should have received a copy of the GNU General Public License
 // along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
 
-// CMOS Real-Time Clock for wall-clock time
+// CMOS Real-Time Clock for wall-clock time (x86) / stub (aarch64)
 
+#[cfg(target_arch = "x86")]
 const CMOS_ADDRESS: u16 = 0x70;
+#[cfg(target_arch = "x86")]
 const CMOS_DATA: u16 = 0x71;
 
+#[cfg(target_arch = "x86")]
 const RTC_SECONDS: u8 = 0x00;
+#[cfg(target_arch = "x86")]
 const RTC_MINUTES: u8 = 0x02;
+#[cfg(target_arch = "x86")]
 const RTC_HOURS: u8 = 0x04;
+#[cfg(target_arch = "x86")]
 const RTC_DAY: u8 = 0x07;
+#[cfg(target_arch = "x86")]
 const RTC_MONTH: u8 = 0x08;
+#[cfg(target_arch = "x86")]
 const RTC_YEAR: u8 = 0x09;
+#[cfg(target_arch = "x86")]
 const RTC_REGISTER_B: u8 = 0x0B;
+#[cfg(target_arch = "x86")]
 const RTC_REGISTER_C: u8 = 0x0C;
+#[cfg(target_arch = "x86")]
 const RTC_REGISTER_D: u8 = 0x0D;
+#[cfg(target_arch = "x86")]
 const RTC_CENTURY: u8 = 0x32;
 
 static mut RTC_READY: bool = false;
 
+#[cfg(target_arch = "x86")]
 fn port_byte_out(port: u16, data: u8) {
     unsafe {
         core::arch::asm!("out dx, al", in("dx") port, in("al") data);
     }
 }
 
+#[cfg(target_arch = "x86")]
 fn port_byte_in(port: u16) -> u8 {
     let val: u8;
     unsafe {
@@ -47,11 +61,13 @@ fn port_byte_in(port: u16) -> u8 {
     val
 }
 
+#[cfg(target_arch = "x86")]
 fn cmos_read(reg: u8) -> u8 {
     port_byte_out(CMOS_ADDRESS, reg | 0x80);
     port_byte_in(CMOS_DATA)
 }
 
+#[cfg(target_arch = "x86")]
 fn cmos_wait_update() {
     loop {
         let status = cmos_read(RTC_REGISTER_D);
@@ -62,6 +78,7 @@ fn cmos_wait_update() {
     }
 }
 
+#[cfg(target_arch = "x86")]
 fn bcd_to_decimal(bcd: u8) -> u8 {
     (bcd & 0x0F) + ((bcd >> 4) * 10)
 }
@@ -86,6 +103,7 @@ pub struct RtcTime {
     pub second: u8,
 }
 
+#[cfg(target_arch = "x86")]
 pub fn read_time() -> Option<RtcTime> {
     if !unsafe { RTC_READY } {
         return None;
@@ -130,6 +148,17 @@ pub fn read_time() -> Option<RtcTime> {
     })
 }
 
+#[cfg(target_arch = "aarch64")]
+pub fn read_time() -> Option<RtcTime> {
+    None
+}
+
+#[cfg(target_arch = "x86")]
 pub fn read_register_d() -> u8 {
     cmos_read(RTC_REGISTER_D)
+}
+
+#[cfg(target_arch = "aarch64")]
+pub fn read_register_d() -> u8 {
+    0
 }

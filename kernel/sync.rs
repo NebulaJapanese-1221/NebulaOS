@@ -73,6 +73,7 @@ impl<T> Drop for SpinLockGuard<'_, T> {
     }
 }
 
+#[cfg(target_arch = "x86")]
 fn disable_interrupts() -> u32 {
     let flags: u32;
     unsafe {
@@ -87,8 +88,20 @@ fn disable_interrupts() -> u32 {
     flags
 }
 
+#[cfg(target_arch = "aarch64")]
+fn disable_interrupts() -> u32 {
+    // AArch64: DAIF already managed by caller; return dummy flags
+    0
+}
+
+#[cfg(target_arch = "x86")]
 fn restore_interrupts(flags: u32) {
     unsafe {
         core::arch::asm!("push {0:e}", "popfd", in(reg) flags, options(preserves_flags));
     }
+}
+
+#[cfg(target_arch = "aarch64")]
+fn restore_interrupts(_flags: u32) {
+    // AArch64: no-op
 }

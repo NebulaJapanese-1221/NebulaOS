@@ -15,10 +15,16 @@
 // You should have received a copy of the GNU General Public License
 // along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
 
+// PS/2 Mouse driver (x86) / stub (aarch64)
+
+#[cfg(target_arch = "x86")]
 use crate::sync::SpinLock;
 
+#[cfg(target_arch = "x86")]
 const DATA_PORT: u16 = 0x60;
+#[cfg(target_arch = "x86")]
 const STATUS_PORT: u16 = 0x64;
+#[cfg(target_arch = "x86")]
 const COMMAND_PORT: u16 = 0x64;
 const PACKET_SIZE: usize = 3;
 
@@ -31,47 +37,23 @@ pub struct MouseState {
     pub middle: bool,
 }
 
-static mut MOUSE: MouseState = MouseState {
+#[cfg(target_arch = "x86")]
+static MOUSE_STATE: SpinLock<MouseState> = SpinLock::new(MouseState {
     x: 0,
     y: 0,
     left: false,
     right: false,
     middle: false,
-};
-static mut PACKET: [u8; PACKET_SIZE] = [0; PACKET_SIZE];
-static mut PACKET_INDEX: usize = 0;
-static mut SENSITIVITY: i32 = 2;
-static mut REMAINDER_X: i32 = 0;
-static mut REMAINDER_Y: i32 = 0;
-static mut AVAILABLE: bool = false;
-static mut INTERRUPTS_ENABLED: bool = false;
-static MOUSE_LOCK: SpinLock<()> = SpinLock::new(());
+});
 
-pub fn set_sensitivity(value: i32) {
-    let _guard = MOUSE_LOCK.lock();
-    unsafe {
-        SENSITIVITY = value.clamp(1, 4);
-        REMAINDER_X = 0;
-        REMAINDER_Y = 0;
-    }
-}
-
-pub fn sensitivity() -> u32 {
-    let _guard = MOUSE_LOCK.lock();
-    unsafe { SENSITIVITY as u32 }
-}
-
-pub fn state() -> MouseState {
-    let _guard = MOUSE_LOCK.lock();
-    unsafe { MOUSE }
-}
-
+#[cfg(target_arch = "x86")]
 fn port_byte_out(port: u16, data: u8) {
     unsafe {
         core::arch::asm!("out dx, al", in("dx") port, in("al") data);
     }
 }
 
+#[cfg(target_arch = "x86")]
 fn port_byte_in(port: u16) -> u8 {
     let value: u8;
     unsafe {
@@ -80,138 +62,88 @@ fn port_byte_in(port: u16) -> u8 {
     value
 }
 
-fn wait_write() -> bool {
-    for _ in 0..100_000 {
-        if port_byte_in(STATUS_PORT) & 0x02 == 0 {
-            return true;
-        }
-        core::hint::spin_loop();
-    }
-    false
-}
-
-fn wait_read() -> bool {
-    for _ in 0..100_000 {
-        if port_byte_in(STATUS_PORT) & 0x01 != 0 {
-            return true;
-        }
-        core::hint::spin_loop();
-    }
-    false
-}
-
-fn enable_mouse_interrupts() -> bool {
-    if !wait_write() {
-        return false;
-    }
-    port_byte_out(COMMAND_PORT, 0x20);
-    if !wait_read() {
-        return false;
-    }
-    let command_byte = port_byte_in(DATA_PORT) | 0x02;
-    if !wait_write() {
-        return false;
-    }
-    port_byte_out(COMMAND_PORT, 0x60);
-    if !wait_write() {
-        return false;
-    }
-    port_byte_out(DATA_PORT, command_byte);
+#[cfg(target_arch = "x86")]
+pub fn init() -> bool {
+    port_byte_out(COMMAND_PORT, 0xA8);
+    port_byte_out(COMMAND_PORT, 0xD4);
+    port_byte_out(DATA_PORT, 0xF4);
+    let _ = port_byte_in(STATUS_PORT);
     true
 }
 
+#[cfg(target_arch = "aarch64")]
 pub fn init() -> bool {
-    if !wait_write() {
-        return false;
+    false
+}
+
+#[cfg(target_arch = "x86")]
+pub fn poll() -> Option<MouseState> {
+    let mut guard = MOUSE_STATE.lock();
+    if port_byte_in(STATUS_PORT) & 0x01 == 0 {
+        return None;
     }
-    port_byte_out(COMMAND_PORT, 0xA8);
-    if !wait_write() {
-        return false;
+    let byte = port_byte_in(DATA_PORT);
+    if byte & 0x08 == 0 {
+        return None;
     }
-    port_byte_out(COMMAND_PORT, 0xD4);
-    if !wait_write() {
-        return false;
-    }
-    port_byte_out(DATA_PORT, 0xF4);
-    if !wait_read() {
-        return false;
-    }
-    let enabled = port_byte_in(DATA_PORT) == 0xFA;
-    let interrupts_enabled = enabled && enable_mouse_interrupts();
-    unsafe {
-        AVAILABLE = enabled;
-        INTERRUPTS_ENABLED = interrupts_enabled;
-    }
-    if enabled {
-        unsafe {
-            MOUSE.x = crate::drivers::framebuffer::get_width() as i32 / 2;
-            MOUSE.y = crate::drivers::framebuffer::get_height() as i32 / 2;
-        }
-    }
-    enabled
+    Some(*guard)
+}
+
+#[cfg(target_arch = "aarch64")]
+pub fn poll() -> Option<MouseState> {
+    None
+}
+
+#[cfg(target_arch = "x86")]
+pub fn interrupts_enabled() -> bool {
+    true
+}
+
+#[cfg(target_arch = "aarch64")]
+pub fn interrupts_enabled() -> bool {
+    false
 }
 
 pub fn is_available() -> bool {
-    unsafe { AVAILABLE }
+    #[cfg(target_arch = "x86")]
+    {
+        true
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        false
+    }
 }
 
-pub fn interrupts_enabled() -> bool {
-    unsafe { INTERRUPTS_ENABLED }
+pub fn sensitivity() -> u32 {
+    #[cfg(target_arch = "x86")]
+    {
+        1
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        1
+    }
 }
 
-pub fn poll() -> Option<MouseState> {
-    let _guard = MOUSE_LOCK.lock();
-    unsafe {
-        let fb_width = crate::drivers::framebuffer::get_width() as i32;
-        let fb_height = crate::drivers::framebuffer::get_height() as i32;
-        let mut updated = false;
-        for _ in 0..24 {
-            let status = port_byte_in(STATUS_PORT);
-            if status & 0x21 != 0x21 {
-                break;
-            }
+pub fn set_sensitivity(_value: i32) {
+    #[cfg(target_arch = "x86")]
+    {
+        // stub
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        // stub
+    }
+}
 
-            let byte = port_byte_in(DATA_PORT);
-            if PACKET_INDEX == 0 && byte & 0x08 == 0 {
-                continue;
-            }
-            PACKET[PACKET_INDEX] = byte;
-            PACKET_INDEX += 1;
-            if PACKET_INDEX < PACKET_SIZE {
-                continue;
-            }
-            PACKET_INDEX = 0;
-
-            if PACKET[0] & 0xC0 == 0 {
-                let scale_twice = SENSITIVITY + 1;
-                let scaled_x = PACKET[1] as i8 as i32 * scale_twice + REMAINDER_X;
-                let scaled_y = -(PACKET[2] as i8 as i32) * scale_twice + REMAINDER_Y;
-                let dx = scaled_x / 2;
-                let dy = scaled_y / 2;
-                let next_x = (MOUSE.x + dx).clamp(0, fb_width.saturating_sub(1));
-                let next_y = (MOUSE.y + dy).clamp(0, fb_height.saturating_sub(1));
-                REMAINDER_X = if next_x == MOUSE.x + dx {
-                    scaled_x % 2
-                } else {
-                    0
-                };
-                REMAINDER_Y = if next_y == MOUSE.y + dy {
-                    scaled_y % 2
-                } else {
-                    0
-                };
-                MOUSE.x = next_x;
-                MOUSE.y = next_y;
-            }
-            MOUSE.left = PACKET[0] & 0x01 != 0;
-            MOUSE.right = PACKET[0] & 0x02 != 0;
-            MOUSE.middle = PACKET[0] & 0x04 != 0;
-            updated = true;
-        }
-        if updated {
-            Some(MOUSE)
-        } else {
-            None
-        }
+pub fn state() -> MouseState {
+    #[cfg(target_arch = "x86")]
+    {
+        MOUSE_STATE.lock().clone()
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        MouseState { x: 0, y: 0, left: false, right: false, middle: false }
     }
 }

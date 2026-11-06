@@ -50,12 +50,14 @@ static mut PCI_DEVICES: [PciDevice; MAX_PCI_DEVICES] = unsafe {
 };
 static mut PCI_DEVICE_COUNT: usize = 0;
 
+#[cfg(target_arch = "x86")]
 fn port_byte_out(port: u16, data: u8) {
     unsafe {
         core::arch::asm!("out dx, al", in("dx") port, in("al") data);
     }
 }
 
+#[cfg(target_arch = "x86")]
 fn port_byte_in(port: u16) -> u8 {
     let val: u8;
     unsafe {
@@ -64,12 +66,14 @@ fn port_byte_in(port: u16) -> u8 {
     val
 }
 
+#[cfg(target_arch = "x86")]
 fn port_dword_out(port: u16, data: u32) {
     unsafe {
         core::arch::asm!("out dx, eax", in("dx") port, in("eax") data);
     }
 }
 
+#[cfg(target_arch = "x86")]
 fn port_dword_in(port: u16) -> u32 {
     let val: u32;
     unsafe {
@@ -78,6 +82,7 @@ fn port_dword_in(port: u16) -> u32 {
     val
 }
 
+#[cfg(target_arch = "x86")]
 fn pci_config_address(bus: u8, device: u8, function: u8, offset: u8) -> u32 {
     0x8000_0000
         | ((bus as u32) << 16)
@@ -86,11 +91,13 @@ fn pci_config_address(bus: u8, device: u8, function: u8, offset: u8) -> u32 {
         | (offset as u32 & 0xFC)
 }
 
+#[cfg(target_arch = "x86")]
 fn pci_read_dword(bus: u8, device: u8, function: u8, offset: u8) -> u32 {
     port_dword_out(PCI_CONFIG_ADDRESS, pci_config_address(bus, device, function, offset));
     port_dword_in(PCI_CONFIG_DATA)
 }
 
+#[cfg(target_arch = "x86")]
 fn pci_read_word(bus: u8, device: u8, function: u8, offset: u8) -> u16 {
     let value = pci_read_dword(bus, device, function, offset);
     match offset % 4 {
@@ -100,6 +107,7 @@ fn pci_read_word(bus: u8, device: u8, function: u8, offset: u8) -> u16 {
     }
 }
 
+#[cfg(target_arch = "x86")]
 fn pci_read_byte(bus: u8, device: u8, function: u8, offset: u8) -> u8 {
     let value = pci_read_dword(bus, device, function, offset);
     match offset % 4 {
@@ -111,6 +119,7 @@ fn pci_read_byte(bus: u8, device: u8, function: u8, offset: u8) -> u8 {
     }
 }
 
+#[cfg(target_arch = "x86")]
 fn pci_multi_function(bus: u8, device: u8) -> bool {
     pci_read_byte(bus, device, 0, 0x0E) & 0x80 != 0
 }
@@ -136,6 +145,7 @@ fn class_name(class: u8, subclass: u8) -> &'static str {
     }
 }
 
+#[cfg(target_arch = "x86")]
 pub fn enumerate() -> usize {
     unsafe {
         PCI_DEVICE_COUNT = 0;
@@ -208,10 +218,12 @@ pub fn enumerate() -> usize {
     unsafe { PCI_DEVICE_COUNT }
 }
 
+#[cfg(target_arch = "x86")]
 pub fn device_count() -> usize {
     unsafe { PCI_DEVICE_COUNT }
 }
 
+#[cfg(target_arch = "x86")]
 pub fn device_at(index: usize) -> Option<PciDevice> {
     unsafe {
         if index < PCI_DEVICE_COUNT {
@@ -222,6 +234,7 @@ pub fn device_at(index: usize) -> Option<PciDevice> {
     }
 }
 
+#[cfg(target_arch = "x86")]
 pub fn find_by_class(class: u8) -> Option<PciDevice> {
     unsafe {
         for index in 0..PCI_DEVICE_COUNT {
@@ -233,6 +246,7 @@ pub fn find_by_class(class: u8) -> Option<PciDevice> {
     }
 }
 
+#[cfg(target_arch = "x86")]
 pub fn find_by_class_and_subclass(class: u8, subclass: u8) -> Option<PciDevice> {
     unsafe {
         for index in 0..PCI_DEVICE_COUNT {
@@ -244,9 +258,40 @@ pub fn find_by_class_and_subclass(class: u8, subclass: u8) -> Option<PciDevice> 
     }
 }
 
+#[cfg(target_arch = "x86")]
 pub fn init() {
     let count = enumerate();
     crate::drivers::serial::write_string("PCI enumeration complete: ");
     crate::drivers::serial::write_dec(count as u32);
     crate::drivers::serial::write_string(" devices\r\n");
+}
+
+#[cfg(target_arch = "aarch64")]
+pub fn init() {
+    crate::drivers::serial::write_string("PCI: not available on aarch64\r\n");
+}
+
+#[cfg(target_arch = "aarch64")]
+pub fn enumerate() -> usize {
+    0
+}
+
+#[cfg(target_arch = "aarch64")]
+pub fn device_count() -> usize {
+    0
+}
+
+#[cfg(target_arch = "aarch64")]
+pub fn device_at(_index: usize) -> Option<PciDevice> {
+    None
+}
+
+#[cfg(target_arch = "aarch64")]
+pub fn find_by_class(_class: u8) -> Option<PciDevice> {
+    None
+}
+
+#[cfg(target_arch = "aarch64")]
+pub fn find_by_class_and_subclass(_class: u8, _subclass: u8) -> Option<PciDevice> {
+    None
 }

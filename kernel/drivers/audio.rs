@@ -15,22 +15,31 @@
 // You should have received a copy of the GNU General Public License
 // along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
 
-// PC speaker audio via PIT channel 2 and port 0x61
+// PC speaker audio via PIT channel 2 and port 0x61 (x86) / stub (aarch64)
 
+#[cfg(target_arch = "x86")]
 const PIT_CHANNEL2: u16 = 0x42;
+#[cfg(target_arch = "x86")]
 const PIT_COMMAND: u16 = 0x43;
+#[cfg(target_arch = "x86")]
 const SPEAKER_PORT: u16 = 0x61;
 
+#[cfg(target_arch = "x86")]
 const PIT_BASE_FREQ: u32 = 1_193_182;
 
+#[cfg(target_arch = "x86")]
 const SPEAKER_ENABLE: u8 = 0x03;
 
+static mut AUDIO_ENABLED: bool = false;
+
+#[cfg(target_arch = "x86")]
 fn port_byte_out(port: u16, data: u8) {
     unsafe {
         core::arch::asm!("out dx, al", in("dx") port, in("al") data);
     }
 }
 
+#[cfg(target_arch = "x86")]
 fn port_byte_in(port: u16) -> u8 {
     let val: u8;
     unsafe {
@@ -39,15 +48,16 @@ fn port_byte_in(port: u16) -> u8 {
     val
 }
 
-static mut AUDIO_ENABLED: bool = false;
-
 pub fn init() {
     unsafe {
         AUDIO_ENABLED = true;
     }
-    // Ensure speaker is off initially
-    let val = port_byte_in(SPEAKER_PORT) & !SPEAKER_ENABLE;
-    port_byte_out(SPEAKER_PORT, val);
+    #[cfg(target_arch = "x86")]
+    {
+        // Ensure speaker is off initially
+        let val = port_byte_in(SPEAKER_PORT) & !SPEAKER_ENABLE;
+        port_byte_out(SPEAKER_PORT, val);
+    }
 }
 
 pub fn is_available() -> bool {
@@ -59,24 +69,32 @@ pub fn play_tone(frequency_hz: u32, duration_ms: u32) {
         return;
     }
 
-    let divisor = PIT_BASE_FREQ / frequency_hz;
-    if divisor == 0 || divisor > 0xFFFF {
-        return;
+    #[cfg(target_arch = "x86")]
+    {
+        let divisor = PIT_BASE_FREQ / frequency_hz;
+        if divisor == 0 || divisor > 0xFFFF {
+            return;
+        }
+
+        unsafe {
+            core::arch::asm!("out dx, al", in("dx") PIT_COMMAND, in("al") 0xB6u8);
+            core::arch::asm!("out dx, al", in("dx") PIT_CHANNEL2, in("al") (divisor & 0xFF) as u8);
+            core::arch::asm!("out dx, al", in("dx") PIT_CHANNEL2, in("al") ((divisor >> 8) & 0xFF) as u8);
+
+            let mut val = port_byte_in(SPEAKER_PORT);
+            val |= SPEAKER_ENABLE;
+            port_byte_out(SPEAKER_PORT, val);
+        }
+
+        sleep_ms(duration_ms);
+
+        stop();
     }
-
-    unsafe {
-        core::arch::asm!("out dx, al", in("dx") PIT_COMMAND, in("al") 0xB6u8);
-        core::arch::asm!("out dx, al", in("dx") PIT_CHANNEL2, in("al") (divisor & 0xFF) as u8);
-        core::arch::asm!("out dx, al", in("dx") PIT_CHANNEL2, in("al") ((divisor >> 8) & 0xFF) as u8);
-
-        let mut val = port_byte_in(SPEAKER_PORT);
-        val |= SPEAKER_ENABLE;
-        port_byte_out(SPEAKER_PORT, val);
+    #[cfg(target_arch = "aarch64")]
+    {
+        let _ = frequency_hz;
+        let _ = duration_ms;
     }
-
-    sleep_ms(duration_ms);
-
-    stop();
 }
 
 pub fn beep() {
@@ -87,18 +105,26 @@ pub fn stop() {
     if !unsafe { AUDIO_ENABLED } {
         return;
     }
-    unsafe {
-        let mut val = port_byte_in(SPEAKER_PORT);
-        val &= !SPEAKER_ENABLE;
-        port_byte_out(SPEAKER_PORT, val);
+    #[cfg(target_arch = "x86")]
+    {
+        unsafe {
+            let mut val = port_byte_in(SPEAKER_PORT);
+            val &= !SPEAKER_ENABLE;
+            port_byte_out(SPEAKER_PORT, val);
+        }
     }
 }
 
+#[cfg(target_arch = "x86")]
 fn sleep_ms(ms: u32) {
-    // Approximate delay using PIT ticks (assumes ~100 Hz from pit::init)
     let ticks_needed = ms / 10;
     let start = crate::drivers::pit::ticks();
     while crate::drivers::pit::ticks().wrapping_sub(start) < ticks_needed {
         core::hint::spin_loop();
     }
+}
+
+#[cfg(target_arch = "aarch64")]
+fn sleep_ms(_ms: u32) {
+    // Stub
 }

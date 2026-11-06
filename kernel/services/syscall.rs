@@ -502,15 +502,20 @@ fn storage_request(address: u32, syscall: u32) -> u32 {
         1 => {
             let mut output = [0u8; STORAGE_MAX_DATA];
             match crate::drivers::disk::read_file(name, &mut output) {
-                Ok(length) if length <= request.out_len as usize => {
-                    unsafe {
-                        core::ptr::copy_nonoverlapping(
-                            output.as_ptr(),
-                            request.out_ptr as *mut u8,
-                            length,
-                        );
+                Ok(length) => {
+                    let length_usize = length as usize;
+                    if length_usize <= request.out_len as usize {
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(
+                                output.as_ptr(),
+                                request.out_ptr as *mut u8,
+                                length_usize,
+                            );
+                        }
+                        Ok(length_usize)
+                    } else {
+                        return u32::MAX;
                     }
-                    Ok(length)
                 }
                 Ok(_) => return u32::MAX,
                 Err(error) => Err(error),
@@ -546,6 +551,9 @@ fn storage_error(error: crate::drivers::disk::StorageError) -> u32 {
     match error {
         StorageError::NoDisk => 1,
         StorageError::Io => 2,
+        StorageError::NotReady => 9,
+        StorageError::ReadError => 10,
+        StorageError::WriteError => 11,
         StorageError::NotFormatted => 3,
         StorageError::NotBlank => 4,
         StorageError::InvalidName => 5,

@@ -15,27 +15,33 @@
 // You should have received a copy of the GNU General Public License
 // along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
 
-// Programmable Interval Timer
-
-const PIT_CHANNEL0: u16 = 0x40;
-const PIT_COMMAND: u16 = 0x43;
-
-const PIT_SEL_CHANNEL0: u8 = 0x00;
-const PIT_ACCESS_LOHI: u8 = 0x30;
-const PIT_MODE_RATE_GENERATOR: u8 = 0x04;
-
-const PIT_BASE_FREQ: u32 = 1_193_182;
+// Programmable Interval Timer (x86) / Architected Timer (aarch64)
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
 static TICKS: AtomicU32 = AtomicU32::new(0);
 
+#[cfg(target_arch = "x86")]
+const PIT_CHANNEL0: u16 = 0x40;
+#[cfg(target_arch = "x86")]
+const PIT_COMMAND: u16 = 0x43;
+#[cfg(target_arch = "x86")]
+const PIT_SEL_CHANNEL0: u8 = 0x00;
+#[cfg(target_arch = "x86")]
+const PIT_ACCESS_LOHI: u8 = 0x30;
+#[cfg(target_arch = "x86")]
+const PIT_MODE_RATE_GENERATOR: u8 = 0x04;
+#[cfg(target_arch = "x86")]
+const PIT_BASE_FREQ: u32 = 1_193_182;
+
+#[cfg(target_arch = "x86")]
 fn port_byte_out(port: u16, data: u8) {
     unsafe {
         core::arch::asm!("out dx, al", in("dx") port, in("al") data);
     }
 }
 
+#[cfg(target_arch = "x86")]
 pub fn init(frequency: u32) {
     let divisor = PIT_BASE_FREQ / frequency;
     let mode_byte = PIT_SEL_CHANNEL0 | PIT_ACCESS_LOHI | PIT_MODE_RATE_GENERATOR;
@@ -43,6 +49,12 @@ pub fn init(frequency: u32) {
     port_byte_out(PIT_COMMAND, mode_byte);
     port_byte_out(PIT_CHANNEL0, (divisor & 0xFF) as u8);
     port_byte_out(PIT_CHANNEL0, ((divisor >> 8) & 0xFF) as u8);
+}
+
+#[cfg(target_arch = "aarch64")]
+pub fn init(_frequency: u32) {
+    // AArch64 uses the architected timer (see arch/aarch64/timer.rs)
+    crate::arch::aarch64::timer::init();
 }
 
 #[no_mangle]
