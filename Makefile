@@ -24,7 +24,8 @@ LD ?= ld
 OBJCOPY ?= objcopy
 QEMU_X86 ?= qemu-system-i386
 QEMU_ARM64 ?= qemu-system-aarch64
-GRUB_MKRESCUE ?= grub2-mkrescue
+# Auto-detect grub-mkrescue binary name (Fedora uses grub2-mkrescue, others use grub-mkrescue)
+GRUB_MKRESCUE := $(shell if command -v grub-mkrescue >/dev/null 2>&1; then echo grub-mkrescue; elif command -v grub2-mkrescue >/dev/null 2>&1; then echo grub2-mkrescue; else echo grub-mkrescue; fi)
 XORRISO ?= xorriso
 
 # Architecture selector: i386 (default) or arm64
