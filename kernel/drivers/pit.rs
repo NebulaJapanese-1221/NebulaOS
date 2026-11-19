@@ -41,7 +41,6 @@ fn port_byte_out(port: u16, data: u8) {
     }
 }
 
-#[cfg(target_arch = "x86")]
 pub fn init(frequency: u32) {
     let divisor = PIT_BASE_FREQ / frequency;
     let mode_byte = PIT_SEL_CHANNEL0 | PIT_ACCESS_LOHI | PIT_MODE_RATE_GENERATOR;
@@ -49,12 +48,6 @@ pub fn init(frequency: u32) {
     port_byte_out(PIT_COMMAND, mode_byte);
     port_byte_out(PIT_CHANNEL0, (divisor & 0xFF) as u8);
     port_byte_out(PIT_CHANNEL0, ((divisor >> 8) & 0xFF) as u8);
-}
-
-#[cfg(target_arch = "aarch64")]
-pub fn init(_frequency: u32) {
-    // AArch64 uses the architected timer (see arch/aarch64/timer.rs)
-    crate::arch::aarch64::timer::init();
 }
 
 #[no_mangle]

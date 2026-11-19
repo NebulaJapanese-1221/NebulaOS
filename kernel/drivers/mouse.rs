@@ -78,7 +78,7 @@ pub fn init() -> bool {
 
 #[cfg(target_arch = "x86")]
 pub fn poll() -> Option<MouseState> {
-    let mut guard = MOUSE_STATE.lock();
+    let guard = MOUSE_STATE.lock();
     if port_byte_in(STATUS_PORT) & 0x01 == 0 {
         return None;
     }

@@ -140,7 +140,6 @@ pub fn class_name(class: u8, subclass: u8) -> &'static str {
         },
         PCI_CLASS_BRIDGE => "bridge device",
         PCI_CLASS_SERIAL => "serial bus controller",
-        PCI_CLASS_AUDIO => "audio device",
         _ => "unknown device",
     }
 }
@@ -258,7 +257,6 @@ pub fn find_by_class_and_subclass(class: u8, subclass: u8) -> Option<PciDevice> 
     }
 }
 
-#[cfg(target_arch = "x86")]
 pub fn init() {
     let count = enumerate();
     crate::drivers::serial::write_string("PCI enumeration complete: ");
@@ -266,32 +264,56 @@ pub fn init() {
     crate::drivers::serial::write_string(" devices\r\n");
 }
 
-#[cfg(target_arch = "aarch64")]
-pub fn init() {
-    crate::drivers::serial::write_string("PCI: not available on aarch64\r\n");
-}
-
-#[cfg(target_arch = "aarch64")]
 pub fn enumerate() -> usize {
-    0
+    let mut count: usize = 0;
+    unsafe {
+        for bus in 0..256u8 {
+            for device in 0..32u8 {
+                for function in 0..8u8 {
+                    let vendor_id = read_vendor_device(bus, device, function);
+                    if vendor_id == 0xFFFF {
+                        continue;
+                    }
+                    count += 1;
+                }
+            }
+        }
+    }
+    unsafe { PCI_DEVICE_COUNT }
 }
 
-#[cfg(target_arch = "aarch64")]
 pub fn device_count() -> usize {
-    0
+    unsafe { PCI_DEVICE_COUNT }
 }
 
-#[cfg(target_arch = "aarch64")]
-pub fn device_at(_index: usize) -> Option<PciDevice> {
-    None
+pub fn device_at(index: usize) -> Option<PciDevice> {
+    unsafe {
+        if index < PCI_DEVICE_COUNT {
+            Some(PCI_DEVICES[index])
+        } else {
+            None
+        }
+    }
 }
 
-#[cfg(target_arch = "aarch64")]
-pub fn find_by_class(_class: u8) -> Option<PciDevice> {
-    None
+pub fn find_by_class(class: u8) -> Option<PciDevice> {
+    unsafe {
+        for index in 0..PCI_DEVICE_COUNT {
+            if PCI_DEVICES[index].class == class {
+                return Some(PCI_DEVICES[index]);
+            }
+        }
+        None
+    }
 }
 
-#[cfg(target_arch = "aarch64")]
-pub fn find_by_class_and_subclass(_class: u8, _subclass: u8) -> Option<PciDevice> {
-    None
+pub fn find_by_class_and_subclass(class: u8, subclass: u8) -> Option<PciDevice> {
+    unsafe {
+        for index in 0..PCI_DEVICE_COUNT {
+            if PCI_DEVICES[index].class == class && PCI_DEVICES[index].subclass == subclass {
+                return Some(PCI_DEVICES[index]);
+            }
+        }
+        None
+    }
 }

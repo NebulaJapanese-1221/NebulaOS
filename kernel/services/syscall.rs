@@ -558,7 +558,6 @@ fn storage_request(address: u32, syscall: u32) -> u32 {
                         return u32::MAX;
                     }
                 }
-                Ok(_) => return u32::MAX,
                 Err(error) => Err(error),
             }
         }

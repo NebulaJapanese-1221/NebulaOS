@@ -32,14 +32,12 @@ impl Write for SerialWriter {
     }
 }
 
-#[cfg(target_arch = "x86")]
 fn port_byte_out(port: u16, data: u8) {
     unsafe {
         core::arch::asm!("out dx, al", in("dx") port, in("al") data);
     }
 }
 
-#[cfg(target_arch = "x86")]
 fn port_byte_in(port: u16) -> u8 {
     let val: u8;
     unsafe {
@@ -48,7 +46,6 @@ fn port_byte_in(port: u16) -> u8 {
     val
 }
 
-#[cfg(target_arch = "x86")]
 pub fn init() {
     port_byte_out(0x3F8 + 3, 0x80);
     port_byte_out(0x3F8 + 0, 0x01);
@@ -58,18 +55,11 @@ pub fn init() {
     port_byte_out(0x3F8 + 1, 0x00);
 }
 
-#[cfg(target_arch = "aarch64")]
-pub fn init() {
-    // AArch64 serial uses MMIO (PL011 UART); stubbed for now
-}
-
-#[cfg(target_arch = "x86")]
 pub fn write_byte(byte: u8) {
     let _guard = SERIAL_LOCK.lock();
     write_byte_unlocked(byte);
 }
 
-#[cfg(target_arch = "x86")]
 fn write_byte_unlocked(byte: u8) {
     while port_byte_in(0x3F8 + 5) & 0x20 == 0 {
         core::hint::spin_loop();
@@ -82,7 +72,6 @@ pub fn write_byte(_byte: u8) {
     // Stub - no serial output on aarch64 yet
 }
 
-#[cfg(target_arch = "x86")]
 pub fn write_string(s: &str) {
     let _guard = SERIAL_LOCK.lock();
     for byte in s.bytes() {
@@ -95,7 +84,6 @@ pub fn write_string(_s: &str) {
     // Stub
 }
 
-#[cfg(target_arch = "x86")]
 pub fn write_dec(mut val: u32) {
     let _guard = SERIAL_LOCK.lock();
     if val == 0 {
@@ -120,7 +108,6 @@ pub fn write_dec(_val: u32) {
     // Stub
 }
 
-#[cfg(target_arch = "x86")]
 pub fn write_hex(value: u32) {
     let _guard = SERIAL_LOCK.lock();
     for byte in b"0x" {

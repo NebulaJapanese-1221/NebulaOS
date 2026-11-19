@@ -103,7 +103,6 @@ pub struct RtcTime {
     pub second: u8,
 }
 
-#[cfg(target_arch = "x86")]
 pub fn read_time() -> Option<RtcTime> {
     if !unsafe { RTC_READY } {
         return None;
@@ -148,17 +147,6 @@ pub fn read_time() -> Option<RtcTime> {
     })
 }
 
-#[cfg(target_arch = "aarch64")]
-pub fn read_time() -> Option<RtcTime> {
-    None
-}
-
-#[cfg(target_arch = "x86")]
 pub fn read_register_d() -> u8 {
     cmos_read(RTC_REGISTER_D)
-}
-
-#[cfg(target_arch = "aarch64")]
-pub fn read_register_d() -> u8 {
-    0
 }

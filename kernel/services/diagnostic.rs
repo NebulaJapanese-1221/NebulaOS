@@ -152,7 +152,6 @@ impl Diagnostic {
         self.kv("Keyboard", "PS/2", y);
         y += LINE_HEIGHT;
         self.kv("Mouse", if pci::find_by_class(0x03).is_some() { "detected" } else { "none" }, y);
-        y += LINE_HEIGHT;
 
         framebuffer::present();
     }

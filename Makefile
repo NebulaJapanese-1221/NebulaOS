@@ -15,40 +15,23 @@
 # You should have received a copy of the GNU General Public License
 # along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
 
-.PHONY: all clean run iso debug data-disk run-arm64 debug-arm64
+.PHONY: all clean run iso debug data-disk
 
 CARGO ?= cargo
 NASM ?= nasm
-AS ?= as
 LD ?= ld
 OBJCOPY ?= objcopy
 QEMU_X86 ?= qemu-system-i386
-QEMU_ARM64 ?= qemu-system-aarch64
 # Auto-detect grub-mkrescue binary name (Fedora uses grub2-mkrescue, others use grub-mkrescue)
 GRUB_MKRESCUE := $(shell if command -v grub-mkrescue >/dev/null 2>&1; then echo grub-mkrescue; elif command -v grub2-mkrescue >/dev/null 2>&1; then echo grub2-mkrescue; else echo grub-mkrescue; fi)
 XORRISO ?= xorriso
 
-# Architecture selector: i386 (default) or arm64
-ARCH ?= i386
-
-ifeq ($(ARCH),arm64)
-	TARGET := aarch64-unknown-nebula
-	QEMU := $(QEMU_ARM64)
-	KERNEL_IMG := boot/kernel-aarch64.elf
-	ISO := nebulaos-arm64.iso
-	KERNEL_CARGO_TARGET_FLAGS := --target targets/$(TARGET).json
-	LD_ARCH_FLAG := -m aarch64linux
-	BOOT_OBJ := kernel/arch/aarch64/boot.o
-else
-	TARGET := i686-unknown-nebula
-	QEMU := $(QEMU_X86)
-	KERNEL_IMG := boot/kernel.elf
-	ISO := nebulaos.iso
-	CARGO_TARGET_FLAGS :=
-	KERNEL_CARGO_TARGET_FLAGS :=
-	LD_ARCH_FLAG := -m elf_i386
-	BOOT_OBJ := kernel/arch/isr.o kernel/arch/ap_trampoline.o
-endif
+TARGET := i686-unknown-nebula
+QEMU := $(QEMU_X86)
+KERNEL_IMG := boot/kernel.elf
+ISO := nebulaos.iso
+LD_ARCH_FLAG := -m elf_i386
+BOOT_OBJ := kernel/arch/isr.o kernel/arch/ap_trampoline.o
 
 KERNEL_LIB := target/$(TARGET)/release/libnebulaos.a
 DISK := nebulaos.disk
@@ -59,21 +42,12 @@ all: $(ISO)
 
 # ---- Kernel library ----
 $(KERNEL_LIB): Cargo.toml Cargo.lock .cargo/config.toml targets/$(TARGET).json $(shell find kernel userspace -type f -name '*.rs')
-ifeq ($(ARCH),arm64)
-	RUSTFLAGS="-C link-arg=-Tlinker.ld -C link-arg=-maarch64linux" $(CARGO) build --release $(KERNEL_CARGO_TARGET_FLAGS)
-else
-	$(CARGO) build --release $(KERNEL_CARGO_TARGET_FLAGS)
-endif
+	$(CARGO) build --release
 
 # ---- Boot objects ----
-ifeq ($(ARCH),i386)
 $(BOOT_OBJ): kernel/arch/isr.asm kernel/arch/ap_trampoline.asm
 	$(NASM) -f elf32 kernel/arch/isr.asm -o kernel/arch/isr.o
 	$(NASM) -f elf32 kernel/arch/ap_trampoline.asm -o kernel/arch/ap_trampoline.o
-else ifeq ($(ARCH),arm64)
-$(BOOT_OBJ): kernel/arch/aarch64/boot.S
-	$(AS) -aarch64 -c kernel/arch/aarch64/boot.S -o $(BOOT_OBJ)
-endif
 
 # ---- Kernel ELF ----
 $(KERNEL_IMG): $(KERNEL_LIB) $(BOOT_OBJ) linker.ld
@@ -83,11 +57,7 @@ $(KERNEL_IMG): $(KERNEL_LIB) $(BOOT_OBJ) linker.ld
 $(ISO): $(KERNEL_IMG) Makefile
 	mkdir -p boot/iso/boot/grub
 	cp $(KERNEL_IMG) boot/iso/boot/kernel.elf
-ifeq ($(ARCH),arm64)
-	@printf 'set timeout=5\nset default=0\n\nmenuentry "NebulaOS arm64" {\n    echo "Loading NebulaOS (aarch64)..."\n    multiboot2 /boot/kernel.elf\n}\n' > boot/iso/boot/grub/grub.cfg
-else
 	@printf 'serial --unit=0 --speed=115200 --word=8 --parity=no --stop=1\nset gfxmode=1024x768x32;auto\nset gfxpayload=keep\ninsmod vbe\ninsmod gfxterm\nterminal_input console serial\nterminal_output gfxterm serial\nset timeout=5\nset timeout_style=menu\nset default=0\n\nmenuentry "NebulaOS" {\n    multiboot2 /boot/kernel.elf\n}\n' > boot/iso/boot/grub/grub.cfg
-endif
 	$(GRUB_MKRESCUE) -o $(ISO) boot/iso
 
 # ---- Run targets ----
@@ -98,15 +68,8 @@ run: $(ISO)
 		$(QEMU) -cdrom $(ISO) -m 256 -vga std -serial stdio; \
 	fi
 
-run-arm64: $(KERNEL_IMG)
-	$(QEMU_ARM64) -machine virt -cpu cortex-a72 -m 512 -kernel $(KERNEL_IMG) -nographic -serial stdio
-
 debug: $(ISO)
 	$(QEMU_X86) -cdrom $(ISO) -m 256 -vga std -serial stdio -s -S &
-	sleep 1
-
-debug-arm64: $(KERNEL_IMG)
-	$(QEMU_ARM64) -machine virt -cpu cortex-a72 -m 512 -kernel $(KERNEL_IMG) -nographic -serial stdio -s -S &
 	sleep 1
 
 data-disk:
@@ -116,4 +79,4 @@ data-disk:
 
 clean:
 	$(CARGO) clean
-	rm -rf boot/iso $(KERNEL_IMG) $(BOOT_OBJ) nebulaos.img $(ISO) nebulaos-arm64.iso
+	rm -rf boot/iso $(KERNEL_IMG) $(BOOT_OBJ) nebulaos.img $(ISO)

@@ -183,72 +183,34 @@ pub extern "C" fn kernel_entry(multiboot_info: *const u8) -> ! {
 }
 
 fn arch_early_init(multiboot_info: *const u8) {
-    #[cfg(target_arch = "x86")]
-    {
-        arch::gdt::init();
-        arch::tss::init(0x90000);
-        arch::idt::init();
-        arch::pic::remap(0x20, 0x28);
-        arch::pic::mask_irq(0);
-        arch::smp::init(multiboot_info);
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        arch::early_init();
-    }
+    arch::gdt::init();
+    arch::tss::init(0x90000);
+    arch::idt::init();
+    arch::pic::remap(0x20, 0x28);
+    arch::pic::mask_irq(0);
+    arch::smp::init(multiboot_info);
 }
 
 fn arch_irq_init() {
-    #[cfg(target_arch = "x86")]
-    {
-        // Timer, PCI, RTC, audio already initialized above; unmask timer IRQ
-        arch::pic::unmask_irq(0);
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        arch::init_timer();
-        arch::init();
-    }
+    // Timer, PCI, RTC, audio already initialized above; unmask timer IRQ
+    arch::pic::unmask_irq(0);
 }
 
 fn arch_timer_ticks() -> u32 {
-    #[cfg(target_arch = "x86")]
-    {
-        drivers::pit::ticks()
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        arch::timer_ticks()
-    }
+    drivers::pit::ticks()
 }
 
 fn arch_cpu_idle() {
-    #[cfg(target_arch = "x86")]
-    {
-        unsafe {
-            core::arch::asm!("hlt", options(nomem, nostack));
-        }
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        unsafe {
-            core::arch::asm!("wfe", options(nomem, nostack));
-        }
+    unsafe {
+        core::arch::asm!("hlt", options(nomem, nostack));
     }
 }
 
 fn arch_halt() -> ! {
-    #[cfg(target_arch = "x86")]
-    {
-        loop {
-            unsafe {
-                core::arch::asm!("cli", "hlt", options(nomem, nostack));
-            }
+    loop {
+        unsafe {
+            core::arch::asm!("cli", "hlt", options(nomem, nostack));
         }
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        arch::halt()
     }
 }
 

@@ -487,14 +487,18 @@ impl WindowManager {
             if let Capture::Drag(index) = self.capture {
                 if let Some(window) = self.windows.get_mut(index) {
                     let old_bounds = window.bounds;
+                    let fb_w = framebuffer::get_width();
+                    let fb_h = framebuffer::get_height();
                     window.bounds.x = x
                         .saturating_sub(self.drag_offset.0)
-                        .min(framebuffer::get_width().saturating_sub(window.bounds.width));
+                        .min(fb_w.saturating_sub(window.bounds.width));
                     window.bounds.y = y
                         .saturating_sub(self.drag_offset.1)
                         .max(40)
-                        .min(framebuffer::get_height().saturating_sub(window.bounds.height + 44));
+                        .min(fb_h.saturating_sub(window.bounds.height + 44));
                     if old_bounds != window.bounds {
+                        let new_bounds = window.bounds;
+                        drop(window);
                         self.draw_wallpaper_rect(
                             old_bounds.x,
                             old_bounds.y,
@@ -509,10 +513,10 @@ impl WindowManager {
                             old_bounds.height,
                         );
                         framebuffer::mark_dirty(
-                            window.bounds.x,
-                            window.bounds.y,
-                            window.bounds.width,
-                            window.bounds.height,
+                            new_bounds.x,
+                            new_bounds.y,
+                            new_bounds.width,
+                            new_bounds.height,
                         );
                         framebuffer::present_dirty();
                     }
@@ -522,40 +526,48 @@ impl WindowManager {
         if let Capture::Resize(index) = self.capture {
             if let Some(window) = self.windows.get_mut(index) {
                 let old_bounds = window.bounds;
+                let fb_w = framebuffer::get_width();
+                let fb_h = framebuffer::get_height();
                 let new_width = x
                     .saturating_sub(window.bounds.x)
                     .max(200)
-                    .min(framebuffer::get_width().saturating_sub(window.bounds.x));
+                    .min(fb_w.saturating_sub(window.bounds.x));
                 let new_height = y
                     .saturating_sub(window.bounds.y)
                     .max(150)
-                    .min(framebuffer::get_height().saturating_sub(window.bounds.y));
-                window.bounds.width = new_width;
-                window.bounds.height = new_height;
-                if old_bounds != window.bounds {
+                    .min(fb_h.saturating_sub(window.bounds.y));
+                let new_bounds = Rect {
+                    x: window.bounds.x,
+                    y: window.bounds.y,
+                    width: new_width,
+                    height: new_height,
+                };
+                window.bounds = new_bounds;
+                drop(window);
+                if old_bounds != new_bounds {
                     // Redraw wallpaper in areas uncovered by shrinking
-                    if old_bounds.width > window.bounds.width {
+                    if old_bounds.width > new_bounds.width {
                         self.draw_wallpaper_rect(
-                            window.bounds.x + window.bounds.width,
+                            new_bounds.x + new_bounds.width,
                             old_bounds.y,
-                            old_bounds.width - window.bounds.width,
+                            old_bounds.width - new_bounds.width,
                             old_bounds.height,
                         );
                     }
-                    if old_bounds.height > window.bounds.height {
+                    if old_bounds.height > new_bounds.height {
                         self.draw_wallpaper_rect(
                             old_bounds.x,
-                            window.bounds.y + window.bounds.height,
+                            new_bounds.y + new_bounds.height,
                             old_bounds.width,
-                            old_bounds.height - window.bounds.height,
+                            old_bounds.height - new_bounds.height,
                         );
                     }
                     self.draw_window(index, pointer);
                     framebuffer::mark_dirty(
                         old_bounds.x,
                         old_bounds.y,
-                        old_bounds.width.max(window.bounds.width),
-                        old_bounds.height.max(window.bounds.height),
+                        old_bounds.width.max(new_bounds.width),
+                        old_bounds.height.max(new_bounds.height),
                     );
                     framebuffer::present_dirty();
                 }
