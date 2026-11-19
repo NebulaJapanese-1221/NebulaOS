@@ -688,7 +688,7 @@ pub fn draw_text(mut x: u32, y: u32, text: &str, color: u32, scale: u32) {
         return;
     };
     let mut text_right = x;
-    let mut text_bottom = y.saturating_add(8 * scale);
+    let text_bottom = y.saturating_add(8 * scale);
 
     for byte in text.bytes() {
         if byte == b'\n' {

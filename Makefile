@@ -37,13 +37,8 @@ ifeq ($(ARCH),arm64)
 	KERNEL_IMG := boot/kernel-aarch64.elf
 	ISO := nebulaos-arm64.iso
 	KERNEL_CARGO_TARGET_FLAGS := --target targets/$(TARGET).json
-	USER_CARGO_TARGET_FLAGS := --target ../../targets/$(TARGET).json
 	LD_ARCH_FLAG := -m aarch64linux
 	BOOT_OBJ := kernel/arch/aarch64/boot.o
-	USER_BUILD_DIR := target/user-demo-arm64
-	USER_ELF_OBJ := $(USER_BUILD_DIR)/demo_elf.o
-	USER_OBJCOPY_FMT := elf64-littleaarch64
-	USER_OBJCOPY_ARCH := aarch64
 else
 	TARGET := i686-unknown-nebula
 	QEMU := $(QEMU_X86)
@@ -51,20 +46,11 @@ else
 	ISO := nebulaos.iso
 	CARGO_TARGET_FLAGS :=
 	KERNEL_CARGO_TARGET_FLAGS :=
-	USER_CARGO_TARGET_FLAGS :=
 	LD_ARCH_FLAG := -m elf_i386
 	BOOT_OBJ := kernel/arch/isr.o kernel/arch/ap_trampoline.o
-	USER_BUILD_DIR := target/user-demo-i386
-	USER_ELF_OBJ := $(USER_BUILD_DIR)/demo_elf.o
-	USER_OBJCOPY_FMT := elf32-i386
-	USER_OBJCOPY_ARCH := i386
 endif
 
 KERNEL_LIB := target/$(TARGET)/release/libnebulaos.a
-USER_ELF := $(USER_BUILD_DIR)/demo.elf
-USER_APP_RS := $(shell find userspace/apps -type f -name '*.rs')
-USER_CARGO_TARGET := target/user-demo-$(ARCH)/cargo
-USER_CARGO_ELF := $(USER_CARGO_TARGET)/$(TARGET)/release/nebulaos-user-demo
 DISK := nebulaos.disk
 
 export RUSTC_TARGET_PATH := targets
@@ -89,17 +75,9 @@ $(BOOT_OBJ): kernel/arch/aarch64/boot.S
 	$(AS) -aarch64 -c kernel/arch/aarch64/boot.S -o $(BOOT_OBJ)
 endif
 
-# ---- Userspace demo ELF ----
-$(USER_ELF): userspace/demo/Cargo.toml userspace/demo/src/main.rs userspace/demo/linker.ld userspace/mod.rs userspace/syscall.rs userspace/storage.rs $(USER_APP_RS)
-	cd userspace/demo && $(CARGO) build --release $(USER_CARGO_TARGET_FLAGS) --target-dir ../../$(USER_CARGO_TARGET)
-	$(OBJCOPY) --strip-all $(USER_CARGO_ELF) $(USER_ELF)
-
-$(USER_ELF_OBJ): $(USER_ELF)
-	cd $(USER_BUILD_DIR) && $(OBJCOPY) -I binary -O $(USER_OBJCOPY_FMT) -B $(USER_OBJCOPY_ARCH) demo.elf demo_elf.o
-
 # ---- Kernel ELF ----
-$(KERNEL_IMG): $(KERNEL_LIB) $(BOOT_OBJ) $(USER_ELF_OBJ) linker.ld
-	$(LD) $(LD_ARCH_FLAG) -T linker.ld -o $(KERNEL_IMG) $(BOOT_OBJ) $(KERNEL_LIB) $(USER_ELF_OBJ)
+$(KERNEL_IMG): $(KERNEL_LIB) $(BOOT_OBJ) linker.ld
+	$(LD) $(LD_ARCH_FLAG) -T linker.ld -o $(KERNEL_IMG) $(BOOT_OBJ) $(KERNEL_LIB)
 
 # ---- ISO ----
 $(ISO): $(KERNEL_IMG) Makefile
@@ -138,4 +116,4 @@ data-disk:
 
 clean:
 	$(CARGO) clean
-	rm -rf boot/iso $(KERNEL_IMG) $(BOOT_OBJ) $(USER_ELF_OBJ) nebulaos.img $(ISO) nebulaos-arm64.iso
+	rm -rf boot/iso $(KERNEL_IMG) $(BOOT_OBJ) nebulaos.img $(ISO) nebulaos-arm64.iso

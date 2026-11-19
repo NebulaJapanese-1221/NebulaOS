@@ -52,12 +52,10 @@ static LAST_OUTPUT: SpinLock<LastOutput> = SpinLock::new(LastOutput {
     length: 0,
 });
 
-unsafe extern "C" {
-    #[link_name = "_binary_demo_elf_start"]
-    static USER_APP_START: u8;
-    #[link_name = "_binary_demo_elf_end"]
-    static USER_APP_END: u8;
-}
+// No embedded userspace ELF after removing userspace/demo.
+// These zero-length statics satisfy the linker; spawn_app always fails.
+static USER_APP_START: u8 = 0;
+static USER_APP_END: u8 = 0;
 
 pub fn spawn_app(app_id: u32, content: AppRect) -> Result<u32, UserProcessError> {
     let image_start = core::ptr::addr_of!(USER_APP_START);

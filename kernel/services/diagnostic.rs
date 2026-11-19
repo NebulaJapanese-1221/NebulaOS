@@ -172,7 +172,7 @@ impl Diagnostic {
         framebuffer::draw_text(MARGIN_X + 160, y, value, color, 1);
     }
 
-    fn kv_pci(&self, index: usize, dev: &pci::PciDevice, y: u32) {
+    fn kv_pci(&self, _index: usize, dev: &pci::PciDevice, y: u32) {
         let label = format!("{:02}:{:02}.{}", dev.bus, dev.device, dev.function);
         framebuffer::draw_text(MARGIN_X + 8, y, &label, MUTED, 1);
         framebuffer::draw_text(

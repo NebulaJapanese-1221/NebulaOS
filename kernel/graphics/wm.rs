@@ -21,7 +21,7 @@ use crate::sync::SpinLock;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct Rect {
     x: u32,
     y: u32,
