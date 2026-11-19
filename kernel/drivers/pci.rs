@@ -98,7 +98,7 @@ fn pci_read_dword(bus: u8, device: u8, function: u8, offset: u8) -> u32 {
 }
 
 #[cfg(target_arch = "x86")]
-fn pci_read_word(bus: u8, device: u8, function: u8, offset: u8) -> u16 {
+pub fn pci_read_word(bus: u8, device: u8, function: u8, offset: u8) -> u16 {
     let value = pci_read_dword(bus, device, function, offset);
     match offset % 4 {
         0 => (value & 0xFFFF) as u16,
@@ -108,7 +108,7 @@ fn pci_read_word(bus: u8, device: u8, function: u8, offset: u8) -> u16 {
 }
 
 #[cfg(target_arch = "x86")]
-fn pci_read_byte(bus: u8, device: u8, function: u8, offset: u8) -> u8 {
+pub fn pci_read_byte(bus: u8, device: u8, function: u8, offset: u8) -> u8 {
     let value = pci_read_dword(bus, device, function, offset);
     match offset % 4 {
         0 => value as u8,

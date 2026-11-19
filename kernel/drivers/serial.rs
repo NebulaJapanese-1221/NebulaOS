@@ -67,10 +67,6 @@ fn write_byte_unlocked(byte: u8) {
     port_byte_out(0x3F8, byte);
 }
 
-pub fn write_byte(_byte: u8) {
-    // Stub - no serial output yet
-}
-
 pub fn write_string(s: &str) {
     let _guard = SERIAL_LOCK.lock();
     for byte in s.bytes() {
