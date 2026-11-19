@@ -107,11 +107,9 @@ pub fn stop() {
     }
     #[cfg(target_arch = "x86")]
     {
-        unsafe {
-            let mut val = port_byte_in(SPEAKER_PORT);
-            val &= !SPEAKER_ENABLE;
-            port_byte_out(SPEAKER_PORT, val);
-        }
+        let mut val = port_byte_in(SPEAKER_PORT);
+        val &= !SPEAKER_ENABLE;
+        port_byte_out(SPEAKER_PORT, val);
     }
 }
 

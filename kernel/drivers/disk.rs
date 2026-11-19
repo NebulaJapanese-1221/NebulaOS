@@ -101,7 +101,7 @@ pub fn init() -> Result<(), StorageError> {
 pub fn is_formatted() -> bool {
     #[cfg(target_arch = "x86")]
     {
-        DISK.lock().map(|d| d.formatted).unwrap_or(false)
+        DISK.lock().as_ref().map(|d| d.formatted).unwrap_or(false)
     }
     #[cfg(target_arch = "aarch64")]
     {

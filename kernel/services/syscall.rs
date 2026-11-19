@@ -475,7 +475,7 @@ fn storage_request(address: u32, syscall: u32) -> u32 {
             let capacity = request.out_len as usize / size_of::<StorageFileInfo>();
             let count = files
                 .iter()
-                .filter(|file| file.length > 0 || file.name[0] != 0)
+                .filter(|file| file.1 > 0 || file.0.as_bytes()[0] != 0)
                 .count();
             if capacity < count {
                 return u32::MAX;
@@ -483,12 +483,14 @@ fn storage_request(address: u32, syscall: u32) -> u32 {
             let mut output_index = 0;
             for file in files
                 .iter()
-                .filter(|file| file.length > 0 || file.name[0] != 0)
+                .filter(|file| file.1 > 0 || file.0.as_bytes()[0] != 0)
             {
-                let info = StorageFileInfo {
-                    name: file.name,
-                    length: file.length,
-                };
+                let (name, length) = *file;
+                let mut n = [0u8; 16];
+                let b = name.as_bytes();
+                let len = b.len().min(16);
+                n[..len].copy_from_slice(&b[..len]);
+                let info = StorageFileInfo { name: n, length: length as u16 };
                 unsafe {
                     core::ptr::write_unaligned(
                         (request.out_ptr as *mut StorageFileInfo).add(output_index),
@@ -501,7 +503,8 @@ fn storage_request(address: u32, syscall: u32) -> u32 {
         }
         1 => {
             let mut output = [0u8; STORAGE_MAX_DATA];
-            match crate::drivers::disk::read_file(name, &mut output) {
+            let name_str = core::str::from_utf8(name).unwrap_or("");
+            match crate::drivers::disk::read_file(name_str, &mut output) {
                 Ok(length) => {
                     let length_usize = length as usize;
                     if length_usize <= request.out_len as usize {

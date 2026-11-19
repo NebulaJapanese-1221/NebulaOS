@@ -24,7 +24,7 @@ LD ?= ld
 OBJCOPY ?= objcopy
 QEMU_X86 ?= qemu-system-i386
 QEMU_ARM64 ?= qemu-system-aarch64
-GRUB_MKRESCUE ?= grub-mkrescue
+GRUB_MKRESCUE ?= grub2-mkrescue
 XORRISO ?= xorriso
 
 # Architecture selector: i386 (default) or arm64

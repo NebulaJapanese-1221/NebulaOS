@@ -4,3 +4,4 @@ target/
 *.iso
 *.img
 *.o
+*.cfg

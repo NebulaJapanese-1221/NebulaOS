@@ -35,7 +35,7 @@ fn port_byte_in(port: u16) -> u8 {
     unsafe {
         core::arch::asm!("in al, dx", out("al") value, in("dx") port);
     }
-    val
+    value
 }
 
 #[cfg(target_arch = "x86")]
