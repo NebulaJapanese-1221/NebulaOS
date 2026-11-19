@@ -75,6 +75,70 @@ static mut DISPLAYED_CURSOR: CursorState = CursorState {
 };
 static FRAMEBUFFER_LOCK: SpinLock<()> = SpinLock::new(());
 
+const MAX_DIRTY_RECTS: usize = 64;
+
+#[derive(Clone, Copy)]
+struct DirtyRect {
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+}
+
+static DIRTY_RECTS: SpinLock<[DirtyRect; MAX_DIRTY_RECTS]> =
+    SpinLock::new([DirtyRect { x: 0, y: 0, w: 0, h: 0 }; MAX_DIRTY_RECTS]);
+static DIRTY_COUNT: SpinLock<usize> = SpinLock::new(0);
+
+pub fn mark_dirty(x: u32, y: u32, width: u32, height: u32) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let mut rects = DIRTY_RECTS.lock();
+    let count = *DIRTY_COUNT.lock();
+    if count >= MAX_DIRTY_RECTS {
+        return;
+    }
+    rects[count] = DirtyRect { x, y, w: width, h: height };
+    *DIRTY_COUNT.lock() = count + 1;
+}
+
+pub fn present_dirty() {
+    let Some(framebuffer) = get_fb() else {
+        return;
+    };
+    let rects = DIRTY_RECTS.lock();
+    let count = *DIRTY_COUNT.lock();
+    let bytes_per_pixel = (framebuffer.bpp as usize).div_ceil(8);
+
+    unsafe {
+        for i in 0..count {
+            let rect = rects[i];
+            let right = rect.x.saturating_add(rect.w).min(framebuffer.width);
+            let bottom = rect.y.saturating_add(rect.h).min(framebuffer.height);
+            let left = rect.x.min(framebuffer.width);
+            let top = rect.y.min(framebuffer.height);
+            if right <= left || bottom <= top {
+                continue;
+            }
+            for row in top..bottom {
+                for column in left..right {
+                    let offset = row as usize * framebuffer.pitch as usize
+                        + column as usize * bytes_per_pixel;
+                    for byte in 0..bytes_per_pixel {
+                        framebuffer
+                            .display_pixels
+                            .add(offset + byte)
+                            .write_volatile(framebuffer.pixels.add(offset + byte).read());
+                    }
+                }
+            }
+        }
+    }
+
+    // Clear dirty list
+    *DIRTY_COUNT.lock() = 0;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FramebufferError {
     InvalidBootInformation,
@@ -260,6 +324,7 @@ fn write_pixel(framebuffer: Framebuffer, offset: usize, bytes_per_pixel: usize, 
 pub fn fill_rect(x: u32, y: u32, width: u32, height: u32, color: u32) {
     let _guard = FRAMEBUFFER_LOCK.lock();
     fill_rect_unlocked(x, y, width, height, color);
+    mark_dirty(x, y, width, height);
 }
 
 fn fill_rect_unlocked(x: u32, y: u32, width: u32, height: u32, color: u32) {
@@ -285,6 +350,7 @@ pub fn clear_screen(color: u32) {
         return;
     };
     fill_rect_unlocked(0, 0, framebuffer.width, framebuffer.height, color);
+    mark_dirty(0, 0, framebuffer.width, framebuffer.height);
 }
 
 pub fn present() {
@@ -336,6 +402,7 @@ pub fn present() {
     unsafe {
         ptr::addr_of_mut!(DISPLAYED_CURSOR).write(cursor);
     }
+    *DIRTY_COUNT.lock() = 0;
 }
 
 pub fn set_cursor(x: u32, y: u32, kind: CursorType) {
@@ -610,6 +677,7 @@ pub fn draw_rect(x: u32, y: u32, width: u32, height: u32, color: u32) {
         height,
         color,
     );
+    mark_dirty(x, y, width, height);
 }
 
 pub fn draw_text(mut x: u32, y: u32, text: &str, color: u32, scale: u32) {
@@ -619,6 +687,8 @@ pub fn draw_text(mut x: u32, y: u32, text: &str, color: u32, scale: u32) {
     let Some(framebuffer) = get_fb() else {
         return;
     };
+    let mut text_right = x;
+    let mut text_bottom = y.saturating_add(8 * scale);
 
     for byte in text.bytes() {
         if byte == b'\n' {
@@ -644,11 +714,17 @@ pub fn draw_text(mut x: u32, y: u32, text: &str, color: u32, scale: u32) {
                 }
             }
         }
-        x = x.saturating_add(6 * scale);
+        let new_x = x.saturating_add(6 * scale);
+        if new_x > text_right {
+            text_right = new_x;
+        }
+        x = new_x;
         if x >= framebuffer.width {
             break;
         }
     }
+    let text_width = text_right.saturating_sub(start_x);
+    mark_dirty(start_x, y, text_width, text_bottom.saturating_sub(y));
 }
 
 pub fn get_width() -> u32 {

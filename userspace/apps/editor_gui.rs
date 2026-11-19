@@ -75,7 +75,7 @@ impl TextEditor {
     }
 
     fn load_from_disk(&mut self) -> bool {
-        let mut content = [0u8; 128];
+        let mut content = [0u8; 512];
         match storage::read_file(FILENAME, &mut content) {
             Ok(length) if length > 0 => {
                 let len = length.min(self.input.len());

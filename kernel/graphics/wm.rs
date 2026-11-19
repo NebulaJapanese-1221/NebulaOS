@@ -133,6 +133,7 @@ impl AppKind {
 enum Capture {
     None,
     Drag(usize),
+    Resize(usize),
     Close(usize),
     Minimize(usize),
     Maximize(usize),
@@ -333,6 +334,41 @@ impl WindowManager {
         if is_focused {
             framebuffer::draw_rect(rect.x, rect.y, rect.width, rect.height, ACCENT);
         }
+        // Resize handle at bottom-right corner of the app area
+        let resize_rect = resize_handle_rect(rect);
+        framebuffer::fill_rect(resize_rect.x, resize_rect.y, resize_rect.width, resize_rect.height, 0x8A9BA8);
+        framebuffer::draw_rect(resize_rect.x, resize_rect.y, resize_rect.width, resize_rect.height, 0x516786);
+        framebuffer::draw_text(
+            resize_rect.x + 3,
+            resize_rect.y + 3,
+            "⟲",
+            TEXT,
+            1,
+        );
+    }
+
+    fn draw_wallpaper_rect(&self, x: u32, y: u32, width: u32, height: u32) {
+        let fb_width = framebuffer::get_width();
+        let fb_height = framebuffer::get_height();
+        if fb_width == 0 || fb_height == 0 {
+            return;
+        }
+        let (wallpaper_top, wallpaper_bottom) = if DARK_THEME.load(Ordering::Acquire) {
+            (WALLPAPER_TOP, WALLPAPER_BOTTOM)
+        } else {
+            (0x526783, 0x9DB6C9)
+        };
+        let top = y.min(fb_height);
+        let bottom = y.saturating_add(height).min(fb_height);
+        let left = x.min(fb_width);
+        let right = x.saturating_add(width).min(fb_width);
+        if right <= left || bottom <= top {
+            return;
+        }
+        for row in top..bottom {
+            let color = blend_rgb(wallpaper_top, wallpaper_bottom, row * 255 / fb_height.max(1));
+            framebuffer::fill_rect(left, row, right.saturating_sub(left), 1, color);
+        }
     }
 
     pub fn handle_key(&mut self, key: u8) -> bool {
@@ -450,6 +486,7 @@ impl WindowManager {
         } else if was_down && mouse.left {
             if let Capture::Drag(index) = self.capture {
                 if let Some(window) = self.windows.get_mut(index) {
+                    let old_bounds = window.bounds;
                     window.bounds.x = x
                         .saturating_sub(self.drag_offset.0)
                         .min(framebuffer::get_width().saturating_sub(window.bounds.width));
@@ -457,6 +494,70 @@ impl WindowManager {
                         .saturating_sub(self.drag_offset.1)
                         .max(40)
                         .min(framebuffer::get_height().saturating_sub(window.bounds.height + 44));
+                    if old_bounds != window.bounds {
+                        self.draw_wallpaper_rect(
+                            old_bounds.x,
+                            old_bounds.y,
+                            old_bounds.width,
+                            old_bounds.height,
+                        );
+                        self.draw_window(index, pointer);
+                        framebuffer::mark_dirty(
+                            old_bounds.x,
+                            old_bounds.y,
+                            old_bounds.width,
+                            old_bounds.height,
+                        );
+                        framebuffer::mark_dirty(
+                            window.bounds.x,
+                            window.bounds.y,
+                            window.bounds.width,
+                            window.bounds.height,
+                        );
+                        framebuffer::present_dirty();
+                    }
+                }
+            }
+        }
+        if let Capture::Resize(index) = self.capture {
+            if let Some(window) = self.windows.get_mut(index) {
+                let old_bounds = window.bounds;
+                let new_width = x
+                    .saturating_sub(window.bounds.x)
+                    .max(200)
+                    .min(framebuffer::get_width().saturating_sub(window.bounds.x));
+                let new_height = y
+                    .saturating_sub(window.bounds.y)
+                    .max(150)
+                    .min(framebuffer::get_height().saturating_sub(window.bounds.y));
+                window.bounds.width = new_width;
+                window.bounds.height = new_height;
+                if old_bounds != window.bounds {
+                    // Redraw wallpaper in areas uncovered by shrinking
+                    if old_bounds.width > window.bounds.width {
+                        self.draw_wallpaper_rect(
+                            window.bounds.x + window.bounds.width,
+                            old_bounds.y,
+                            old_bounds.width - window.bounds.width,
+                            old_bounds.height,
+                        );
+                    }
+                    if old_bounds.height > window.bounds.height {
+                        self.draw_wallpaper_rect(
+                            old_bounds.x,
+                            window.bounds.y + window.bounds.height,
+                            old_bounds.width,
+                            old_bounds.height - window.bounds.height,
+                        );
+                    }
+                    self.draw_window(index, pointer);
+                    framebuffer::mark_dirty(
+                        old_bounds.x,
+                        old_bounds.y,
+                        old_bounds.width.max(window.bounds.width),
+                        old_bounds.height.max(window.bounds.height),
+                    );
+                    framebuffer::present_dirty();
                 }
             }
         }
@@ -488,7 +589,6 @@ impl WindowManager {
         }
         if matches!(self.capture, Capture::Drag(_)) && moved {
             self.request_focused_redraw();
-            redraw = true;
         }
         let next_cursor_type = self.cursor_type_at(x, y);
         let cursor_changed = moved || self.cursor_type != next_cursor_type;
@@ -546,6 +646,9 @@ impl WindowManager {
                     return Some((3, index, button));
                 }
             }
+            if resize_handle_rect(window.bounds).contains(x, y) {
+                return Some((3, index, 3));
+            }
             break;
         }
         None
@@ -590,6 +693,9 @@ impl WindowManager {
             }
             if (0..3).any(|button| window_button_rect(window.bounds, button).contains(x, y)) {
                 return framebuffer::CursorType::Hand;
+            }
+            if resize_handle_rect(window.bounds).contains(x, y) {
+                return framebuffer::CursorType::Move;
             }
             if y < window.bounds.y + 42 {
                 return framebuffer::CursorType::Move;
@@ -679,6 +785,10 @@ impl WindowManager {
             }
             if window_button_rect(bounds, 2).contains(pointer.x, pointer.y) {
                 return Capture::Maximize(focused);
+            }
+            let resize_rect = resize_handle_rect(bounds);
+            if resize_rect.contains(pointer.x, pointer.y) {
+                return Capture::Resize(focused);
             }
             if pointer.y < bounds.y + 42 {
                 self.drag_offset = (pointer.x - bounds.x, pointer.y - bounds.y);
@@ -848,6 +958,16 @@ fn window_button_rect(bounds: Rect, button: usize) -> Rect {
         y: bounds.y + 10,
         width: 22,
         height: 22,
+    }
+}
+
+fn resize_handle_rect(bounds: Rect) -> Rect {
+    let handle_size = 16u32;
+    Rect {
+        x: bounds.x + bounds.width.saturating_sub(handle_size),
+        y: bounds.y + bounds.height.saturating_sub(handle_size),
+        width: handle_size,
+        height: handle_size,
     }
 }
 
