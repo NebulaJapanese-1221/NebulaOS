@@ -15,7 +15,7 @@
 // You should have received a copy of the GNU General Public License
 // along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
 
-// PC speaker audio via PIT channel 2 and port 0x61 (x86) / stub (aarch64)
+// PC speaker audio via PIT channel 2 and port 0x61 for x86.
 
 #[cfg(target_arch = "x86")]
 const PIT_CHANNEL2: u16 = 0x42;
@@ -52,12 +52,9 @@ pub fn init() {
     unsafe {
         AUDIO_ENABLED = true;
     }
-    #[cfg(target_arch = "x86")]
-    {
-        // Ensure speaker is off initially
-        let val = port_byte_in(SPEAKER_PORT) & !SPEAKER_ENABLE;
-        port_byte_out(SPEAKER_PORT, val);
-    }
+    // Ensure speaker is off initially
+    let val = port_byte_in(SPEAKER_PORT) & !SPEAKER_ENABLE;
+    port_byte_out(SPEAKER_PORT, val);
 }
 
 pub fn is_available() -> bool {
@@ -81,20 +78,14 @@ pub fn play_tone(frequency_hz: u32, duration_ms: u32) {
             core::arch::asm!("out dx, al", in("dx") PIT_CHANNEL2, in("al") (divisor & 0xFF) as u8);
             core::arch::asm!("out dx, al", in("dx") PIT_CHANNEL2, in("al") ((divisor >> 8) & 0xFF) as u8);
 
-            let mut val = port_byte_in(SPEAKER_PORT);
-            val |= SPEAKER_ENABLE;
-            port_byte_out(SPEAKER_PORT, val);
-        }
-
-        sleep_ms(duration_ms);
-
-        stop();
+        let mut val = port_byte_in(SPEAKER_PORT);
+        val |= SPEAKER_ENABLE;
+        port_byte_out(SPEAKER_PORT, val);
     }
-    #[cfg(target_arch = "aarch64")]
-    {
-        let _ = frequency_hz;
-        let _ = duration_ms;
-    }
+
+    sleep_ms(duration_ms);
+
+    stop();
 }
 
 pub fn beep() {
@@ -105,15 +96,11 @@ pub fn stop() {
     if !unsafe { AUDIO_ENABLED } {
         return;
     }
-    #[cfg(target_arch = "x86")]
-    {
-        let mut val = port_byte_in(SPEAKER_PORT);
-        val &= !SPEAKER_ENABLE;
-        port_byte_out(SPEAKER_PORT, val);
-    }
+    let mut val = port_byte_in(SPEAKER_PORT);
+    val &= !SPEAKER_ENABLE;
+    port_byte_out(SPEAKER_PORT, val);
 }
 
-#[cfg(target_arch = "x86")]
 fn sleep_ms(ms: u32) {
     let ticks_needed = ms / 10;
     let start = crate::drivers::pit::ticks();
@@ -122,7 +109,3 @@ fn sleep_ms(ms: u32) {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
-fn sleep_ms(_ms: u32) {
-    // Stub
-}

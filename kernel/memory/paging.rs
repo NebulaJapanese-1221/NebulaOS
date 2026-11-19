@@ -15,7 +15,7 @@
 // You should have received a copy of the GNU General Public License
 // along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
 
-// Paging and virtual memory management (x86) / stub (aarch64)
+// Paging and virtual memory management for x86.
 
 use crate::memory::frame_allocator;
 use core::ptr;
@@ -47,7 +47,6 @@ const PAGE_CACHE_DISABLE: u32 = 0x0000_0010;
 const PAGE_WRITE_THROUGH: u32 = 0x0000_0008;
 const PAGE_USER: u32 = 0x0000_0004;
 
-#[cfg(target_arch = "x86")]
 pub fn create_user_address_space() -> Option<u32> {
     unsafe {
         let kernel_directory = KERNEL_PAGE_DIR;
@@ -64,12 +63,6 @@ pub fn create_user_address_space() -> Option<u32> {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
-pub fn create_user_address_space() -> Option<u32> {
-    None
-}
-
-#[cfg(target_arch = "x86")]
 pub fn map_user_page(directory_address: u32, virtual_address: u32, writable: bool) -> Option<u32> {
     if virtual_address < USER_ADDRESS_MIN || virtual_address >= USER_ADDRESS_MAX {
         return None;
@@ -107,12 +100,6 @@ pub fn map_user_page(directory_address: u32, virtual_address: u32, writable: boo
     }
 }
 
-#[cfg(target_arch = "aarch64")]
-pub fn map_user_page(_directory_address: u32, _virtual_address: u32, _writable: bool) -> Option<u32> {
-    None
-}
-
-#[cfg(target_arch = "x86")]
 pub fn user_page_frame(directory_address: u32, virtual_address: u32) -> Option<u32> {
     if virtual_address < USER_ADDRESS_MIN || virtual_address >= USER_ADDRESS_MAX {
         return None;
@@ -132,12 +119,6 @@ pub fn user_page_frame(directory_address: u32, virtual_address: u32) -> Option<u
     }
 }
 
-#[cfg(target_arch = "aarch64")]
-pub fn user_page_frame(_directory_address: u32, _virtual_address: u32) -> Option<u32> {
-    None
-}
-
-#[cfg(target_arch = "x86")]
 pub fn set_user_page_writable(directory_address: u32, virtual_address: u32) -> bool {
     if virtual_address < USER_ADDRESS_MIN || virtual_address >= USER_ADDRESS_MAX {
         return false;
@@ -158,11 +139,6 @@ pub fn set_user_page_writable(directory_address: u32, virtual_address: u32) -> b
     }
 }
 
-#[cfg(target_arch = "aarch64")]
-pub fn set_user_page_writable(_directory_address: u32, _virtual_address: u32) -> bool {
-    false
-}
-
 pub fn user_range_is_mapped(address: u32, length: usize) -> bool {
     if length == 0 {
         return true;
@@ -173,29 +149,20 @@ pub fn user_range_is_mapped(address: u32, length: usize) -> bool {
     if address < USER_ADDRESS_MIN || end > USER_ADDRESS_MAX as usize {
         return false;
     }
-    #[cfg(target_arch = "x86")]
-    {
-        let current_directory: u32;
-        unsafe {
-            core::arch::asm!("mov {0}, cr3", out(reg) current_directory, options(nostack, preserves_flags));
-        }
-        let mut page = address & !(PAGE_SIZE as u32 - 1);
-        while (page as usize) < end {
-            if user_page_frame(current_directory, page).is_none() {
-                return false;
-            }
-            page = page.saturating_add(PAGE_SIZE as u32);
-        }
-        true
+    let current_directory: u32;
+    unsafe {
+        core::arch::asm!("mov {0}, cr3", out(reg) current_directory, options(nostack, preserves_flags));
     }
-    #[cfg(target_arch = "aarch64")]
-    {
-        // AArch64: MMU already set up by boot.S; assume mapped for now
-        true
+    let mut page = address & !(PAGE_SIZE as u32 - 1);
+    while (page as usize) < end {
+        if user_page_frame(current_directory, page).is_none() {
+            return false;
+        }
+        page = page.saturating_add(PAGE_SIZE as u32);
     }
+    true
 }
 
-#[cfg(target_arch = "x86")]
 pub fn destroy_user_address_space(directory_address: u32) {
     unsafe {
         let directory = directory_address as *mut PageDirectory;
@@ -217,10 +184,6 @@ pub fn destroy_user_address_space(directory_address: u32) {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
-pub fn destroy_user_address_space(_directory_address: u32) {}
-
-#[cfg(target_arch = "x86")]
 pub fn init() {
     unsafe {
         let pd_phys = frame_allocator::alloc_frame().expect("no memory for page directory");
@@ -251,13 +214,6 @@ pub fn init() {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
-pub fn init() {
-    // AArch64: MMU already set up by boot.S
-    // Translation tables already configured
-}
-
-#[cfg(target_arch = "x86")]
 pub fn map_mmio(physical_start: u32, length: usize) -> Option<*mut u8> {
     if length == 0 || length > MMIO_MAX_SIZE {
         return None;
@@ -307,12 +263,6 @@ pub fn map_mmio(physical_start: u32, length: usize) -> Option<*mut u8> {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
-pub fn map_mmio(_physical_start: u32, _length: usize) -> Option<*mut u8> {
-    None
-}
-
-#[cfg(target_arch = "x86")]
 pub fn map_kernel_buffer(length: usize) -> Option<*mut u8> {
     if length == 0 || length > MMIO_MAX_SIZE {
         return None;
@@ -371,12 +321,6 @@ pub fn map_kernel_buffer(length: usize) -> Option<*mut u8> {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
-pub fn map_kernel_buffer(_length: usize) -> Option<*mut u8> {
-    None
-}
-
-#[cfg(target_arch = "x86")]
 unsafe fn unmap_kernel_buffer_pages(page_count: usize) {
     let page_directory = KERNEL_PAGE_DIR;
     for page in 0..page_count {
@@ -397,20 +341,10 @@ unsafe fn unmap_kernel_buffer_pages(page_count: usize) {
     load_page_dir(cr3);
 }
 
-#[cfg(target_arch = "aarch64")]
-unsafe fn unmap_kernel_buffer_pages(_page_count: usize) {}
-
-#[cfg(target_arch = "x86")]
 extern "C" {
     fn load_page_dir(cr3: u32);
 }
 
-#[cfg(target_arch = "aarch64")]
-extern "C" {
-    fn load_page_dir(_cr3: u32);
-}
-
-#[cfg(target_arch = "x86")]
 fn enable_paging() {
     unsafe {
         core::arch::asm!(
@@ -423,20 +357,9 @@ fn enable_paging() {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
-fn enable_paging() {}
-
 pub fn activate_page_dir(page_directory: u32) {
-    #[cfg(target_arch = "x86")]
-    {
-        unsafe {
-            load_page_dir(page_directory);
-        }
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        // AArch64: TTBR0 already set; no per-process switch yet
-        let _ = page_directory;
+    unsafe {
+        load_page_dir(page_directory);
     }
 }
 

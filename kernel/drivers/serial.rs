@@ -67,9 +67,8 @@ fn write_byte_unlocked(byte: u8) {
     port_byte_out(0x3F8, byte);
 }
 
-#[cfg(target_arch = "aarch64")]
 pub fn write_byte(_byte: u8) {
-    // Stub - no serial output on aarch64 yet
+    // Stub - no serial output yet
 }
 
 pub fn write_string(s: &str) {
@@ -77,11 +76,6 @@ pub fn write_string(s: &str) {
     for byte in s.bytes() {
         write_byte_unlocked(byte);
     }
-}
-
-#[cfg(target_arch = "aarch64")]
-pub fn write_string(_s: &str) {
-    // Stub
 }
 
 pub fn write_dec(mut val: u32) {
@@ -103,11 +97,6 @@ pub fn write_dec(mut val: u32) {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
-pub fn write_dec(_val: u32) {
-    // Stub
-}
-
 pub fn write_hex(value: u32) {
     let _guard = SERIAL_LOCK.lock();
     for byte in b"0x" {
@@ -121,11 +110,6 @@ pub fn write_hex(value: u32) {
             b'A' + digit - 10
         });
     }
-}
-
-#[cfg(target_arch = "aarch64")]
-pub fn write_hex(_value: u32) {
-    // Stub
 }
 
 pub fn write_fmt(arguments: fmt::Arguments<'_>) {

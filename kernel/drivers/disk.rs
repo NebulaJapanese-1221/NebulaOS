@@ -15,7 +15,7 @@
 // You should have received a copy of the GNU General Public License
 // along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
 
-// IDE disk driver (x86) / stub (aarch64)
+// IDE disk driver for x86.
 
 use alloc::vec::Vec;
 use crate::sync::SpinLock;
@@ -81,76 +81,34 @@ fn port_byte_in(port: u16) -> u8 {
 }
 
 pub fn init() -> Result<(), StorageError> {
-    #[cfg(target_arch = "x86")]
-    {
-        port_byte_out(DRIVE, 0xE0);
-        // Simple detect
-        let _ = port_byte_in(STATUS);
-        DISK.lock().replace(DiskState {
-            sectors: 1024,
-            formatted: false,
-        });
-        Ok(())
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        Err(StorageError::NoDisk)
-    }
+    port_byte_out(DRIVE, 0xE0);
+    // Simple detect
+    let _ = port_byte_in(STATUS);
+    DISK.lock().replace(DiskState {
+        sectors: 1024,
+        formatted: false,
+    });
+    Ok(())
 }
 
 pub fn is_formatted() -> bool {
-    #[cfg(target_arch = "x86")]
-    {
-        DISK.lock().as_ref().map(|d| d.formatted).unwrap_or(false)
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        false
-    }
+    DISK.lock().as_ref().map(|d| d.formatted).unwrap_or(false)
 }
 
 pub fn read_sector(_lba: u32, _buf: *mut u8) -> Result<(), StorageError> {
-    #[cfg(target_arch = "x86")]
-    {
-        Err(StorageError::ReadError)
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        Err(StorageError::NoDisk)
-    }
+    Err(StorageError::ReadError)
 }
 
 pub fn write_sector(_lba: u32, _buf: *const u8) -> Result<(), StorageError> {
-    #[cfg(target_arch = "x86")]
-    {
-        Err(StorageError::WriteError)
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        Err(StorageError::NoDisk)
-    }
+    Err(StorageError::WriteError)
 }
 
 pub fn is_available() -> bool {
-    #[cfg(target_arch = "x86")]
-    {
-        DISK.lock().is_some()
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        false
-    }
+    DISK.lock().is_some()
 }
 
 pub fn list_files() -> Result<Vec<(&'static str, u32)>, StorageError> {
-    #[cfg(target_arch = "x86")]
-    {
-        Ok(Vec::new())
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        Ok(Vec::new())
-    }
+    Ok(Vec::new())
 }
 
 pub fn read_file(_name: &str, _output: &mut [u8]) -> Result<u32, StorageError> {

@@ -15,7 +15,7 @@
 // You should have received a copy of the GNU General Public License
 // along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
 
-// Programmable Interval Timer (x86) / Architected Timer (aarch64)
+// Programmable Interval Timer for x86.
 
 use core::sync::atomic::{AtomicU32, Ordering};
 

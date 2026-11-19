@@ -15,7 +15,7 @@
 // You should have received a copy of the GNU General Public License
 // along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
 
-// CMOS Real-Time Clock for wall-clock time (x86) / stub (aarch64)
+// CMOS Real-Time Clock for wall-clock time for x86.
 
 #[cfg(target_arch = "x86")]
 const CMOS_ADDRESS: u16 = 0x70;

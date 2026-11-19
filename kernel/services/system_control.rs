@@ -51,19 +51,4 @@ pub fn shutdown() -> ! {
     }
 }
 
-#[cfg(target_arch = "x86")]
 unsafe fn wait_for_keyboard_controller() {
-    for _ in 0..100_000 {
-        let status: u8;
-        core::arch::asm!("in al, dx", in("dx") 0x64u16, out("al") status);
-        if status & 0x02 == 0 {
-            return;
-        }
-        core::hint::spin_loop();
-    }
-}
-
-#[cfg(target_arch = "aarch64")]
-unsafe fn wait_for_keyboard_controller() {
-    // No-op on aarch64
-}

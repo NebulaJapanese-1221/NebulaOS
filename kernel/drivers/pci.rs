@@ -265,20 +265,74 @@ pub fn init() {
 }
 
 pub fn enumerate() -> usize {
-    let mut count: usize = 0;
     unsafe {
-        for bus in 0..256u8 {
-            for device in 0..32u8 {
-                for function in 0..8u8 {
-                    let vendor_id = read_vendor_device(bus, device, function);
-                    if vendor_id == 0xFFFF {
-                        continue;
-                    }
-                    count += 1;
+        PCI_DEVICE_COUNT = 0;
+    }
+
+    for bus in 0..=255u8 {
+        for device in 0..32u8 {
+            let vendor_id = pci_read_word(bus, device, 0, 0x00);
+            if vendor_id == 0xFFFF {
+                continue;
+            }
+
+            let functions = if pci_multi_function(bus, device) {
+                8
+            } else {
+                1
+            };
+
+            for function in 0..functions {
+                let vendor_id = pci_read_word(bus, device, function, 0x00);
+                if vendor_id == 0xFFFF {
+                    continue;
                 }
+
+                let device_id = pci_read_word(bus, device, function, 0x02);
+                let class = pci_read_byte(bus, device, function, 0x0B);
+                let subclass = pci_read_byte(bus, device, function, 0x0A);
+                let prog_if = pci_read_byte(bus, device, function, 0x09);
+                let revision_id = pci_read_byte(bus, device, function, 0x08);
+                let header_type = pci_read_byte(bus, device, function, 0x0E) & 0x7F;
+                let irq_line = pci_read_byte(bus, device, function, 0x3C);
+
+                unsafe {
+                    if PCI_DEVICE_COUNT < MAX_PCI_DEVICES {
+                        let index = PCI_DEVICE_COUNT;
+                        PCI_DEVICES[index] = PciDevice {
+                            bus,
+                            device,
+                            function,
+                            vendor_id,
+                            device_id,
+                            class,
+                            subclass,
+                            prog_if,
+                            revision_id,
+                            header_type,
+                            irq_line,
+                        };
+                        PCI_DEVICE_COUNT = index + 1;
+                    }
+                }
+
+                crate::drivers::serial::write_string("PCI: ");
+                crate::drivers::serial::write_dec(bus as u32);
+                crate::drivers::serial::write_string(":");
+                crate::drivers::serial::write_dec(device as u32);
+                crate::drivers::serial::write_string(":");
+                crate::drivers::serial::write_dec(function as u32);
+                crate::drivers::serial::write_string(" vendor=0x");
+                crate::drivers::serial::write_hex(vendor_id as u32);
+                crate::drivers::serial::write_string(" device=0x");
+                crate::drivers::serial::write_hex(device_id as u32);
+                crate::drivers::serial::write_string(" class=");
+                crate::drivers::serial::write_string(class_name(class, subclass));
+                crate::drivers::serial::write_string("\r\n");
             }
         }
     }
+
     unsafe { PCI_DEVICE_COUNT }
 }
 

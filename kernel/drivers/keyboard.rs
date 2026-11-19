@@ -15,21 +15,17 @@
 // You should have received a copy of the GNU General Public License
 // along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
 
-// PS/2 Keyboard driver (x86) / stub (aarch64)
+// PS/2 Keyboard driver for x86.
 
-#[cfg(target_arch = "x86")]
 const KEYBOARD_DATA_PORT: u16 = 0x60;
-#[cfg(target_arch = "x86")]
 const KEYBOARD_STATUS_PORT: u16 = 0x64;
 
-#[cfg(target_arch = "x86")]
 fn port_byte_out(port: u16, data: u8) {
     unsafe {
         core::arch::asm!("out dx, al", in("dx") port, in("al") data);
     }
 }
 
-#[cfg(target_arch = "x86")]
 fn port_byte_in(port: u16) -> u8 {
     let value: u8;
     unsafe {
@@ -38,19 +34,12 @@ fn port_byte_in(port: u16) -> u8 {
     value
 }
 
-#[cfg(target_arch = "x86")]
 pub fn init() {
     // Enable keyboard interrupts
     port_byte_out(KEYBOARD_STATUS_PORT, 0xAE);
     port_byte_out(0x60, 0xF4);
 }
 
-#[cfg(target_arch = "aarch64")]
-pub fn init() {
-    // Stub - no PS/2 on aarch64
-}
-
-#[cfg(target_arch = "x86")]
 pub fn poll_key() -> Option<u8> {
     if port_byte_in(KEYBOARD_STATUS_PORT) & 0x01 == 0 {
         return None;
@@ -59,7 +48,6 @@ pub fn poll_key() -> Option<u8> {
 }
 
 /// Drain the keyboard buffer and return true if F12 (scan code 0x58) was pressed.
-#[cfg(target_arch = "x86")]
 pub fn f12_pressed() -> bool {
     let mut found = false;
     while port_byte_in(KEYBOARD_STATUS_PORT) & 0x01 != 0 {
@@ -71,22 +59,6 @@ pub fn f12_pressed() -> bool {
     found
 }
 
-#[cfg(target_arch = "aarch64")]
-pub fn f12_pressed() -> bool {
-    false
-}
-
-#[cfg(target_arch = "aarch64")]
-pub fn poll_key() -> Option<u8> {
-    None
-}
-
-#[cfg(target_arch = "x86")]
 pub fn poll() {
     let _ = poll_key();
-}
-
-#[cfg(target_arch = "aarch64")]
-pub fn poll() {
-    // Stub
 }
