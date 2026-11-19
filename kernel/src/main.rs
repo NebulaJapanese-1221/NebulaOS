@@ -137,6 +137,11 @@ pub extern "C" fn kernel_entry(multiboot_info: *const u8) -> ! {
         unsafe {
             core::arch::asm!("sti");
         }
+
+        // Diagnostic mode: press F12 during boot to enter hardware info display.
+        if drivers::keyboard::f12_pressed() {
+            services::diagnostic::Diagnostic::new().run();
+        }
     }
     boot_screen.update(graphics::boot_screen::BootStage::InputReady);
 

@@ -18,11 +18,13 @@
 // Syscall interface (int 0x80) and interrupt handler
 
 use crate::services::process::{AppRect, UserEvent};
+use crate::sync::SpinLock;
 use crate::userspace::syscall::{
     AppContext, AppEvent, DeviceInfo, DrawCommand, MemoryInfo, ProcessInfo, StorageFileInfo,
-    StorageRequest, SystemStats, MAX_WRITE_LENGTH, SYSCALL_DEVICE_INFO, SYSCALL_DRAW_FILL_RECT,
-    SYSCALL_DRAW_RECT, SYSCALL_DRAW_TEXT, SYSCALL_EXIT, SYSCALL_GET_APP_CONTEXT, SYSCALL_GET_TICKS,
-    SYSCALL_MEMORY_INFO, SYSCALL_POLL_EVENT, SYSCALL_PRINT, SYSCALL_PROCESS_INFO, SYSCALL_REBOOT,
+    StorageRequest, SystemStats, MAX_WRITE_LENGTH, SYSCALL_CLIPBOARD_GET, SYSCALL_CLIPBOARD_SET,
+    SYSCALL_DEVICE_INFO, SYSCALL_DRAW_FILL_RECT, SYSCALL_DRAW_RECT, SYSCALL_DRAW_TEXT,
+    SYSCALL_EXIT, SYSCALL_GET_APP_CONTEXT, SYSCALL_GET_TICKS, SYSCALL_MEMORY_INFO,
+    SYSCALL_POLL_EVENT, SYSCALL_PRINT, SYSCALL_PROCESS_INFO, SYSCALL_REBOOT,
     SYSCALL_SET_MOUSE_SENSITIVITY, SYSCALL_SET_WALLPAPER_THEME, SYSCALL_SHUTDOWN, SYSCALL_SLEEP,
     SYSCALL_STORAGE_DELETE, SYSCALL_STORAGE_FORMAT, SYSCALL_STORAGE_LIST, SYSCALL_STORAGE_READ,
     SYSCALL_STORAGE_RENAME, SYSCALL_STORAGE_WRITE, SYSCALL_SYSTEM_STATS, SYSCALL_TERMINATE_PROCESS,
@@ -36,6 +38,10 @@ const REG_EBX: usize = 32 / 4;
 const REG_ECX: usize = 40 / 4;
 const REG_CS: usize = 60 / 4;
 const STORAGE_MAX_DATA: usize = 512;
+const CLIPBOARD_MAX: usize = 256;
+
+static CLIPBOARD: SpinLock<[u8; CLIPBOARD_MAX]> = SpinLock::new([0; CLIPBOARD_MAX]);
+static CLIPBOARD_LEN: SpinLock<usize> = SpinLock::new(0);
 
 // This is called from isr_common in assembly
 // interrupt_num: the interrupt vector
@@ -176,6 +182,38 @@ fn handle_syscall(regs_ptr: *mut u32) -> u32 {
             }
             SYSCALL_REBOOT => crate::services::system_control::reboot(),
             SYSCALL_SHUTDOWN => crate::services::system_control::shutdown(),
+            SYSCALL_CLIPBOARD_SET => {
+                let src = *regs_ptr.add(REG_EBX);
+                let len = *regs_ptr.add(REG_ECX) as usize;
+                if len > CLIPBOARD_MAX
+                    || !crate::memory::paging::user_range_is_mapped(src, len)
+                {
+                    u32::MAX
+                } else {
+                    let mut buf = [0u8; CLIPBOARD_MAX];
+                    if len > 0 {
+                        core::ptr::copy_nonoverlapping(src as *const u8, buf.as_mut_ptr(), len);
+                    }
+                    *CLIPBOARD.lock() = buf;
+                    *CLIPBOARD_LEN.lock() = len;
+                    len as u32
+                }
+            }
+            SYSCALL_CLIPBOARD_GET => {
+                let dst = *regs_ptr.add(REG_EBX);
+                let max = *regs_ptr.add(REG_ECX) as usize;
+                if !crate::memory::paging::user_range_is_mapped(dst, max) {
+                    u32::MAX
+                } else {
+                    let buf = *CLIPBOARD.lock();
+                    let len = *CLIPBOARD_LEN.lock();
+                    let copy = len.min(max);
+                    if copy > 0 {
+                        core::ptr::copy_nonoverlapping(buf.as_ptr(), dst as *mut u8, copy);
+                    }
+                    copy as u32
+                }
+            }
             _ => u32::MAX,
         };
         *regs_ptr.add(REG_EAX) = result;
@@ -528,6 +566,7 @@ fn storage_request(address: u32, syscall: u32) -> u32 {
         3 => crate::drivers::disk::delete_file(name).map(|()| 0),
         4 => crate::drivers::disk::rename_file(name, &data[..data_len]).map(|()| 0),
         5 => crate::drivers::disk::format_if_blank().map(|()| 0),
+        6 => crate::drivers::disk::mkdir(name).map(|()| 0),
         _ => return u32::MAX,
     };
     match result {

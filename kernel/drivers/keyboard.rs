@@ -58,6 +58,24 @@ pub fn poll_key() -> Option<u8> {
     Some(port_byte_in(KEYBOARD_DATA_PORT))
 }
 
+/// Drain the keyboard buffer and return true if F12 (scan code 0x58) was pressed.
+#[cfg(target_arch = "x86")]
+pub fn f12_pressed() -> bool {
+    let mut found = false;
+    while port_byte_in(KEYBOARD_STATUS_PORT) & 0x01 != 0 {
+        let scan = port_byte_in(KEYBOARD_DATA_PORT);
+        if scan == 0x58 {
+            found = true;
+        }
+    }
+    found
+}
+
+#[cfg(target_arch = "aarch64")]
+pub fn f12_pressed() -> bool {
+    false
+}
+
 #[cfg(target_arch = "aarch64")]
 pub fn poll_key() -> Option<u8> {
     None

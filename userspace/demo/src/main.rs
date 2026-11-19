@@ -29,6 +29,7 @@ pub use userspace::syscall;
 
 use userspace::apps::{
     calculator_gui::Calculator,
+    clock_gui::Clock,
     editor_gui::TextEditor,
     files_gui::FileManager,
     gui::{Application, Canvas, Event, PointerEvent, Rect},
@@ -36,17 +37,16 @@ use userspace::apps::{
     paint_gui::Paint,
     settings_gui::Settings,
     terminal_gui::Terminal,
-    userdemo_gui::UserModeDemo,
 };
 
 enum UserApp {
     Calculator(Calculator),
+    Clock(Clock),
     Editor(TextEditor),
     Files(FileManager),
     Settings(Settings),
     Paint(Paint),
     Monitor(SystemMonitor),
-    UserMode(UserModeDemo),
     Terminal(Terminal),
 }
 
@@ -54,15 +54,15 @@ impl UserApp {
     fn new(app_id: u32, context: syscall::AppContext) -> Option<Self> {
         Some(match app_id {
             0 => Self::Calculator(Calculator::new()),
-            1 => Self::Editor(TextEditor::new()),
-            2 => Self::Files(FileManager::new()),
-            3 => Self::Settings(Settings::new_with_state(
+            1 => Self::Clock(Clock::new()),
+            2 => Self::Editor(TextEditor::new()),
+            3 => Self::Files(FileManager::new()),
+            4 => Self::Settings(Settings::new_with_state(
                 context.dark_theme != 0,
                 context.mouse_sensitivity,
             )),
-            4 => Self::Paint(Paint::new()),
-            5 => Self::Monitor(SystemMonitor::new()),
-            6 => Self::UserMode(UserModeDemo::new()),
+            5 => Self::Paint(Paint::new()),
+            6 => Self::Monitor(SystemMonitor::new()),
             7 => Self::Terminal(Terminal::new()),
             _ => return None,
         })
@@ -71,12 +71,12 @@ impl UserApp {
     fn render(&self, canvas: &mut dyn Canvas, area: Rect, pointer: PointerEvent) {
         match self {
             Self::Calculator(app) => app.render(canvas, area, pointer),
+            Self::Clock(app) => app.render(canvas, area, pointer),
             Self::Editor(app) => app.render(canvas, area, pointer),
             Self::Files(app) => app.render(canvas, area, pointer),
             Self::Settings(app) => app.render(canvas, area, pointer),
             Self::Paint(app) => app.render(canvas, area, pointer),
             Self::Monitor(app) => app.render(canvas, area, pointer),
-            Self::UserMode(app) => app.render(canvas, area, pointer),
             Self::Terminal(app) => app.render(canvas, area, pointer),
         }
     }
@@ -84,12 +84,12 @@ impl UserApp {
     fn title(&self) -> &'static str {
         match self {
             Self::Calculator(app) => app.title(),
+            Self::Clock(app) => app.title(),
             Self::Editor(app) => app.title(),
             Self::Files(app) => app.title(),
             Self::Settings(app) => app.title(),
             Self::Paint(app) => app.title(),
             Self::Monitor(app) => app.title(),
-            Self::UserMode(app) => app.title(),
             Self::Terminal(app) => app.title(),
         }
     }
@@ -97,12 +97,12 @@ impl UserApp {
     fn handle_event(&mut self, event: Event, area: Rect) -> bool {
         match self {
             Self::Calculator(app) => app.handle_event(event, area),
+            Self::Clock(app) => app.handle_event(event, area),
             Self::Editor(app) => app.handle_event(event, area),
             Self::Files(app) => app.handle_event(event, area),
             Self::Settings(app) => app.handle_event(event, area),
             Self::Paint(app) => app.handle_event(event, area),
             Self::Monitor(app) => app.handle_event(event, area),
-            Self::UserMode(app) => app.handle_event(event, area),
             Self::Terminal(app) => app.handle_event(event, area),
         }
     }
@@ -110,12 +110,12 @@ impl UserApp {
     fn pointer_target(&self, x: u32, y: u32, area: Rect) -> Option<u32> {
         match self {
             Self::Calculator(app) => app.pointer_target(x, y, area),
+            Self::Clock(app) => app.pointer_target(x, y, area),
             Self::Editor(app) => app.pointer_target(x, y, area),
             Self::Files(app) => app.pointer_target(x, y, area),
             Self::Settings(app) => app.pointer_target(x, y, area),
             Self::Paint(app) => app.pointer_target(x, y, area),
             Self::Monitor(app) => app.pointer_target(x, y, area),
-            Self::UserMode(app) => app.pointer_target(x, y, area),
             Self::Terminal(app) => app.pointer_target(x, y, area),
         }
     }

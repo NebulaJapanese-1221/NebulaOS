@@ -42,6 +42,10 @@ pub const SYSCALL_SLEEP: u32 = 22;
 pub const SYSCALL_TERMINATE_PROCESS: u32 = 23;
 pub const SYSCALL_REBOOT: u32 = 24;
 pub const SYSCALL_SHUTDOWN: u32 = 25;
+pub const SYSCALL_CLIPBOARD_GET: u32 = 26;
+pub const SYSCALL_CLIPBOARD_SET: u32 = 27;
+pub const SYSCALL_PCI_COUNT: u32 = 28;
+pub const SYSCALL_PCI_DEVICE: u32 = 29;
 pub const MAX_WRITE_LENGTH: usize = 256;
 pub const MAX_PROCESSES: usize = 8;
 
@@ -155,6 +159,19 @@ pub struct DeviceInfo {
     pub mouse_sensitivity: u32,
     pub mouse_available: u32,
     pub storage_available: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct PciDeviceInfo {
+    pub bus: u8,
+    pub device: u8,
+    pub function: u8,
+    pub vendor_id: u16,
+    pub device_id: u16,
+    pub class: u8,
+    pub subclass: u8,
+    _pad: [u8; 2],
 }
 
 #[cfg(feature = "user-app")]
@@ -289,6 +306,25 @@ pub fn device_info(info: &mut DeviceInfo) -> Result<(), SyscallError> {
 }
 
 #[cfg(feature = "user-app")]
+pub fn pci_count() -> Result<u32, SyscallError> {
+    let result = invoke(SYSCALL_PCI_COUNT, 0, 0);
+    if result == u32::MAX {
+        Err(SyscallError::Unavailable)
+    } else {
+        Ok(result)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn pci_device(index: u32, info: &mut PciDeviceInfo) -> Result<(), SyscallError> {
+    if invoke(SYSCALL_PCI_DEVICE, index, info as *mut PciDeviceInfo as u32) == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
 pub fn yield_now() -> Result<(), SyscallError> {
     if invoke(SYSCALL_YIELD, 0, 0) == 0 {
         Ok(())
@@ -333,6 +369,31 @@ pub fn shutdown() -> Result<(), SyscallError> {
         Ok(())
     } else {
         Err(SyscallError::Unavailable)
+    }
+}
+
+pub const CLIPBOARD_MAX: usize = 256;
+
+#[cfg(feature = "user-app")]
+pub fn clipboard_set(data: &[u8]) -> Result<usize, SyscallError> {
+    if data.len() > CLIPBOARD_MAX {
+        return Err(SyscallError::InvalidArgument);
+    }
+    let result = invoke(SYSCALL_CLIPBOARD_SET, data.as_ptr() as u32, data.len() as u32);
+    if result == u32::MAX {
+        Err(SyscallError::Unavailable)
+    } else {
+        Ok(result as usize)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn clipboard_get(output: &mut [u8]) -> Result<usize, SyscallError> {
+    let result = invoke(SYSCALL_CLIPBOARD_GET, output.as_mut_ptr() as u32, output.len() as u32);
+    if result == u32::MAX {
+        Err(SyscallError::Unavailable)
+    } else {
+        Ok(result as usize)
     }
 }
 

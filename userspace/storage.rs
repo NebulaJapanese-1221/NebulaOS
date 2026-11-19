@@ -105,6 +105,16 @@ pub fn rename_file(old_name: &[u8], new_name: &[u8]) -> Result<(), StorageError>
     check(syscall::storage(&mut request))
 }
 
+pub fn mkdir(name: &[u8]) -> Result<(), StorageError> {
+    let mut request = StorageRequest {
+        op: 6,
+        name_ptr: name.as_ptr() as u32,
+        name_len: name.len() as u32,
+        ..StorageRequest::default()
+    };
+    check(syscall::storage(&mut request))
+}
+
 pub fn format_if_blank() -> Result<(), StorageError> {
     let mut request = StorageRequest {
         op: 5,

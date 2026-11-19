@@ -112,7 +112,7 @@ impl Terminal {
         match name {
             b"help" => {
                 self.append_line(b"help echo clear uptime mem ps devices");
-                self.append_line(b"ls cat theme speed sleep kill reboot shutdown exit");
+                self.append_line(b"ls cat mkdir format copy paste theme speed sleep kill reboot shutdown exit");
             }
             b"echo" => self.append_line(arguments),
             b"clear" => {
@@ -128,6 +128,34 @@ impl Terminal {
             b"devices" => self.show_devices(),
             b"ls" => self.list_files(),
             b"cat" => self.show_file(arguments),
+            b"mkdir" => self.make_dir(arguments),
+            b"format" => {
+                self.append_line(b"Formatting disk...");
+                match storage::format_if_blank() {
+                    Ok(()) => self.append_line(b"Disk formatted."),
+                    Err(_) => self.append_line(b"Format failed."),
+                }
+            }
+            b"copy" => {
+                if arguments.is_empty() {
+                    self.append_line(b"Usage: copy TEXT");
+                } else {
+                    match syscall::clipboard_set(arguments) {
+                        Ok(_) => self.append_line(b"Copied to clipboard."),
+                        Err(_) => self.append_line(b"Copy failed."),
+                    }
+                }
+            }
+            b"paste" => {
+                let mut buffer = [0u8; syscall::CLIPBOARD_MAX];
+                match syscall::clipboard_get(&mut buffer) {
+                    Ok(length) if length > 0 => {
+                        let text = core::str::from_utf8(&buffer[..length]).unwrap_or("");
+                        self.append_line(text.as_bytes());
+                    }
+                    _ => self.append_line(b"Clipboard is empty."),
+                }
+            }
             b"theme" => self.set_theme(arguments),
             b"speed" => self.set_speed(arguments),
             b"sleep" => self.sleep(arguments),
@@ -254,6 +282,23 @@ impl Terminal {
                 }
             }
             Err(_) => self.append_line(b"Could not read file."),
+        }
+    }
+
+    fn make_dir(&mut self, name: &[u8]) {
+        let name = trim(name);
+        if name.is_empty() {
+            self.append_line(b"Usage: mkdir DIR");
+            return;
+        }
+        let mut dirname = [0u8; 15];
+        let name_len = name.len().min(dirname.len());
+        for (destination, source) in dirname[..name_len].iter_mut().zip(name[..name_len].iter()) {
+            *destination = source.to_ascii_uppercase();
+        }
+        match storage::mkdir(&dirname[..name_len]) {
+            Ok(()) => self.append_line(b"Directory created."),
+            Err(_) => self.append_line(b"Could not create directory."),
         }
     }
 

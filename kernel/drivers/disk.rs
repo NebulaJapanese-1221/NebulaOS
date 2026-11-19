@@ -169,6 +169,10 @@ pub fn rename_file(_old_name: &[u8], _new_name: &[u8]) -> Result<(), StorageErro
     Err(StorageError::NotFound)
 }
 
+pub fn mkdir(_name: &[u8]) -> Result<(), StorageError> {
+    Err(StorageError::NotFound)
+}
+
 pub fn format_if_blank() -> Result<(), StorageError> {
     Err(StorageError::Io)
 }

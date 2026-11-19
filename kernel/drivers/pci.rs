@@ -124,7 +124,7 @@ fn pci_multi_function(bus: u8, device: u8) -> bool {
     pci_read_byte(bus, device, 0, 0x0E) & 0x80 != 0
 }
 
-fn class_name(class: u8, subclass: u8) -> &'static str {
+pub fn class_name(class: u8, subclass: u8) -> &'static str {
     match class {
         PCI_CLASS_STORAGE => match subclass {
             0x01 => "IDE controller",

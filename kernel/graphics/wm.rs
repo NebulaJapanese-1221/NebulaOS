@@ -91,12 +91,12 @@ struct Window {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AppKind {
     Calculator,
+    Clock,
     TextEditor,
     FileManager,
     Settings,
     Paint,
     SystemMonitor,
-    UserDemo,
     Terminal,
 }
 
@@ -104,12 +104,12 @@ impl AppKind {
     fn from_menu_index(index: usize) -> Option<Self> {
         Some(match index {
             0 => Self::Calculator,
-            1 => Self::TextEditor,
-            2 => Self::FileManager,
-            3 => Self::Settings,
-            4 => Self::Paint,
-            5 => Self::SystemMonitor,
-            6 => Self::UserDemo,
+            1 => Self::Clock,
+            2 => Self::TextEditor,
+            3 => Self::FileManager,
+            4 => Self::Settings,
+            5 => Self::Paint,
+            6 => Self::SystemMonitor,
             7 => Self::Terminal,
             _ => return None,
         })
@@ -118,12 +118,12 @@ impl AppKind {
     fn title(self) -> &'static str {
         match self {
             Self::Calculator => "CALCULATOR",
+            Self::Clock => "CLOCK",
             Self::TextEditor => "TEXT EDITOR",
             Self::FileManager => "FILE MANAGER",
             Self::Settings => "SETTINGS",
             Self::Paint => "PAINT",
             Self::SystemMonitor => "SYSTEM MONITOR",
-            Self::UserDemo => "RING-3 DEMO",
             Self::Terminal => "TERMINAL",
         }
     }
