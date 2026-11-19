@@ -66,9 +66,7 @@ pub fn play_tone(frequency_hz: u32, duration_ms: u32) {
         return;
     }
 
-    #[cfg(target_arch = "x86")]
-    {
-        let divisor = PIT_BASE_FREQ / frequency_hz;
+    let divisor = PIT_BASE_FREQ / frequency_hz;
         if divisor == 0 || divisor > 0xFFFF {
             return;
         }
@@ -77,6 +75,7 @@ pub fn play_tone(frequency_hz: u32, duration_ms: u32) {
             core::arch::asm!("out dx, al", in("dx") PIT_COMMAND, in("al") 0xB6u8);
             core::arch::asm!("out dx, al", in("dx") PIT_CHANNEL2, in("al") (divisor & 0xFF) as u8);
             core::arch::asm!("out dx, al", in("dx") PIT_CHANNEL2, in("al") ((divisor >> 8) & 0xFF) as u8);
+        }
 
         let mut val = port_byte_in(SPEAKER_PORT);
         val |= SPEAKER_ENABLE;
