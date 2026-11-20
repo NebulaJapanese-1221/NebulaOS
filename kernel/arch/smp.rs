@@ -171,7 +171,7 @@ fn start_processor(index: usize, apic_id: u8) -> bool {
     unsafe {
         ptr::addr_of_mut!(ap_trampoline_stack_top).write_volatile(stack_top);
         ptr::addr_of_mut!(ap_trampoline_cr3).write_volatile(paging::kernel_page_dir());
-        ptr::addr_of_mut!(ap_trampoline_entry).write_volatile(ap_entry as usize as u32);
+        ptr::addr_of_mut!(ap_trampoline_entry).write_volatile(ap_entry as *const () as usize as u32);
         ptr::addr_of_mut!(ap_trampoline_cpu_index).write_volatile(index as u32);
     }
 

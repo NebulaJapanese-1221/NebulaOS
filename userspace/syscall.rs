@@ -46,6 +46,7 @@ pub const SYSCALL_CLIPBOARD_GET: u32 = 26;
 pub const SYSCALL_CLIPBOARD_SET: u32 = 27;
 pub const SYSCALL_PCI_COUNT: u32 = 28;
 pub const SYSCALL_PCI_DEVICE: u32 = 29;
+pub const SYSCALL_GET_HOSTNAME: u32 = 30;
 pub const MAX_WRITE_LENGTH: usize = 256;
 pub const MAX_PROCESSES: usize = 8;
 
@@ -171,7 +172,7 @@ pub struct PciDeviceInfo {
     pub device_id: u16,
     pub class: u8,
     pub subclass: u8,
-    _pad: [u8; 2],
+    pub _pad: [u8; 2],
 }
 
 #[cfg(feature = "user-app")]
@@ -369,6 +370,16 @@ pub fn shutdown() -> Result<(), SyscallError> {
         Ok(())
     } else {
         Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn hostname(output: &mut [u8]) -> Result<usize, SyscallError> {
+    let result = invoke(SYSCALL_GET_HOSTNAME, output.as_mut_ptr() as u32, output.len() as u32);
+    if result == u32::MAX {
+        Err(SyscallError::Unavailable)
+    } else {
+        Ok(result as usize)
     }
 }
 

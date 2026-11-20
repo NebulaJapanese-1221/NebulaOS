@@ -87,16 +87,12 @@ fn port_word_in(port: u16) -> u16 {
 // ---------------------------------------------------------------------------
 
 fn ac97_read(base: u32, reg: u16) -> u16 {
-    unsafe {
-        port_word_out((base as u16).wrapping_add(reg), 0);
-        port_word_in((base as u16).wrapping_add(reg))
-    }
+    port_word_out((base as u16).wrapping_add(reg), 0);
+    port_word_in((base as u16).wrapping_add(reg))
 }
 
 fn ac97_write(base: u32, reg: u16, value: u16) {
-    unsafe {
-        port_word_out((base as u16).wrapping_add(reg), value);
-    }
+    port_word_out((base as u16).wrapping_add(reg), value);
 }
 
 fn ac97_detect() -> Option<u32> {

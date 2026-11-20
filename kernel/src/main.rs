@@ -145,6 +145,15 @@ pub extern "C" fn kernel_entry(multiboot_info: *const u8) -> ! {
     }
     boot_screen.update(graphics::boot_screen::BootStage::InputReady);
 
+    // Login screen: authenticate before starting the desktop.
+    #[cfg(target_arch = "x86")]
+    {
+        let login = graphics::login_screen::LoginScreen::new();
+        if !login.run() {
+            arch_halt();
+        }
+    }
+
     let mut desktop = graphics::wm::WindowManager::new();
     boot_screen.update(graphics::boot_screen::BootStage::DesktopReady);
     boot_screen.wait_until_minimum_duration();

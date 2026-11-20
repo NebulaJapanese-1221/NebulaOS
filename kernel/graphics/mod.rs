@@ -17,5 +17,6 @@
 
 pub mod boot_screen;
 pub mod font;
+pub mod login_screen;
 pub mod system_screen;
 pub mod wm;

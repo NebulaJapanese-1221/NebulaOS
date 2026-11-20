@@ -23,8 +23,9 @@ use crate::userspace::syscall::{
     AppContext, AppEvent, DeviceInfo, DrawCommand, MemoryInfo, ProcessInfo, StorageFileInfo,
     StorageRequest, SystemStats, MAX_WRITE_LENGTH, SYSCALL_CLIPBOARD_GET, SYSCALL_CLIPBOARD_SET,
     SYSCALL_DEVICE_INFO, SYSCALL_DRAW_FILL_RECT, SYSCALL_DRAW_RECT, SYSCALL_DRAW_TEXT,
-    SYSCALL_EXIT, SYSCALL_GET_APP_CONTEXT, SYSCALL_GET_TICKS, SYSCALL_MEMORY_INFO,
-    SYSCALL_POLL_EVENT, SYSCALL_PRINT, SYSCALL_PROCESS_INFO, SYSCALL_REBOOT,
+    SYSCALL_EXIT, SYSCALL_GET_APP_CONTEXT, SYSCALL_GET_HOSTNAME, SYSCALL_GET_TICKS,
+    SYSCALL_MEMORY_INFO, SYSCALL_PCI_COUNT, SYSCALL_PCI_DEVICE, SYSCALL_POLL_EVENT,
+    SYSCALL_PRINT, SYSCALL_PROCESS_INFO, SYSCALL_REBOOT,
     SYSCALL_SET_MOUSE_SENSITIVITY, SYSCALL_SET_WALLPAPER_THEME, SYSCALL_SHUTDOWN, SYSCALL_SLEEP,
     SYSCALL_STORAGE_DELETE, SYSCALL_STORAGE_FORMAT, SYSCALL_STORAGE_LIST, SYSCALL_STORAGE_READ,
     SYSCALL_STORAGE_RENAME, SYSCALL_STORAGE_WRITE, SYSCALL_SYSTEM_STATS, SYSCALL_TERMINATE_PROCESS,
@@ -152,6 +153,44 @@ fn handle_syscall(regs_ptr: *mut u32) -> u32 {
             SYSCALL_PROCESS_INFO => write_process_info(*regs_ptr.add(REG_EBX)),
             SYSCALL_MEMORY_INFO => write_memory_info(*regs_ptr.add(REG_EBX)),
             SYSCALL_DEVICE_INFO => write_device_info(*regs_ptr.add(REG_EBX)),
+            SYSCALL_PCI_COUNT => {
+                crate::drivers::pci::device_count() as u32
+            }
+            SYSCALL_PCI_DEVICE => {
+                let index = *regs_ptr.add(REG_EBX) as usize;
+                let dst = *regs_ptr.add(REG_ECX);
+                if let Some(dev) = crate::drivers::pci::device_at(index) {
+                    let info = crate::userspace::syscall::PciDeviceInfo {
+                        bus: dev.bus,
+                        device: dev.device,
+                        function: dev.function,
+                        vendor_id: dev.vendor_id,
+                        device_id: dev.device_id,
+                        class: dev.class,
+                        subclass: dev.subclass,
+                        _pad: [0; 2],
+                    };
+                    if write_user(dst, &info) {
+                        0
+                    } else {
+                        u32::MAX
+                    }
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_GET_HOSTNAME => {
+                let dst = *regs_ptr.add(REG_EBX);
+                let max = *regs_ptr.add(REG_ECX) as usize;
+                let hostname = b"NebulaOS";
+                let copy = hostname.len().min(max);
+                if copy > 0 && crate::memory::paging::user_range_is_mapped(dst, copy) {
+                    core::ptr::copy_nonoverlapping(hostname.as_ptr(), dst as *mut u8, copy);
+                    copy as u32
+                } else {
+                    u32::MAX
+                }
+            }
             SYSCALL_YIELD => {
                 if crate::services::process::yield_current_user_process() {
                     0

@@ -498,7 +498,7 @@ impl WindowManager {
                         .min(fb_h.saturating_sub(window.bounds.height + 44));
                     if old_bounds != window.bounds {
                         let new_bounds = window.bounds;
-                        drop(window);
+                        let _ = window;
                         self.draw_wallpaper_rect(
                             old_bounds.x,
                             old_bounds.y,
@@ -543,7 +543,7 @@ impl WindowManager {
                     height: new_height,
                 };
                 window.bounds = new_bounds;
-                drop(window);
+                let _ = window;
                 if old_bounds != new_bounds {
                     // Redraw wallpaper in areas uncovered by shrinking
                     if old_bounds.width > new_bounds.width {
