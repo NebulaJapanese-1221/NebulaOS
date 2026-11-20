@@ -52,3 +52,19 @@ pub fn shutdown() -> ! {
 }
 
 unsafe fn wait_for_keyboard_controller() {
+    for _ in 0..100_000 {
+        let status = port_byte_in(0x64);
+        if status & 0x02 == 0 {
+            return;
+        }
+        core::hint::spin_loop();
+    }
+}
+
+fn port_byte_in(port: u16) -> u8 {
+    let val: u8;
+    unsafe {
+        core::arch::asm!("in al, dx", out("al") val, in("dx") port);
+    }
+    val
+}
