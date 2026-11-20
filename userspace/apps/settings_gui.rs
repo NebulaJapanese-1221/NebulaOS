@@ -19,20 +19,23 @@ use super::gui::{Application, Button, Canvas, Checkbox, Event, Menu, PointerEven
 
 const CATEGORIES: [&str; 3] = ["DISPLAY", "MOUSE", "SYSTEM"];
 const SENSITIVITIES: [&str; 4] = ["1 - LOW", "2 - MED-LOW", "3 - MED-HIGH", "4 - HIGH"];
+const RESOLUTIONS: [&str; 4] = ["800x600", "1024x768", "1280x1024", "1440x900"];
 
 pub struct Settings {
     dark_theme: Checkbox,
     mouse_sensitivity: Menu,
+    resolution: Menu,
     category_buttons: [Button; 3],
     category: usize,
     status: &'static str,
 }
 
 impl Settings {
-    pub fn new_with_state(dark_theme: bool, mouse_sensitivity: u32) -> Self {
+    pub fn new_with_state(dark_theme: bool, mouse_sensitivity: u32, resolution_index: usize) -> Self {
         Self {
             dark_theme: Checkbox::new(dark_theme),
             mouse_sensitivity: Menu::new(mouse_sensitivity.saturating_sub(1).min(3) as usize),
+            resolution: Menu::new(resolution_index.min(RESOLUTIONS.len() - 1)),
             category_buttons: [
                 Button::new(CATEGORIES[0]),
                 Button::new(CATEGORIES[1]),
@@ -70,6 +73,15 @@ impl Settings {
         }
     }
 
+    fn resolution_rect(area: Rect) -> Rect {
+        Rect {
+            x: area.x + 24,
+            y: area.y + 150,
+            width: 180,
+            height: 4 * 28,
+        }
+    }
+
     fn change_sensitivity(&mut self, selected: usize) {
         let selected = selected.min(SENSITIVITIES.len() - 1);
         let old = self.mouse_sensitivity.selected;
@@ -80,6 +92,14 @@ impl Settings {
         } else {
             self.status = "";
         }
+    }
+
+    fn change_resolution(&mut self, selected: usize) {
+        let selected = selected.min(RESOLUTIONS.len() - 1);
+        let old = self.resolution.selected;
+        self.resolution.selected = selected;
+        self.status = "Resolution preference updated.";
+        let _ = old;
     }
 
     fn apply_theme(&mut self) {
@@ -124,11 +144,13 @@ impl Application for Settings {
                 canvas.draw_text(area.x + 24, area.y + 56, "WALLPAPER", 0x1596B5, 1);
                 self.dark_theme
                     .render(canvas, Self::display_rect(area), "DARK WALLPAPER");
-                canvas.draw_text(area.x + 24, area.y + 116, "DISPLAY MODE", 0x1596B5, 1);
+                canvas.draw_text(area.x + 24, area.y + 116, "RESOLUTION", 0x1596B5, 1);
+                self.resolution
+                    .render(canvas, Self::resolution_rect(area), &RESOLUTIONS);
                 canvas.draw_text(
                     area.x + 24,
-                    area.y + 138,
-                    "1024 X 768 (SET BY GRUB AT BOOT)",
+                    area.y + 202,
+                    "Resolution is set by GRUB at boot.",
                     0x111827,
                     1,
                 );
@@ -190,6 +212,16 @@ impl Application for Settings {
                     self.change_sensitivity(self.mouse_sensitivity.selected);
                     changed = true;
                 }
+                if self.category == 0
+                    && self.resolution.handle_pointer(
+                        Self::resolution_rect(area),
+                        &RESOLUTIONS,
+                        pointer,
+                    )
+                {
+                    self.change_resolution(self.resolution.selected);
+                    changed = true;
+                }
 
                 for (index, button) in self.category_buttons.iter_mut().enumerate() {
                     if button.handle_pointer(Self::category_rect(area, index), pointer) {
@@ -215,6 +247,14 @@ impl Application for Settings {
             }
             Event::Key(b'+' | b']') if self.category == 1 => {
                 self.change_sensitivity((self.mouse_sensitivity.selected + 1).min(3));
+                true
+            }
+            Event::Key(b'-' | b'[') if self.category == 0 => {
+                self.change_resolution(self.resolution.selected.saturating_sub(1));
+                true
+            }
+            Event::Key(b'+' | b']') if self.category == 0 => {
+                self.change_resolution((self.resolution.selected + 1).min(RESOLUTIONS.len() - 1));
                 true
             }
             Event::Key(_) => false,

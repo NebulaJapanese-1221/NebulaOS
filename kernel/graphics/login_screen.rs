@@ -16,9 +16,10 @@
 // along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
 
 // Login screen: shown before the desktop loads. Requires username "user"
-// and no password to proceed.
+// and no password to proceed. Supports mouse-driven field focus and
+// blinking caret textboxes.
 
-use crate::drivers::{framebuffer, keyboard};
+use crate::drivers::{framebuffer, keyboard, mouse};
 use alloc::string::String;
 
 const BACKGROUND: u32 = 0x0B1220;
@@ -27,11 +28,27 @@ const ACCENT: u32 = 0x66D9EF;
 const TEXT: u32 = 0xF1F5F9;
 const MUTED: u32 = 0xA8B5C9;
 const WARN: u32 = 0xE74C3C;
-const MARGIN_X: u32 = 48;
 const MARGIN_Y: u32 = 60;
 
 const USERNAME: &[u8] = b"user";
 const PASSWORD: &[u8] = b"";
+
+#[derive(Clone, Copy)]
+struct Rect {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+}
+
+impl Rect {
+    fn contains(self, x: u32, y: u32) -> bool {
+        x >= self.x
+            && y >= self.y
+            && x < self.x.saturating_add(self.width)
+            && y < self.y.saturating_add(self.height)
+    }
+}
 
 pub struct LoginScreen {
     username: [u8; 32],
@@ -40,10 +57,29 @@ pub struct LoginScreen {
     password_len: usize,
     active_field: u8, // 0 = username, 1 = password
     error: bool,
+    frame: u32,
+    user_rect: Rect,
+    pass_rect: Rect,
 }
 
 impl LoginScreen {
     pub fn new() -> Self {
+        let width = framebuffer::get_width().max(640);
+        let _height = framebuffer::get_height().max(480);
+        let panel_w = 320u32;
+        let panel_x = width.saturating_sub(panel_w) / 2;
+        let user_rect = Rect {
+            x: panel_x + 24,
+            y: 0, // set in render
+            width: panel_w.saturating_sub(48),
+            height: 24,
+        };
+        let pass_rect = Rect {
+            x: panel_x + 24,
+            y: 0, // set in render
+            width: panel_w.saturating_sub(48),
+            height: 24,
+        };
         Self {
             username: [0; 32],
             username_len: 0,
@@ -51,6 +87,9 @@ impl LoginScreen {
             password_len: 0,
             active_field: 0,
             error: false,
+            frame: 0,
+            user_rect,
+            pass_rect,
         }
     }
 
@@ -58,8 +97,15 @@ impl LoginScreen {
         self.render();
 
         loop {
+            self.frame = self.frame.wrapping_add(1);
             if let Some(key) = keyboard::poll_key() {
                 if self.handle_key(key) {
+                    return true;
+                }
+                self.render();
+            }
+            if let Some(m) = mouse::poll() {
+                if self.handle_mouse(m) {
                     return true;
                 }
                 self.render();
@@ -70,7 +116,6 @@ impl LoginScreen {
     fn handle_key(&mut self, key: u8) -> bool {
         match key {
             8 => {
-                // Backspace
                 if self.active_field == 0 && self.username_len > 0 {
                     self.username_len -= 1;
                     self.username[self.username_len] = 0;
@@ -107,6 +152,23 @@ impl LoginScreen {
         }
     }
 
+    fn handle_mouse(&mut self, m: mouse::MouseState) -> bool {
+        let x = m.x.max(0) as u32;
+        let y = m.y.max(0) as u32;
+
+        if m.left {
+            if self.user_rect.contains(x, y) && self.active_field != 0 {
+                self.active_field = 0;
+                return false;
+            }
+            if self.pass_rect.contains(x, y) && self.active_field != 1 {
+                self.active_field = 1;
+                return false;
+            }
+        }
+        false
+    }
+
     fn authenticate(&self) -> bool {
         let user_ok = self.username_len == USERNAME.len()
             && self.username[..self.username_len] == USERNAME[..];
@@ -115,63 +177,146 @@ impl LoginScreen {
         user_ok && pass_ok
     }
 
-    fn render(&self) {
+    fn render(&mut self) {
         let width = framebuffer::get_width();
         let height = framebuffer::get_height();
         if width == 0 || height == 0 {
             return;
         }
 
+        let panel_w = 400u32;
+        let panel_x = width.saturating_sub(panel_w) / 2;
+        let title_y = MARGIN_Y;
+        let user_label_y = title_y + 70;
+        let user_y = user_label_y + 20;
+        let pass_label_y = user_y + 50;
+        let pass_y = pass_label_y + 20;
+
+        self.user_rect = Rect {
+            x: panel_x + 40,
+            y: user_y,
+            width: panel_w.saturating_sub(80),
+            height: 24,
+        };
+        self.pass_rect = Rect {
+            x: panel_x + 40,
+            y: pass_y,
+            width: panel_w.saturating_sub(80),
+            height: 24,
+        };
+
         framebuffer::clear_screen(BACKGROUND);
 
         // Title
-        framebuffer::draw_text(MARGIN_X, MARGIN_Y, "NEBULAOS LOGIN", TEXT, 2);
         framebuffer::draw_text(
-            MARGIN_X,
-            MARGIN_Y + 40,
+            panel_x + (panel_w.saturating_sub(14 * 12)) / 2,
+            title_y,
+            "NEBULAOS LOGIN",
+            TEXT,
+            2,
+        );
+        framebuffer::draw_text(
+            panel_x + (panel_w.saturating_sub(38 * 6)) / 2,
+            title_y + 40,
             "Please log in to start the desktop.",
             MUTED,
             1,
         );
 
         // Username field
-        let user_y = MARGIN_Y + 90;
-        framebuffer::draw_text(MARGIN_X, user_y, "Username:", MUTED, 1);
-        let user_input = core::str::from_utf8(&self.username[..self.username_len]).unwrap_or("");
-        framebuffer::fill_rect(MARGIN_X, user_y + 18, 240, 24, PANEL);
+        framebuffer::draw_text(panel_x + 40, user_label_y, "Username:", MUTED, 1);
+        framebuffer::fill_rect(
+            self.user_rect.x,
+            self.user_rect.y,
+            self.user_rect.width,
+            self.user_rect.height,
+            PANEL,
+        );
         framebuffer::draw_rect(
-            MARGIN_X,
-            user_y + 18,
-            240,
-            24,
+            self.user_rect.x,
+            self.user_rect.y,
+            self.user_rect.width,
+            self.user_rect.height,
             if self.active_field == 0 { ACCENT } else { 0x516786 },
         );
-        framebuffer::draw_text(MARGIN_X + 8, user_y + 24, user_input, TEXT, 1);
+        let user_input = core::str::from_utf8(&self.username[..self.username_len]).unwrap_or("");
+        framebuffer::draw_text(
+            self.user_rect.x + 8,
+            self.user_rect.y + 8,
+            user_input,
+            TEXT,
+            1,
+        );
+        if self.active_field == 0 && self.frame / CARET_BLINK_TICKS % 2 == 0 {
+            let caret_x = self.user_rect.x + 8 + self.username_len as u32 * 6;
+            framebuffer::fill_rect(
+                caret_x,
+                self.user_rect.y + 4,
+                1,
+                self.user_rect.height.saturating_sub(8),
+                TEXT,
+            );
+        }
 
         // Password field
-        let pass_y = user_y + 60;
-        framebuffer::draw_text(MARGIN_X, pass_y, "Password:", MUTED, 1);
-        let pass_display: String = core::iter::repeat('*').take(self.password_len).collect();
-        framebuffer::fill_rect(MARGIN_X, pass_y + 18, 240, 24, PANEL);
+        framebuffer::draw_text(panel_x + 40, pass_label_y, "Password:", MUTED, 1);
+        framebuffer::fill_rect(
+            self.pass_rect.x,
+            self.pass_rect.y,
+            self.pass_rect.width,
+            self.pass_rect.height,
+            PANEL,
+        );
         framebuffer::draw_rect(
-            MARGIN_X,
-            pass_y + 18,
-            240,
-            24,
+            self.pass_rect.x,
+            self.pass_rect.y,
+            self.pass_rect.width,
+            self.pass_rect.height,
             if self.active_field == 1 { ACCENT } else { 0x516786 },
         );
-        framebuffer::draw_text(MARGIN_X + 8, pass_y + 24, &pass_display, TEXT, 1);
+        let pass_display: String =
+            core::iter::repeat('*').take(self.password_len).collect();
+        framebuffer::draw_text(
+            self.pass_rect.x + 8,
+            self.pass_rect.y + 8,
+            &pass_display,
+            TEXT,
+            1,
+        );
+        if self.active_field == 1 && self.frame / CARET_BLINK_TICKS % 2 == 0 {
+            let caret_x = self.pass_rect.x + 8 + self.password_len as u32 * 6;
+            framebuffer::fill_rect(
+                caret_x,
+                self.pass_rect.y + 4,
+                1,
+                self.pass_rect.height.saturating_sub(8),
+                TEXT,
+            );
+        }
 
         // Error message
         if self.error {
-            framebuffer::draw_text(MARGIN_X, pass_y + 52, "Invalid username or password.", WARN, 1);
+            framebuffer::draw_text(
+                panel_x + 40,
+                pass_y + 40,
+                "Invalid username or password.",
+                WARN,
+                1,
+            );
         }
 
-        // Hint
+        // Hints
         framebuffer::draw_text(
-            MARGIN_X,
+            panel_x + 40,
+            height - 60,
+            "Username: user  |  Password: (none)",
+            MUTED,
+            1,
+        );
+        framebuffer::draw_text(
+            panel_x + 40,
             height - 40,
-            "Username: user  |  Password: (none)  |  Tab to switch, Enter to log in",
+            "Click fields | Tab to switch | Enter to log in | F12: diagnostic mode",
             MUTED,
             1,
         );
@@ -179,3 +324,5 @@ impl LoginScreen {
         framebuffer::present();
     }
 }
+
+const CARET_BLINK_TICKS: u32 = 30;

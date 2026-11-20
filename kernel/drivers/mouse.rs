@@ -7,8 +7,8 @@
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License.
 //
-// NebulaOS is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// NebulaOS is distributed in the hope that it will be useful, but
+// WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU General Public License for more details.
 //
@@ -24,6 +24,10 @@ const STATUS_PORT: u16 = 0x64;
 const COMMAND_PORT: u16 = 0x64;
 const PACKET_SIZE: usize = 3;
 
+const SCREEN_WIDTH: i32 = 1024;
+const SCREEN_HEIGHT: i32 = 768;
+const SENSITIVITY_DEFAULT: i32 = 2;
+
 #[derive(Clone, Copy)]
 pub struct MouseState {
     pub x: i32,
@@ -34,12 +38,16 @@ pub struct MouseState {
 }
 
 static MOUSE_STATE: SpinLock<MouseState> = SpinLock::new(MouseState {
-    x: 0,
-    y: 0,
+    x: SCREEN_WIDTH / 2,
+    y: SCREEN_HEIGHT / 2,
     left: false,
     right: false,
     middle: false,
 });
+
+static MOUSE_SENSITIVITY: SpinLock<i32> = SpinLock::new(SENSITIVITY_DEFAULT);
+static MOUSE_PACKET: SpinLock<[u8; PACKET_SIZE]> = SpinLock::new([0; PACKET_SIZE]);
+static MOUSE_PACKET_INDEX: SpinLock<usize> = SpinLock::new(0);
 
 fn port_byte_out(port: u16, data: u8) {
     unsafe {
@@ -56,23 +64,62 @@ fn port_byte_in(port: u16) -> u8 {
 }
 
 pub fn init() -> bool {
-    port_byte_out(COMMAND_PORT, 0xA8);
-    port_byte_out(COMMAND_PORT, 0xD4);
-    port_byte_out(DATA_PORT, 0xF4);
+    port_byte_out(COMMAND_PORT, 0xA8); // enable mouse device
+    port_byte_out(COMMAND_PORT, 0xD4); // write to mouse
+    port_byte_out(DATA_PORT, 0xF4);    // enable streaming
     let _ = port_byte_in(STATUS_PORT);
     true
 }
 
 pub fn poll() -> Option<MouseState> {
-    let guard = MOUSE_STATE.lock();
     if port_byte_in(STATUS_PORT) & 0x01 == 0 {
         return None;
     }
     let byte = port_byte_in(DATA_PORT);
-    if byte & 0x08 == 0 {
+
+    let mut packet = MOUSE_PACKET.lock();
+    let mut index = MOUSE_PACKET_INDEX.lock();
+
+    // First byte must have bit 3 set (synchronization)
+    if *index == 0 && byte & 0x08 == 0 {
         return None;
     }
-    Some(*guard)
+
+    packet[*index] = byte;
+    *index += 1;
+
+    if *index < PACKET_SIZE {
+        return None;
+    }
+
+    // Full packet received
+    let b0 = packet[0];
+    let b1 = packet[1] as i8 as i32;
+    let b2 = packet[2] as i8 as i32;
+
+    *index = 0;
+
+    let mut state = MOUSE_STATE.lock();
+    let sensitivity = *MOUSE_SENSITIVITY.lock();
+
+    // Overflow check
+    if b0 & 0xC0 != 0 {
+        return Some(*state);
+    }
+
+    let mut new_x = state.x + b1 * sensitivity;
+    let mut new_y = state.y - b2 * sensitivity; // y is inverted on screen
+
+    new_x = new_x.clamp(0, SCREEN_WIDTH - 1);
+    new_y = new_y.clamp(0, SCREEN_HEIGHT - 1);
+
+    state.x = new_x;
+    state.y = new_y;
+    state.left = b0 & 0x01 != 0;
+    state.right = b0 & 0x02 != 0;
+    state.middle = b0 & 0x04 != 0;
+
+    Some(*state)
 }
 
 pub fn interrupts_enabled() -> bool {
@@ -84,11 +131,11 @@ pub fn is_available() -> bool {
 }
 
 pub fn sensitivity() -> u32 {
-    1
+    *MOUSE_SENSITIVITY.lock() as u32
 }
 
-pub fn set_sensitivity(_value: i32) {
-    // stub
+pub fn set_sensitivity(value: i32) {
+    *MOUSE_SENSITIVITY.lock() = value.clamp(1, 4);
 }
 
 pub fn state() -> MouseState {

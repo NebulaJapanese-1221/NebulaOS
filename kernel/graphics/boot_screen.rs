@@ -97,8 +97,8 @@ impl BootScreen {
 
     pub fn wait_until_minimum_duration(&self) {
         let elapsed = pit::ticks().wrapping_sub(self.started_at);
-        if elapsed < 600 {
-            pit::sleep_ticks(600 - elapsed);
+        if elapsed < 1200 {
+            pit::sleep_ticks(1200 - elapsed);
         }
     }
 
