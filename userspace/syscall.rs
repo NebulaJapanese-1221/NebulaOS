@@ -47,6 +47,7 @@ pub const SYSCALL_CLIPBOARD_SET: u32 = 27;
 pub const SYSCALL_PCI_COUNT: u32 = 28;
 pub const SYSCALL_PCI_DEVICE: u32 = 29;
 pub const SYSCALL_GET_HOSTNAME: u32 = 30;
+pub const SYSCALL_NICE: u32 = 31;
 pub const MAX_WRITE_LENGTH: usize = 256;
 pub const MAX_PROCESSES: usize = 8;
 
@@ -380,6 +381,16 @@ pub fn hostname(output: &mut [u8]) -> Result<usize, SyscallError> {
         Err(SyscallError::Unavailable)
     } else {
         Ok(result as usize)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn nice(increment: i32) -> Result<i32, SyscallError> {
+    let result = invoke(SYSCALL_NICE, increment as u32, 0);
+    if result == u32::MAX {
+        Err(SyscallError::Unavailable)
+    } else {
+        Ok(result as i32)
     }
 }
 

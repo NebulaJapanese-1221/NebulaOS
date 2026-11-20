@@ -123,9 +123,11 @@ impl Terminal {
                 Ok(ticks) => self.append_number(b"Ticks: ", ticks, b""),
                 Err(_) => self.append_line(b"Unable to read uptime."),
             },
+            b"whoami" => self.show_whoami(),
             b"mem" => self.show_memory(),
             b"ps" => self.show_processes(),
             b"devices" => self.show_devices(),
+            b"pci" => self.show_pci(),
             b"ls" => self.list_files(),
             b"cat" => self.show_file(arguments),
             b"mkdir" => self.make_dir(arguments),
@@ -186,6 +188,17 @@ impl Terminal {
         self.append_number(b"Frame size: ", info.frame_size, b" bytes");
     }
 
+    fn show_whoami(&mut self) {
+        let mut buffer = [0u8; 32];
+        match syscall::hostname(&mut buffer) {
+            Ok(len) if len > 0 => {
+                let text = core::str::from_utf8(&buffer[..len]).unwrap_or("NebulaOS");
+                self.append_line(text.as_bytes());
+            }
+            _ => self.append_line(b"NebulaOS"),
+        }
+    }
+
     fn show_processes(&mut self) {
         let mut info = syscall::ProcessInfo::default();
         if syscall::process_info(&mut info).is_err() {
@@ -236,6 +249,37 @@ impl Terminal {
             b"Storage: unavailable"
         });
         self.append_number(b"Mouse sensitivity: ", info.mouse_sensitivity, b"");
+    }
+
+    fn show_pci(&mut self) {
+        match syscall::pci_count() {
+            Ok(count) => {
+                self.append_number(b"PCI devices: ", count, b"");
+                for i in 0..count.min(8) {
+                    let mut info = syscall::PciDeviceInfo::default();
+                    if syscall::pci_device(i, &mut info).is_ok() {
+                        let mut line = [0u8; LINE_WIDTH];
+                        let mut length = 0;
+                        append_bytes(&mut line, &mut length, b"  ");
+                        append_u32(&mut line, &mut length, info.bus as u32);
+                        append_bytes(&mut line, &mut length, b":");
+                        append_u32(&mut line, &mut length, info.device as u32);
+                        append_bytes(&mut line, &mut length, b":");
+                        append_u32(&mut line, &mut length, info.function as u32);
+                        append_bytes(&mut line, &mut length, b" ven=");
+                        append_hex16(&mut line, &mut length, info.vendor_id);
+                        append_bytes(&mut line, &mut length, b" dev=");
+                        append_hex16(&mut line, &mut length, info.device_id);
+                        append_bytes(&mut line, &mut length, b" class=");
+                        append_u32(&mut line, &mut length, info.class as u32);
+                        append_bytes(&mut line, &mut length, b" subclass=");
+                        append_u32(&mut line, &mut length, info.subclass as u32);
+                        self.append_line(&line[..length]);
+                    }
+                }
+            }
+            Err(_) => self.append_line(b"PCI information unavailable."),
+        }
     }
 
     fn list_files(&mut self) {
@@ -473,5 +517,18 @@ fn append_u32(output: &mut [u8], length: &mut usize, mut value: u32) {
     }
     for digit in digits[..count].iter().rev() {
         append_bytes(output, length, core::slice::from_ref(digit));
+    }
+}
+
+fn append_hex16(output: &mut [u8], length: &mut usize, value: u16) {
+    let digits = [
+        (value >> 12) & 0xF,
+        (value >> 8) & 0xF,
+        (value >> 4) & 0xF,
+        value & 0xF,
+    ];
+    for &d in &digits {
+        let c = if d < 10 { b'0' + d as u8 } else { b'A' + d as u8 - 10 };
+        append_bytes(output, length, core::slice::from_ref(&c));
     }
 }

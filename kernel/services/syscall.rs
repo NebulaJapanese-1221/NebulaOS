@@ -29,7 +29,7 @@ use crate::userspace::syscall::{
     SYSCALL_SET_MOUSE_SENSITIVITY, SYSCALL_SET_WALLPAPER_THEME, SYSCALL_SHUTDOWN, SYSCALL_SLEEP,
     SYSCALL_STORAGE_DELETE, SYSCALL_STORAGE_FORMAT, SYSCALL_STORAGE_LIST, SYSCALL_STORAGE_READ,
     SYSCALL_STORAGE_RENAME, SYSCALL_STORAGE_WRITE, SYSCALL_SYSTEM_STATS, SYSCALL_TERMINATE_PROCESS,
-    SYSCALL_YIELD,
+    SYSCALL_YIELD, CLIPBOARD_MAX, SYSCALL_NICE,
 };
 use core::mem::size_of;
 
@@ -39,7 +39,6 @@ const REG_EBX: usize = 32 / 4;
 const REG_ECX: usize = 40 / 4;
 const REG_CS: usize = 60 / 4;
 const STORAGE_MAX_DATA: usize = 512;
-const CLIPBOARD_MAX: usize = 256;
 
 static CLIPBOARD: SpinLock<[u8; CLIPBOARD_MAX]> = SpinLock::new([0; CLIPBOARD_MAX]);
 static CLIPBOARD_LEN: SpinLock<usize> = SpinLock::new(0);
@@ -196,6 +195,13 @@ fn handle_syscall(regs_ptr: *mut u32) -> u32 {
                     0
                 } else {
                     u32::MAX
+                }
+            }
+            SYSCALL_NICE => {
+                let increment = *regs_ptr.add(REG_EBX) as i32;
+                match crate::services::process::nice_current(increment) {
+                    Ok(new_priority) => new_priority as u32,
+                    Err(_) => u32::MAX,
                 }
             }
             SYSCALL_SLEEP => {

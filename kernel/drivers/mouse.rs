@@ -27,6 +27,8 @@ const PACKET_SIZE: usize = 3;
 const SCREEN_WIDTH: i32 = 1024;
 const SCREEN_HEIGHT: i32 = 768;
 const SENSITIVITY_DEFAULT: i32 = 2;
+const MOUSE_ACCEL_THRESHOLD: i32 = 4;
+const MOUSE_ACCEL_MULTIPLIER: i32 = 2;
 
 #[derive(Clone, Copy)]
 pub struct MouseState {
@@ -107,8 +109,30 @@ pub fn poll() -> Option<MouseState> {
         return Some(*state);
     }
 
-    let mut new_x = state.x + b1 * sensitivity;
-    let mut new_y = state.y - b2 * sensitivity; // y is inverted on screen
+    let mut new_x = state.x;
+    let mut new_y = state.y;
+
+    // X axis with acceleration
+    if b1 != 0 {
+        let base_x = b1 * sensitivity;
+        let delta_x = if b1.abs() > MOUSE_ACCEL_THRESHOLD {
+            base_x * MOUSE_ACCEL_MULTIPLIER
+        } else {
+            base_x
+        };
+        new_x = state.x + delta_x;
+    }
+
+    // Y axis with acceleration (y is inverted on screen)
+    if b2 != 0 {
+        let base_y = b2 * sensitivity;
+        let delta_y = if b2.abs() > MOUSE_ACCEL_THRESHOLD {
+            base_y * MOUSE_ACCEL_MULTIPLIER
+        } else {
+            base_y
+        };
+        new_y = state.y - delta_y;
+    }
 
     new_x = new_x.clamp(0, SCREEN_WIDTH - 1);
     new_y = new_y.clamp(0, SCREEN_HEIGHT - 1);

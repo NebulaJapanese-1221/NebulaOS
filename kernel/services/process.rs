@@ -69,6 +69,7 @@ struct Process {
     sleep_active: bool,
     running_cpu: usize,
     state: ProcessState,
+    priority: u8,
 }
 
 impl Process {
@@ -98,6 +99,7 @@ impl Process {
         sleep_active: false,
         running_cpu: NO_CPU,
         state: ProcessState::Unused,
+        priority: 0,
     };
 }
 
@@ -193,6 +195,7 @@ pub fn add_user_process(
         sleep_active: false,
         running_cpu: NO_CPU,
         state: ProcessState::Ready,
+        priority: 0,
     };
     Some((slot + 1) as u32)
 }

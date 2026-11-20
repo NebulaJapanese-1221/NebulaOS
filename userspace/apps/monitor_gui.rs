@@ -7,8 +7,8 @@
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License.
 //
-// NebulaOS is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// NebulaOS is distributed in the hope that it will be useful, but
+// WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // GNU General Public License for more details.
 //
@@ -63,6 +63,24 @@ impl Application for SystemMonitor {
             0x111827,
             1,
         );
+
+        // PCI device info
+        let pci_count = crate::syscall::pci_count().unwrap_or(0);
+        canvas.draw_text(area.x + 24, area.y + 216, "PCI DEVICES", 0x1596B5, 1);
+        draw_number(canvas, area.x + 180, area.y + 216, pci_count);
+        for i in 0..pci_count.min(4) {
+            let mut info = crate::syscall::PciDeviceInfo::default();
+            if crate::syscall::pci_device(i, &mut info).is_ok() {
+                let y = area.y + 236 + i as u32 * 20;
+                canvas.draw_text(area.x + 24, y, "PCI", 0x111827, 1);
+                draw_hex(canvas, area.x + 56, y, info.bus as u32);
+                draw_hex(canvas, area.x + 80, y, info.device as u32);
+                draw_hex(canvas, area.x + 104, y, info.function as u32);
+                draw_hex(canvas, area.x + 132, y, info.vendor_id as u32);
+                draw_hex(canvas, area.x + 172, y, info.device_id as u32);
+            }
+        }
+
         if !available {
             canvas.draw_text(
                 area.x + 24,
@@ -91,6 +109,24 @@ fn draw_number(canvas: &mut dyn Canvas, x: u32, y: u32, mut value: u32) {
         }
     }
     if let Ok(text) = core::str::from_utf8(&buffer[index..]) {
+        canvas.draw_text(x, y, text, 0x111827, 1);
+    }
+}
+
+fn draw_hex(canvas: &mut dyn Canvas, x: u32, y: u32, value: u32) {
+    let digits = [
+        (value >> 12) & 0xF,
+        (value >> 8) & 0xF,
+        (value >> 4) & 0xF,
+        value & 0xF,
+    ];
+    let mut buf = [0u8; 5];
+    buf[0] = b'0';
+    buf[1] = b'x';
+    for (i, &d) in digits.iter().enumerate() {
+        buf[i + 2] = if d < 10 { b'0' + d as u8 } else { b'A' + d as u8 - 10 };
+    }
+    if let Ok(text) = core::str::from_utf8(&buf) {
         canvas.draw_text(x, y, text, 0x111827, 1);
     }
 }

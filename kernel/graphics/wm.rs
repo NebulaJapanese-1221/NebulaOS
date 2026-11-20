@@ -148,6 +148,7 @@ pub struct WindowManager {
     cursor_y: u32,
     cursor_type: framebuffer::CursorType,
     left_button_down: bool,
+    alt_pressed: bool,
     windows: Vec<Window>,
     focused: Option<usize>,
     capture: Capture,
@@ -162,6 +163,7 @@ impl WindowManager {
             cursor_y: framebuffer::get_height() / 2,
             cursor_type: framebuffer::CursorType::Arrow,
             left_button_down: false,
+            alt_pressed: false,
             windows: Vec::new(),
             focused: None,
             capture: Capture::None,
@@ -373,11 +375,64 @@ impl WindowManager {
 
     pub fn handle_key(&mut self, key: u8) -> bool {
         self.prune_exited_windows();
+
+        // Track Alt key state
+        if key == 0x38 {
+            self.alt_pressed = true;
+            return true;
+        }
+        if key == 0xB8 {
+            self.alt_pressed = false;
+            return true;
+        }
+
+        // Alt+Tab: cycle focus between non-minimized windows
+        if self.alt_pressed && key == 0x0F {
+            let non_minimized: Vec<usize> = self
+                .windows
+                .iter()
+                .enumerate()
+                .filter(|(_, w)| !w.minimized)
+                .map(|(i, _)| i)
+                .collect();
+            if non_minimized.len() > 1 {
+                let current = self.focused.unwrap_or(0);
+                let pos = non_minimized.iter().position(|&i| i == current);
+                let next = match pos {
+                    Some(p) => non_minimized[(p + 1) % non_minimized.len()],
+                    None => non_minimized[0],
+                };
+                self.focus_window(next);
+            }
+            return true;
+        }
+
+        // Alt+M: minimize focused window
+        if self.alt_pressed && key == 0x32 {
+            if let Some(index) = self.focused {
+                if index < self.windows.len() && !self.windows[index].minimized {
+                    self.windows[index].minimized = true;
+                    self.focused = self.windows.iter().rposition(|w| !w.minimized);
+                    self.request_focused_redraw();
+                }
+            }
+            return true;
+        }
+
+        // Alt+R: restore minimized window (restore most recently minimized)
+        if self.alt_pressed && key == 0x13 {
+            if let Some(index) = self.windows.iter().rposition(|w| w.minimized) {
+                self.windows[index].minimized = false;
+                self.focus_window(index);
+            }
+            return true;
+        }
+
         if key == 27 && self.start_menu_open {
             self.start_menu_open = false;
             return true;
         }
-        if key == b'\t' && self.focused.is_none() {
+        if key == b'\t' && !self.alt_pressed && self.focused.is_none() {
             self.start_menu_open = !self.start_menu_open;
             return true;
         }

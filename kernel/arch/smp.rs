@@ -34,6 +34,7 @@ static APIC_IDS: [AtomicU32; MAX_CPUS] = [const { AtomicU32::new(NO_APIC_ID) }; 
 static ONLINE: [AtomicBool; MAX_CPUS] = [const { AtomicBool::new(false) }; MAX_CPUS];
 static CPU_COUNT: AtomicUsize = AtomicUsize::new(1);
 static APIC_PHYSICAL_BASE: AtomicU32 = AtomicU32::new(0);
+static ACPI_FADT_ADDR: AtomicU32 = AtomicU32::new(0);
 static mut AP_STACKS: [ApStack; MAX_CPUS] = [EMPTY_STACK; MAX_CPUS];
 
 unsafe extern "C" {
@@ -66,6 +67,14 @@ pub fn init(multiboot_info: *const u8) {
     let table = find_processor_table(multiboot_info);
     if table.local_apic_address != 0 {
         apic_base = table.local_apic_address;
+    }
+
+    // Find ACPI FADT table for power management
+    if let Some(fadt_addr) = find_fadt_table(multiboot_info) {
+        ACPI_FADT_ADDR.store(fadt_addr, Ordering::Release);
+        drivers::serial::write_string("ACPI FADT found at 0x");
+        drivers::serial::write_hex(fadt_addr);
+        drivers::serial::write_string("\r\n");
     }
 
     if !arch::lapic::init(apic_base) || !arch::lapic::initialize_cpu() {
@@ -324,6 +333,129 @@ fn map_acpi_table(physical_address: u32) -> Option<*const u8> {
         return None;
     }
     paging::map_mmio(physical_address, length).map(|table| table as *const u8)
+}
+
+fn find_fadt_table(multiboot_info: *const u8) -> Option<u32> {
+    let rsdp = find_rsdp(multiboot_info)?;
+    let rsdt_address = unsafe { read_u32(rsdp.add(16)) };
+    if rsdt_address == 0 {
+        return None;
+    }
+    let rsdt = map_acpi_table(rsdt_address)?;
+    if unsafe { read_u32(rsdt) } != u32::from_le_bytes(*b"RSDT") {
+        return None;
+    }
+    let rsdt_length = unsafe { read_u32(rsdt.add(4)) } as usize;
+    for offset in (36..rsdt_length).step_by(4) {
+        if offset + 4 > rsdt_length {
+            break;
+        }
+        let table_address = unsafe { read_u32(rsdt.add(offset)) };
+        let Some(header) = map_acpi_table(table_address) else {
+            continue;
+        };
+        if unsafe { read_u32(header) } != u32::from_le_bytes(*b"FACP") {
+            continue;
+        }
+        let length = unsafe { read_u32(header.add(4)) } as usize;
+        if length < 36 || length > 1024 * 1024 || !checksum_valid(header, length) {
+            continue;
+        }
+        return Some(table_address);
+    }
+    None
+}
+
+fn find_rsdp(multiboot_info: *const u8) -> Option<*const u8> {
+    if multiboot_info.is_null() {
+        return None;
+    }
+    let total_size = unsafe { read_u32(multiboot_info) } as usize;
+    if !(16..=1024 * 1024).contains(&total_size) {
+        return None;
+    }
+    let mut tag_offset = 8usize;
+    let mut rsdp_v1 = None;
+    let mut rsdp_v2 = None;
+    while tag_offset.checked_add(8)? <= total_size {
+        let tag = unsafe { multiboot_info.add(tag_offset) };
+        let tag_type = unsafe { read_u32(tag) };
+        let tag_size = unsafe { read_u32(tag.add(4)) } as usize;
+        if tag_size < 8 || tag_offset.checked_add(tag_size)? > total_size {
+            return None;
+        }
+        match tag_type {
+            14 => rsdp_v1 = Some(unsafe { tag.add(8) }),
+            15 => rsdp_v2 = Some(unsafe { tag.add(8) }),
+            0 => break,
+            _ => {}
+        }
+        tag_offset = tag_offset.checked_add(tag_size.checked_add(7)? & !7)?;
+    }
+    let rsdp = rsdp_v2.or(rsdp_v1)?;
+    if unsafe { read_u64(rsdp) } != u64::from_le_bytes(*b"RSD PTR ") {
+        return None;
+    }
+    if !checksum_valid(rsdp, 20) {
+        return None;
+    }
+    Some(rsdp)
+}
+
+pub fn acpi_pm1a_cnt_blk() -> Option<u32> {
+    let fadt_addr = ACPI_FADT_ADDR.load(Ordering::Acquire);
+    if fadt_addr == 0 {
+        return None;
+    }
+    let fadt = map_acpi_table(fadt_addr)?;
+    // x_pm1a_cnt_blk is at offset 0x90 in FADT (v2+), pm1a_cnt_blk at 0x2C (v1)
+    // Try x_pm1a_cnt_blk first (GAS structure at offset 0x90, 12 bytes)
+    // GAS: address_space_id(1) + register_bit_width(1) + register_bit_offset(1) + reserved(1) + address(8)
+    let x_pm1a_cnt = unsafe { read_u64(fadt.add(0x98)) }; // address field of x_pm1a_cnt_blk GAS at 0x90
+    if x_pm1a_cnt != 0 {
+        return Some(x_pm1a_cnt as u32);
+    }
+    // Fall back to legacy pm1a_cnt_blk at offset 0x2C
+    let pm1a_cnt = unsafe { read_u32(fadt.add(0x2C)) };
+    if pm1a_cnt != 0 {
+        return Some(pm1a_cnt);
+    }
+    None
+}
+
+pub fn acpi_sleep_control() -> Option<u8> {
+    let fadt_addr = ACPI_FADT_ADDR.load(Ordering::Acquire);
+    if fadt_addr == 0 {
+        return None;
+    }
+    let fadt = map_acpi_table(fadt_addr)?;
+    // sleep_control at offset 0xD8 in FADT v2+
+    Some(unsafe { ptr::read(fadt.add(0xD8)) })
+}
+
+pub fn acpi_reset_register() -> Option<u32> {
+    let fadt_addr = ACPI_FADT_ADDR.load(Ordering::Acquire);
+    if fadt_addr == 0 {
+        return None;
+    }
+    let fadt = map_acpi_table(fadt_addr)?;
+    // reset_reg GAS address field at offset 0x5C
+    let addr = unsafe { read_u64(fadt.add(0x5C)) };
+    if addr != 0 {
+        Some(addr as u32)
+    } else {
+        None
+    }
+}
+
+pub fn acpi_reset_value() -> Option<u8> {
+    let fadt_addr = ACPI_FADT_ADDR.load(Ordering::Acquire);
+    if fadt_addr == 0 {
+        return None;
+    }
+    let fadt = map_acpi_table(fadt_addr)?;
+    // reset_value at offset 0x64
+    Some(unsafe { ptr::read(fadt.add(0x64)) })
 }
 
 fn parse_madt(madt: *const u8, length: usize) -> Option<ProcessorTable> {
