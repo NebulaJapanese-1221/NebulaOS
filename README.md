@@ -18,9 +18,10 @@ NebulaOS is an experimental hobby operating system written from scratch in Rust.
 ### Fedora
 
 ```bash
-sudo dnf install cargo rustc nasm binutils grub2-tools xorriso qemu-system-i386
+sudo dnf install cargo rustc nasm binutils grub2-tools xorriso qemu-system-i386 rustup
 rustup toolchain install nightly
 rustup default nightly
+rustup component add rust-src
 ```
 
 ### Ubuntu / Debian
@@ -30,6 +31,7 @@ sudo apt update
 sudo apt install cargo rustc nasm binutils grub-common grub-pc-bin xorriso qemu-system-i386
 rustup toolchain install nightly
 rustup default nightly
+rustup component add rust-src
 ```
 
 ### Arch Linux
@@ -38,6 +40,7 @@ rustup default nightly
 sudo pacman -S cargo rust nasm binutils grub xorriso qemu-base
 rustup toolchain install nightly
 rustup default nightly
+rustup component add rust-src
 ```
 
 ## Building
