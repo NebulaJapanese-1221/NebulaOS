@@ -51,6 +51,19 @@ pub enum CursorType {
     Crosshair,
 }
 
+impl CursorType {
+    pub fn from_u32(val: u32) -> Self {
+        match val {
+            0 => Self::Arrow,
+            1 => Self::Text,
+            2 => Self::Hand,
+            3 => Self::Crosshair,
+            4 => Self::Move,
+            _ => Self::Arrow,
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct CursorState {
     x: u32,
@@ -733,4 +746,16 @@ pub fn get_width() -> u32 {
 
 pub fn get_height() -> u32 {
     get_fb().map(|fb| fb.height).unwrap_or(0)
+}
+
+pub fn get_cursor_x() -> u32 {
+    unsafe { ptr::read_volatile(ptr::addr_of!(CURSOR)).x }
+}
+
+pub fn get_cursor_y() -> u32 {
+    unsafe { ptr::read_volatile(ptr::addr_of!(CURSOR)).y }
+}
+
+pub fn get_cursor_type() -> CursorType {
+    unsafe { ptr::read_volatile(ptr::addr_of!(CURSOR)).kind }
 }

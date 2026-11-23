@@ -41,7 +41,6 @@ pub fn handle_exception(vector: u32, error_code: u32, registers: *mut u32) {
     crate::drivers::serial::write_string("\r\n");
 
     if user_mode {
-        crate::graphics::wm::request_desktop_redraw();
         crate::services::process::terminate_current_user_process();
         return;
     }

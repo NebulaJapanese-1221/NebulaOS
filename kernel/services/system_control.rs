@@ -61,8 +61,8 @@ pub fn shutdown() -> ! {
         if let Some(pm1a_cnt) = smp::acpi_pm1a_cnt_blk() {
             let slp_typ = smp::acpi_sleep_control().unwrap_or(5);
             // Write SLP_TYP << 10 | SLP_EN (bit 13) to PM1a_CNT
-            let val = ((slp_typ as u16) << 10) | (1 << 13);
-            port_word_out(pm1a_cnt, val);
+            let val: u16 = ((slp_typ as u16) << 10) | (1 << 13);
+            port_word_out(pm1a_cnt as u16, val);
             for _ in 0..1_000_000 {
                 core::hint::spin_loop();
             }

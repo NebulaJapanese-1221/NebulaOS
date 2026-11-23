@@ -17,39 +17,60 @@
 
 //! Rust wrappers for the system-call ABI available to Ring-3 processes.
 
-pub const SYSCALL_PRINT: u32 = 0;
-pub const SYSCALL_EXIT: u32 = 2;
-pub const SYSCALL_GET_TICKS: u32 = 3;
-pub const SYSCALL_DRAW_FILL_RECT: u32 = 4;
-pub const SYSCALL_DRAW_RECT: u32 = 5;
-pub const SYSCALL_DRAW_TEXT: u32 = 6;
-pub const SYSCALL_POLL_EVENT: u32 = 7;
-pub const SYSCALL_GET_APP_CONTEXT: u32 = 8;
-pub const SYSCALL_STORAGE_LIST: u32 = 9;
-pub const SYSCALL_STORAGE_READ: u32 = 10;
-pub const SYSCALL_STORAGE_WRITE: u32 = 11;
-pub const SYSCALL_STORAGE_DELETE: u32 = 12;
-pub const SYSCALL_STORAGE_RENAME: u32 = 13;
-pub const SYSCALL_STORAGE_FORMAT: u32 = 14;
-pub const SYSCALL_SYSTEM_STATS: u32 = 15;
-pub const SYSCALL_SET_WALLPAPER_THEME: u32 = 16;
-pub const SYSCALL_SET_MOUSE_SENSITIVITY: u32 = 17;
-pub const SYSCALL_PROCESS_INFO: u32 = 18;
-pub const SYSCALL_MEMORY_INFO: u32 = 19;
-pub const SYSCALL_DEVICE_INFO: u32 = 20;
-pub const SYSCALL_YIELD: u32 = 21;
-pub const SYSCALL_SLEEP: u32 = 22;
-pub const SYSCALL_TERMINATE_PROCESS: u32 = 23;
-pub const SYSCALL_REBOOT: u32 = 24;
-pub const SYSCALL_SHUTDOWN: u32 = 25;
-pub const SYSCALL_CLIPBOARD_GET: u32 = 26;
-pub const SYSCALL_CLIPBOARD_SET: u32 = 27;
-pub const SYSCALL_PCI_COUNT: u32 = 28;
-pub const SYSCALL_PCI_DEVICE: u32 = 29;
-pub const SYSCALL_GET_HOSTNAME: u32 = 30;
-pub const SYSCALL_NICE: u32 = 31;
-pub const MAX_WRITE_LENGTH: usize = 256;
+pub const SYSCALL_EXIT: u32 = 0;
+pub const SYSCALL_PRINT: u32 = 1;
+pub const SYSCALL_GET_TICKS: u32 = 2;
+pub const SYSCALL_DRAW_FILL_RECT: u32 = 3;
+pub const SYSCALL_DRAW_RECT: u32 = 4;
+pub const SYSCALL_DRAW_TEXT: u32 = 5;
+pub const SYSCALL_POLL_EVENT: u32 = 6;
+pub const SYSCALL_GET_APP_CONTEXT: u32 = 7;
+pub const SYSCALL_STORAGE_LIST: u32 = 8;
+pub const SYSCALL_STORAGE_READ: u32 = 9;
+pub const SYSCALL_STORAGE_WRITE: u32 = 10;
+pub const SYSCALL_STORAGE_DELETE: u32 = 11;
+pub const SYSCALL_STORAGE_RENAME: u32 = 12;
+pub const SYSCALL_STORAGE_FORMAT: u32 = 13;
+pub const SYSCALL_SYSTEM_STATS: u32 = 14;
+pub const SYSCALL_SET_WALLPAPER_THEME: u32 = 15;
+pub const SYSCALL_SET_MOUSE_SENSITIVITY: u32 = 16;
+pub const SYSCALL_PROCESS_INFO: u32 = 17;
+pub const SYSCALL_MEMORY_INFO: u32 = 18;
+pub const SYSCALL_DEVICE_INFO: u32 = 19;
+pub const SYSCALL_PCI_COUNT: u32 = 20;
+pub const SYSCALL_PCI_DEVICE: u32 = 21;
+pub const SYSCALL_GET_HOSTNAME: u32 = 22;
+pub const SYSCALL_YIELD: u32 = 23;
+pub const SYSCALL_NICE: u32 = 24;
+pub const SYSCALL_SLEEP: u32 = 25;
+pub const SYSCALL_TERMINATE_PROCESS: u32 = 26;
+pub const SYSCALL_REBOOT: u32 = 27;
+pub const SYSCALL_SHUTDOWN: u32 = 28;
+pub const SYSCALL_CLIPBOARD_SET: u32 = 29;
+pub const SYSCALL_CLIPBOARD_GET: u32 = 30;
+pub const SYSCALL_SPAWN_APP: u32 = 31;
+pub const SYSCALL_REQUEST_REDRAW: u32 = 32;
+pub const SYSCALL_GET_KEY: u32 = 33;
+pub const SYSCALL_GET_MOUSE: u32 = 34;
+pub const SYSCALL_PRESENT: u32 = 35;
+pub const SYSCALL_PRESENT_RECT: u32 = 36;
+pub const SYSCALL_GET_CURSOR: u32 = 37;
+pub const SYSCALL_SET_CURSOR: u32 = 38;
+pub const SYSCALL_GET_WIDTH: u32 = 39;
+pub const SYSCALL_GET_HEIGHT: u32 = 40;
+
+pub const CLIPBOARD_MAX: usize = 256;
+pub const MAX_WRITE_LENGTH: usize = 1024;
 pub const MAX_PROCESSES: usize = 8;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct ProcessEntry {
+    pub pid: u32,
+    pub app_id: u32,
+    pub state: u32,
+    pub pending_events: u32,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -60,19 +81,18 @@ pub struct DrawCommand {
     pub width: u32,
     pub height: u32,
     pub color: u32,
-    pub scale: u32,
     pub text_ptr: u32,
     pub text_len: u32,
+    pub scale: u32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
-pub struct AppEvent {
-    pub kind: u32,
-    pub key: u32,
+pub struct AppRect {
     pub x: u32,
     pub y: u32,
-    pub left_down: u32,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[repr(C)]
@@ -84,7 +104,17 @@ pub struct AppContext {
     pub width: u32,
     pub height: u32,
     pub dark_theme: u32,
-    pub mouse_sensitivity: u32,
+    pub mouse_sensitivity: i32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct AppEvent {
+    pub kind: u32,
+    pub key: u32,
+    pub x: u32,
+    pub y: u32,
+    pub left_down: u32,
 }
 
 #[repr(C)]
@@ -116,29 +146,10 @@ pub struct SystemStats {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
-pub struct ProcessEntry {
-    pub pid: u32,
-    pub app_id: u32,
-    pub state: u32,
-    pub pending_events: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
 pub struct ProcessInfo {
     pub current_pid: u32,
     pub count: u32,
     pub entries: [ProcessEntry; MAX_PROCESSES],
-}
-
-impl Default for ProcessInfo {
-    fn default() -> Self {
-        Self {
-            current_pid: 0,
-            count: 0,
-            entries: [ProcessEntry::default(); MAX_PROCESSES],
-        }
-    }
 }
 
 #[repr(C)]
@@ -158,7 +169,7 @@ pub struct DeviceInfo {
     pub mouse_x: u32,
     pub mouse_y: u32,
     pub mouse_buttons: u32,
-    pub mouse_sensitivity: u32,
+    pub mouse_sensitivity: i32,
     pub mouse_available: u32,
     pub storage_available: u32,
 }
@@ -174,6 +185,37 @@ pub struct PciDeviceInfo {
     pub class: u8,
     pub subclass: u8,
     pub _pad: [u8; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct SpawnAppRequest {
+    pub app_id: u32,
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct RedrawRequest {
+    pub pid: u32,
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub mouse_x: u32,
+    pub mouse_y: u32,
+    pub left_down: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct CursorInfo {
+    pub x: u32,
+    pub y: u32,
+    pub cursor_type: u32,
 }
 
 #[cfg(feature = "user-app")]
@@ -394,8 +436,6 @@ pub fn nice(increment: i32) -> Result<i32, SyscallError> {
     }
 }
 
-pub const CLIPBOARD_MAX: usize = 256;
-
 #[cfg(feature = "user-app")]
 pub fn clipboard_set(data: &[u8]) -> Result<usize, SyscallError> {
     if data.len() > CLIPBOARD_MAX {
@@ -417,6 +457,84 @@ pub fn clipboard_get(output: &mut [u8]) -> Result<usize, SyscallError> {
     } else {
         Ok(result as usize)
     }
+}
+
+#[cfg(feature = "user-app")]
+pub fn spawn_app(req: &SpawnAppRequest) -> Result<u32, SyscallError> {
+    let result = invoke(SYSCALL_SPAWN_APP, req as *const _ as u32, 0);
+    if result == u32::MAX {
+        Err(SyscallError::Unavailable)
+    } else {
+        Ok(result)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn request_redraw(req: &RedrawRequest) -> Result<(), SyscallError> {
+    if invoke(SYSCALL_REQUEST_REDRAW, req as *const _ as u32, 0) == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn get_key() -> Option<u8> {
+    let res = invoke(SYSCALL_GET_KEY, 0, 0);
+    if res == u32::MAX || res == 0 { None } else { Some(res as u8) }
+}
+
+#[cfg(feature = "user-app")]
+pub fn get_mouse() -> Option<(u32, u32, bool, bool, bool)> {
+    let mut x = 0u32;
+    let mut y = 0u32;
+    let mut buttons = 0u32;
+    let res = invoke(SYSCALL_GET_MOUSE, &mut x as *mut _ as u32, &mut y as *mut _ as u32);
+    if res == u32::MAX { None } else { Some((x, y, buttons & 1 != 0, buttons & 2 != 0, buttons & 4 != 0)) }
+}
+
+#[cfg(feature = "user-app")]
+pub fn present() -> Result<(), SyscallError> {
+    if invoke(SYSCALL_PRESENT, 0, 0) == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn present_rect(x: u32, y: u32, width: u32, height: u32) -> Result<(), SyscallError> {
+    if invoke(SYSCALL_PRESENT_RECT, x, y, (width << 16) | height) == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn get_cursor() -> Option<CursorInfo> {
+    let mut info = CursorInfo::default();
+    let res = invoke(SYSCALL_GET_CURSOR, &mut info as *mut _ as u32, 0);
+    if res == u32::MAX { None } else { Some(info) }
+}
+
+#[cfg(feature = "user-app")]
+pub fn set_cursor(info: &CursorInfo) -> Result<(), SyscallError> {
+    if invoke(SYSCALL_SET_CURSOR, info as *const _ as u32, 0) == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn get_width() -> u32 {
+    invoke(SYSCALL_GET_WIDTH, 0, 0)
+}
+
+#[cfg(feature = "user-app")]
+pub fn get_height() -> u32 {
+    invoke(SYSCALL_GET_HEIGHT, 0, 0)
 }
 
 #[cfg(feature = "user-app")]

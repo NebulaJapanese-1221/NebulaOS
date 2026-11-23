@@ -412,6 +412,24 @@ pub fn terminate_current_user_process() -> bool {
     pid != 0 && terminate_process(pid)
 }
 
+pub fn nice_current(increment: i32) -> Result<i32, ()> {
+    let pid = current_pid();
+    if pid == 0 {
+        return Err(());
+    }
+    let mut processes = PROCESSES.lock();
+    let Some(index) = process_index(pid) else {
+        return Err(());
+    };
+    let process = &mut processes[index];
+    if process.state == ProcessState::Unused || process.state == ProcessState::Zombie {
+        return Err(());
+    }
+    let new_priority = (process.priority as i32 + increment).clamp(-20, 19);
+    process.priority = new_priority as u8;
+    Ok(new_priority)
+}
+
 fn process_index(pid: u32) -> Option<usize> {
     pid.checked_sub(1)
         .map(|index| index as usize)

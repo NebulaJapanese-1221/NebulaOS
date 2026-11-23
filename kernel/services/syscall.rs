@@ -20,14 +20,15 @@
 use crate::services::process::{AppRect, UserEvent};
 use crate::sync::SpinLock;
 use crate::userspace::syscall::{
-    AppContext, AppEvent, DeviceInfo, DrawCommand, MemoryInfo, ProcessInfo, StorageFileInfo,
+    AppContext, AppEvent, AppRect as UserAppRect, CursorInfo, DeviceInfo, DrawCommand, MemoryInfo, ProcessInfo, RedrawRequest, SpawnAppRequest, StorageFileInfo,
     StorageRequest, SystemStats, MAX_WRITE_LENGTH, SYSCALL_CLIPBOARD_GET, SYSCALL_CLIPBOARD_SET,
     SYSCALL_DEVICE_INFO, SYSCALL_DRAW_FILL_RECT, SYSCALL_DRAW_RECT, SYSCALL_DRAW_TEXT,
-    SYSCALL_EXIT, SYSCALL_GET_APP_CONTEXT, SYSCALL_GET_HOSTNAME, SYSCALL_GET_TICKS,
+    SYSCALL_EXIT, SYSCALL_GET_APP_CONTEXT, SYSCALL_GET_CURSOR, SYSCALL_GET_HOSTNAME, SYSCALL_GET_HEIGHT,
+    SYSCALL_GET_KEY, SYSCALL_GET_MOUSE, SYSCALL_GET_TICKS, SYSCALL_GET_WIDTH,
     SYSCALL_MEMORY_INFO, SYSCALL_PCI_COUNT, SYSCALL_PCI_DEVICE, SYSCALL_POLL_EVENT,
-    SYSCALL_PRINT, SYSCALL_PROCESS_INFO, SYSCALL_REBOOT,
-    SYSCALL_SET_MOUSE_SENSITIVITY, SYSCALL_SET_WALLPAPER_THEME, SYSCALL_SHUTDOWN, SYSCALL_SLEEP,
-    SYSCALL_STORAGE_DELETE, SYSCALL_STORAGE_FORMAT, SYSCALL_STORAGE_LIST, SYSCALL_STORAGE_READ,
+    SYSCALL_PRESENT, SYSCALL_PRESENT_RECT, SYSCALL_PRINT, SYSCALL_PROCESS_INFO, SYSCALL_REBOOT,
+    SYSCALL_REQUEST_REDRAW, SYSCALL_SET_CURSOR, SYSCALL_SET_MOUSE_SENSITIVITY, SYSCALL_SET_WALLPAPER_THEME, SYSCALL_SHUTDOWN, SYSCALL_SLEEP,
+    SYSCALL_SPAWN_APP, SYSCALL_STORAGE_DELETE, SYSCALL_STORAGE_FORMAT, SYSCALL_STORAGE_LIST, SYSCALL_STORAGE_READ,
     SYSCALL_STORAGE_RENAME, SYSCALL_STORAGE_WRITE, SYSCALL_SYSTEM_STATS, SYSCALL_TERMINATE_PROCESS,
     SYSCALL_YIELD, CLIPBOARD_MAX, SYSCALL_NICE,
 };
@@ -104,7 +105,8 @@ fn handle_syscall(regs_ptr: *mut u32) -> u32 {
                             len,
                         );
                     }
-                    crate::graphics::wm::console_write(&buffer[..len]);
+                    // Write to serial/framebuffer console
+                    crate::drivers::serial::write_string(core::str::from_utf8(&buffer[..len]).unwrap_or(""));
                     crate::services::user_process::record_syscall_output(&buffer[..len]);
                     len as u32
                 }
@@ -134,13 +136,8 @@ fn handle_syscall(regs_ptr: *mut u32) -> u32 {
             | SYSCALL_STORAGE_FORMAT => storage_request(*regs_ptr.add(REG_EBX), syscall_num),
             SYSCALL_SYSTEM_STATS => write_system_stats(*regs_ptr.add(REG_EBX)),
             SYSCALL_SET_WALLPAPER_THEME => {
-                let value = *regs_ptr.add(REG_EBX);
-                if value <= 1 {
-                    crate::graphics::wm::set_dark_theme(value == 1);
-                    0
-                } else {
-                    u32::MAX
-                }
+                // Theme is now handled in userspace desktop
+                0
             }
             SYSCALL_SET_MOUSE_SENSITIVITY => match *regs_ptr.add(REG_EBX) {
                 value @ 1..=4 => {
@@ -259,6 +256,119 @@ fn handle_syscall(regs_ptr: *mut u32) -> u32 {
                     copy as u32
                 }
             }
+            SYSCALL_SPAWN_APP => {
+                let req = unsafe { read_user::<SpawnAppRequest>(*regs_ptr.add(REG_EBX)) };
+                if let Some(req) = req {
+                    let content = AppRect {
+                        x: req.x,
+                        y: req.y,
+                        width: req.width,
+                        height: req.height,
+                    };
+                    match crate::services::user_process::spawn_app(req.app_id, content) {
+                        Ok(pid) => pid,
+                        Err(_) => u32::MAX,
+                    }
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_REQUEST_REDRAW => {
+                let req = unsafe { read_user::<RedrawRequest>(*regs_ptr.add(REG_EBX)) };
+                if let Some(req) = req {
+                    let content = AppRect {
+                        x: req.x,
+                        y: req.y,
+                        width: req.width,
+                        height: req.height,
+                    };
+                    match crate::services::user_process::request_redraw(
+                        req.pid,
+                        content,
+                        req.mouse_x,
+                        req.mouse_y,
+                        req.left_down != 0,
+                    ) {
+                        true => 0,
+                        false => u32::MAX,
+                    }
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_GET_KEY => {
+                if let Some(key) = crate::drivers::keyboard::poll_key() {
+                    key as u32
+                } else {
+                    0
+                }
+            }
+            SYSCALL_GET_MOUSE => {
+                let x_ptr = *regs_ptr.add(REG_EBX) as *mut u32;
+                let y_ptr = *regs_ptr.add(REG_ECX) as *mut u32;
+                let buttons_ptr = *regs_ptr.add(48 / 4) as *mut u32; // EDX
+                if !crate::memory::paging::user_range_is_mapped(*regs_ptr.add(REG_EBX), 4)
+                    || !crate::memory::paging::user_range_is_mapped(*regs_ptr.add(REG_ECX), 4)
+                    || !crate::memory::paging::user_range_is_mapped(*regs_ptr.add(48 / 4), 4)
+                {
+                    u32::MAX
+                } else {
+                    if let Some(mouse) = crate::drivers::mouse::poll() {
+                        unsafe {
+                            *x_ptr = mouse.x.max(0) as u32;
+                            *y_ptr = mouse.y.max(0) as u32;
+                            let mut buttons = 0u32;
+                            if mouse.left { buttons |= 1; }
+                            if mouse.right { buttons |= 2; }
+                            if mouse.middle { buttons |= 4; }
+                            *buttons_ptr = buttons;
+                        }
+                        1
+                    } else {
+                        0
+                    }
+                }
+            }
+            SYSCALL_PRESENT => {
+                crate::drivers::framebuffer::present();
+                0
+            }
+            SYSCALL_PRESENT_RECT => {
+                let x = *regs_ptr.add(REG_EBX);
+                let y = *regs_ptr.add(REG_ECX);
+                let wh = *regs_ptr.add(48 / 4);
+                let width = wh >> 16;
+                let height = wh & 0xFFFF;
+                crate::drivers::framebuffer::present_rect(x, y, width, height);
+                0
+            }
+            SYSCALL_GET_CURSOR => {
+                let info = unsafe { read_user::<CursorInfo>(*regs_ptr.add(REG_EBX)) };
+                if info.is_none() {
+                    u32::MAX
+                } else {
+                    let mut info = info.unwrap();
+                    info.x = crate::drivers::framebuffer::get_cursor_x();
+                    info.y = crate::drivers::framebuffer::get_cursor_y();
+                    info.cursor_type = crate::drivers::framebuffer::get_cursor_type() as u32;
+                    unsafe { write_user(*regs_ptr.add(REG_EBX), &info) as u32 }
+                }
+            }
+            SYSCALL_SET_CURSOR => {
+                let info = unsafe { read_user::<CursorInfo>(*regs_ptr.add(REG_EBX)) };
+                if let Some(info) = info {
+                    crate::drivers::framebuffer::set_cursor(info.x, info.y, crate::drivers::framebuffer::CursorType::from_u32(info.cursor_type));
+                    0
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_GET_WIDTH => {
+                crate::drivers::framebuffer::get_width()
+            }
+            SYSCALL_GET_HEIGHT => {
+                crate::drivers::framebuffer::get_height()
+            }
             _ => u32::MAX,
         };
         *regs_ptr.add(REG_EAX) = result;
@@ -317,14 +427,14 @@ fn write_app_context(address: u32) -> u32 {
     let Some((app_id, rect)) = crate::services::process::current_app_context() else {
         return u32::MAX;
     };
-    let context = AppContext {
+let context = AppContext {
         app_id,
         x: rect.x,
         y: rect.y,
         width: rect.width,
         height: rect.height,
-        dark_theme: u32::from(crate::graphics::wm::is_dark_theme()),
-        mouse_sensitivity: crate::drivers::mouse::sensitivity(),
+        dark_theme: 1,
+        mouse_sensitivity: crate::drivers::mouse::sensitivity() as i32,
     };
     unsafe {
         if write_user(address, &context) {
@@ -389,7 +499,7 @@ fn write_device_info(address: u32) -> u32 {
         mouse_buttons: u32::from(mouse.left)
             | (u32::from(mouse.right) << 1)
             | (u32::from(mouse.middle) << 2),
-        mouse_sensitivity: crate::drivers::mouse::sensitivity(),
+        mouse_sensitivity: crate::drivers::mouse::sensitivity() as i32,
         mouse_available: u32::from(crate::drivers::mouse::is_available()),
         storage_available: u32::from(crate::drivers::disk::is_available()),
     };

@@ -25,6 +25,8 @@ extern crate alloc;
 mod arch;
 #[path = "../drivers/mod.rs"]
 mod drivers;
+#[path = "../fs/mod.rs"]
+mod fs;
 #[path = "../graphics/mod.rs"]
 mod graphics;
 #[path = "../memory/mod.rs"]
@@ -55,6 +57,9 @@ pub extern "C" fn kernel_entry(multiboot_info: *const u8) -> ! {
     memory::paging::init();
     services::process::init();
     memory::allocator::init();
+
+    // Initialize VFS
+    fs::vfs::init();
 
     // Architecture-specific interrupt/timer setup
     arch_irq_init();
@@ -108,11 +113,20 @@ pub extern "C" fn kernel_entry(multiboot_info: *const u8) -> ! {
     #[cfg(target_arch = "x86")]
     {
         match drivers::disk::init() {
-            Ok(()) => drivers::serial::write_string(if drivers::disk::is_formatted() {
-                "IDE storage ready; NebulaFS mounted.\r\n"
-            } else {
-                "IDE storage ready; disk needs explicit formatting.\r\n"
-            }),
+            Ok(()) => {
+                if drivers::disk::is_formatted() {
+                    drivers::serial::write_string("IDE storage ready; NebulaFS mounted.\r\n");
+                    // Mount NebulaFS
+                    let mut nebula_fs = fs::nebula_fs::NebulaFs::new();
+                    if nebula_fs.mount(0, "").is_ok() {
+                        if fs::vfs::mount("/", Box::new(nebula_fs), "").is_ok() {
+                            drivers::serial::write_string("VFS: NebulaFS mounted at /\r\n");
+                        }
+                    }
+                } else {
+                    drivers::serial::write_string("IDE storage ready; disk needs explicit formatting.\r\n");
+                }
+            }
             Err(drivers::disk::StorageError::NoDisk) => drivers::serial::write_string(
                 "No IDE disk detected; file manager storage unavailable.\r\n",
             ),
@@ -145,48 +159,32 @@ pub extern "C" fn kernel_entry(multiboot_info: *const u8) -> ! {
     }
     boot_screen.update(graphics::boot_screen::BootStage::InputReady);
 
-    // Login screen: authenticate before starting the desktop.
-    #[cfg(target_arch = "x86")]
-    {
-        let login = graphics::login_screen::LoginScreen::new();
-        if !login.run() {
+    // Launch userspace desktop
+    let width = framebuffer.width;
+    let height = framebuffer.height;
+    let content = crate::services::process::AppRect {
+        x: 0,
+        y: 0,
+        width,
+        height,
+    };
+    let _desktop_pid = match crate::services::user_process::spawn_app(8, content) {
+        Ok(pid) => pid,
+        Err(_) => {
+            drivers::serial::write_string("Failed to launch userspace desktop.\r\n");
             arch_halt();
         }
-    }
-
-    let mut desktop = graphics::wm::WindowManager::new();
+    };
     boot_screen.update(graphics::boot_screen::BootStage::DesktopReady);
     boot_screen.wait_until_minimum_duration();
-    desktop.render();
 
     #[cfg(target_arch = "x86")]
     {
-        drivers::serial::write_string("Graphical desktop ready.\r\n");
+        drivers::serial::write_string("Userspace desktop launched.\r\n");
     }
 
+    // Main loop - handle desktop process
     loop {
-        let mut redraw = false;
-        let ticks = arch_timer_ticks();
-        if ticks.wrapping_sub(last_redraw()) >= 100 {
-            set_last_redraw(ticks);
-            desktop.refresh_periodic_apps();
-        }
-        redraw |= graphics::wm::take_theme_changed();
-        redraw |= graphics::wm::take_desktop_redraw_request();
-
-        #[cfg(target_arch = "x86")]
-        {
-            if let Some(key) = drivers::keyboard::poll_key() {
-                redraw |= desktop.handle_key(key);
-            }
-            if let Some(mouse) = drivers::mouse::poll() {
-                redraw |= desktop.handle_mouse(mouse);
-            }
-        }
-
-        if redraw {
-            desktop.render();
-        }
         arch_cpu_idle();
     }
 }
@@ -205,10 +203,6 @@ fn arch_irq_init() {
     arch::pic::unmask_irq(0);
 }
 
-fn arch_timer_ticks() -> u32 {
-    drivers::pit::ticks()
-}
-
 fn arch_cpu_idle() {
     unsafe {
         core::arch::asm!("hlt", options(nomem, nostack));
@@ -221,15 +215,4 @@ fn arch_halt() -> ! {
             core::arch::asm!("cli", "hlt", options(nomem, nostack));
         }
     }
-}
-
-// Static for last redraw time (simplified for cross-arch)
-static mut LAST_REDRAW: u32 = 0;
-
-fn last_redraw() -> u32 {
-    unsafe { LAST_REDRAW }
-}
-
-fn set_last_redraw(t: u32) {
-    unsafe { LAST_REDRAW = t; }
 }
