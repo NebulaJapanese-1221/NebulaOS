@@ -109,6 +109,7 @@ pub trait FileSystem: Send + Sync {
 
 pub trait Inode: Send + Sync {
     fn inode_id(&self) -> u64;
+    fn inode_num(&self) -> u64 { self.inode_id() }
     fn attr(&self) -> Result<FileAttr, VfsError>;
     fn set_attr(&self, attr: &FileAttr) -> Result<(), VfsError>;
     fn lookup(&self, name: &str) -> Result<Box<dyn Inode>, VfsError>;

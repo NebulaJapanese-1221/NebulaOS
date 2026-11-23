@@ -15,10 +15,16 @@
 // You should have received a copy of the GNU General Public License
 // along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
 
-// Syscall interface (int 0x80) and interrupt handler
-
+use crate::fs::{
+    vfs_init, vfs_mount, vfs_unmount, vfs_open, vfs_close, vfs_read, vfs_write, vfs_lseek, vfs_stat, vfs_fstat,
+    vfs_mkdir, vfs_unlink, vfs_rmdir, vfs_rename, vfs_readdir, vfs_sync, vfs_statfs,
+    VfsFileAttr, VfsDirEntry, VfsStatFs,
+};
 use crate::services::process::{AppRect, UserEvent};
 use crate::sync::SpinLock;
+use alloc::vec;
+use alloc::vec::Vec;
+use alloc::boxed::Box;
 use crate::userspace::syscall::{
     AppContext, AppEvent, AppRect as UserAppRect, CursorInfo, DeviceInfo, DrawCommand, MemoryInfo, ProcessInfo, RedrawRequest, SpawnAppRequest, StorageFileInfo,
     StorageRequest, SystemStats, MAX_WRITE_LENGTH, SYSCALL_CLIPBOARD_GET, SYSCALL_CLIPBOARD_SET,
@@ -31,6 +37,12 @@ use crate::userspace::syscall::{
     SYSCALL_SPAWN_APP, SYSCALL_STORAGE_DELETE, SYSCALL_STORAGE_FORMAT, SYSCALL_STORAGE_LIST, SYSCALL_STORAGE_READ,
     SYSCALL_STORAGE_RENAME, SYSCALL_STORAGE_WRITE, SYSCALL_SYSTEM_STATS, SYSCALL_TERMINATE_PROCESS,
     SYSCALL_YIELD, CLIPBOARD_MAX, SYSCALL_NICE,
+    SYSCALL_VFS_OPEN, SYSCALL_VFS_CLOSE, SYSCALL_VFS_READ, SYSCALL_VFS_WRITE, SYSCALL_VFS_LSEEK,
+    SYSCALL_VFS_STAT, SYSCALL_VFS_FSTAT, SYSCALL_VFS_MKDIR, SYSCALL_VFS_UNLINK, SYSCALL_VFS_RMDIR,
+    SYSCALL_VFS_RENAME, SYSCALL_VFS_READDIR, SYSCALL_VFS_SYNC, SYSCALL_VFS_STATFS,
+    SYSCALL_VFS_MOUNT, SYSCALL_VFS_UNMOUNT,
+    VfsOpenRequest, VfsIoRequest, VfsLseekRequest, VfsStatRequest, VfsFstatRequest, VfsMkdirRequest,
+    VfsUnlinkRequest, VfsRenameRequest, VfsReaddirRequest, VfsMountRequest, VfsUnmountRequest,
 };
 use core::mem::size_of;
 
@@ -368,6 +380,339 @@ fn handle_syscall(regs_ptr: *mut u32) -> u32 {
             }
             SYSCALL_GET_HEIGHT => {
                 crate::drivers::framebuffer::get_height()
+            }
+            SYSCALL_VFS_OPEN => {
+                let req = unsafe { read_user::<VfsOpenRequest>(*regs_ptr.add(REG_EBX)) };
+                if let Some(req) = req {
+                    let mut path = [0u8; 256];
+                    let path_len = req.path_len as usize;
+                    if path_len > 255 || !crate::memory::paging::user_range_is_mapped(req.path_ptr, path_len) {
+                        u32::MAX
+                    } else {
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(req.path_ptr as *const u8, path.as_mut_ptr(), path_len);
+                        }
+                        let path_str = core::str::from_utf8(&path[..path_len]).unwrap_or("");
+                        match vfs_open(path_str, req.flags, req.mode) {
+                            Ok(fd) => fd,
+                            Err(e) => e as u32,
+                        }
+                    }
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_VFS_CLOSE => {
+                let fd = *regs_ptr.add(REG_EBX);
+                match vfs_close(fd) {
+                    Ok(()) => 0,
+                    Err(e) => e as u32,
+                }
+            }
+            SYSCALL_VFS_READ => {
+                let req = unsafe { read_user::<VfsIoRequest>(*regs_ptr.add(REG_EBX)) };
+                if let Some(req) = req {
+                    let mut buf = vec![0u8; req.buf_len as usize];
+                    match vfs_read(req.fd, &mut buf, req.offset) {
+                        Ok(n) => {
+                            if crate::memory::paging::user_range_is_mapped(req.buf_ptr, n) {
+                                unsafe {
+                                    core::ptr::copy_nonoverlapping(buf.as_ptr(), req.buf_ptr as *mut u8, n);
+                                }
+                                n as u32
+                            } else {
+                                u32::MAX
+                            }
+                        }
+                        Err(e) => e as u32,
+                    }
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_VFS_WRITE => {
+                let req = unsafe { read_user::<VfsIoRequest>(*regs_ptr.add(REG_EBX)) };
+                if let Some(req) = req {
+                    let mut buf = vec![0u8; req.buf_len as usize];
+                    if !crate::memory::paging::user_range_is_mapped(req.buf_ptr, req.buf_len as usize) {
+                        u32::MAX
+                    } else {
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(req.buf_ptr as *const u8, buf.as_mut_ptr(), req.buf_len as usize);
+                        }
+                        match vfs_write(req.fd, &buf, req.offset) {
+                            Ok(n) => n as u32,
+                            Err(e) => e as u32,
+                        }
+                    }
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_VFS_LSEEK => {
+                let req = unsafe { read_user::<VfsLseekRequest>(*regs_ptr.add(REG_EBX)) };
+                if let Some(req) = req {
+                    match vfs_lseek(req.fd, req.offset, req.whence) {
+                        Ok(off) => off as u32,
+                        Err(e) => e as u32,
+                    }
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_VFS_STAT => {
+                let req = unsafe { read_user::<VfsStatRequest>(*regs_ptr.add(REG_EBX)) };
+                let attr_ptr = *regs_ptr.add(REG_ECX) as *mut VfsFileAttr;
+                if let Some(req) = req {
+                    let mut path = [0u8; 256];
+                    let path_len = req.path_len as usize;
+                    if path_len > 255 || !crate::memory::paging::user_range_is_mapped(req.path_ptr, path_len)
+                        || !crate::memory::paging::user_range_is_mapped(attr_ptr as u32, size_of::<VfsFileAttr>()) {
+                        u32::MAX
+                    } else {
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(req.path_ptr as *const u8, path.as_mut_ptr(), path_len);
+                        }
+                        let path_str = core::str::from_utf8(&path[..path_len]).unwrap_or("");
+                        match vfs_stat(path_str) {
+                            Ok(attr) => {
+                                unsafe { core::ptr::write_unaligned(attr_ptr, attr); }
+                                0
+                            }
+                            Err(e) => e as u32,
+                        }
+                    }
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_VFS_FSTAT => {
+                let req = unsafe { read_user::<VfsFstatRequest>(*regs_ptr.add(REG_EBX)) };
+                let attr_ptr = *regs_ptr.add(REG_ECX) as *mut VfsFileAttr;
+                if let Some(req) = req {
+                    if !crate::memory::paging::user_range_is_mapped(attr_ptr as u32, size_of::<VfsFileAttr>()) {
+                        u32::MAX
+                    } else {
+                        match vfs_fstat(req.fd) {
+                            Ok(attr) => {
+                                unsafe { core::ptr::write_unaligned(attr_ptr, attr); }
+                                0
+                            }
+                            Err(e) => e as u32,
+                        }
+                    }
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_VFS_MKDIR => {
+                let req = unsafe { read_user::<VfsMkdirRequest>(*regs_ptr.add(REG_EBX)) };
+                if let Some(req) = req {
+                    let mut path = [0u8; 256];
+                    let path_len = req.path_len as usize;
+                    if path_len > 255 || !crate::memory::paging::user_range_is_mapped(req.path_ptr, path_len) {
+                        u32::MAX
+                    } else {
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(req.path_ptr as *const u8, path.as_mut_ptr(), path_len);
+                        }
+                        let path_str = core::str::from_utf8(&path[..path_len]).unwrap_or("");
+                        match vfs_mkdir(path_str, req.mode) {
+                            Ok(()) => 0,
+                            Err(e) => e as u32,
+                        }
+                    }
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_VFS_UNLINK => {
+                let req = unsafe { read_user::<VfsUnlinkRequest>(*regs_ptr.add(REG_EBX)) };
+                if let Some(req) = req {
+                    let mut path = [0u8; 256];
+                    let path_len = req.path_len as usize;
+                    if path_len > 255 || !crate::memory::paging::user_range_is_mapped(req.path_ptr, path_len) {
+                        u32::MAX
+                    } else {
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(req.path_ptr as *const u8, path.as_mut_ptr(), path_len);
+                        }
+                        let path_str = core::str::from_utf8(&path[..path_len]).unwrap_or("");
+                        match vfs_unlink(path_str) {
+                            Ok(()) => 0,
+                            Err(e) => e as u32,
+                        }
+                    }
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_VFS_RMDIR => {
+                let req = unsafe { read_user::<VfsUnlinkRequest>(*regs_ptr.add(REG_EBX)) };
+                if let Some(req) = req {
+                    let mut path = [0u8; 256];
+                    let path_len = req.path_len as usize;
+                    if path_len > 255 || !crate::memory::paging::user_range_is_mapped(req.path_ptr, path_len) {
+                        u32::MAX
+                    } else {
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(req.path_ptr as *const u8, path.as_mut_ptr(), path_len);
+                        }
+                        let path_str = core::str::from_utf8(&path[..path_len]).unwrap_or("");
+                        match vfs_rmdir(path_str) {
+                            Ok(()) => 0,
+                            Err(e) => e as u32,
+                        }
+                    }
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_VFS_RENAME => {
+                let req = unsafe { read_user::<VfsRenameRequest>(*regs_ptr.add(REG_EBX)) };
+                if let Some(req) = req {
+                    let mut old_path = [0u8; 256];
+                    let mut new_path = [0u8; 256];
+                    let old_len = req.old_path_len as usize;
+                    let new_len = req.new_path_len as usize;
+                    if old_len > 255 || new_len > 255
+                        || !crate::memory::paging::user_range_is_mapped(req.old_path_ptr, old_len)
+                        || !crate::memory::paging::user_range_is_mapped(req.new_path_ptr, new_len) {
+                        u32::MAX
+                    } else {
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(req.old_path_ptr as *const u8, old_path.as_mut_ptr(), old_len);
+                            core::ptr::copy_nonoverlapping(req.new_path_ptr as *const u8, new_path.as_mut_ptr(), new_len);
+                        }
+                        let old_str = core::str::from_utf8(&old_path[..old_len]).unwrap_or("");
+                        let new_str = core::str::from_utf8(&new_path[..new_len]).unwrap_or("");
+                        match vfs_rename(old_str, new_str) {
+                            Ok(()) => 0,
+                            Err(e) => e as u32,
+                        }
+                    }
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_VFS_READDIR => {
+                let req = unsafe { read_user::<VfsReaddirRequest>(*regs_ptr.add(REG_EBX)) };
+                if let Some(req) = req {
+                    let mut entries = Vec::new();
+                    match vfs_readdir(req.fd, req.offset, &mut entries) {
+                        Ok(n) => {
+                            let entry_size = size_of::<VfsDirEntry>();
+                            let copy_len = (req.buf_len as usize).min(n * entry_size);
+                            if copy_len > 0 && crate::memory::paging::user_range_is_mapped(req.buf_ptr, copy_len) {
+                                let src = entries.as_ptr() as *const u8;
+                                unsafe {
+                                    core::ptr::copy_nonoverlapping(src, req.buf_ptr as *mut u8, copy_len);
+                                }
+                            }
+                            n as u32
+                        }
+                        Err(e) => e as u32,
+                    }
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_VFS_SYNC => {
+                match vfs_sync() {
+                    Ok(()) => 0,
+                    Err(e) => e as u32,
+                }
+            }
+            SYSCALL_VFS_STATFS => {
+                let req = unsafe { read_user::<VfsStatRequest>(*regs_ptr.add(REG_EBX)) };
+                let stat_ptr = *regs_ptr.add(REG_ECX) as *mut VfsStatFs;
+                if let Some(req) = req {
+                    let mut path = [0u8; 256];
+                    let path_len = req.path_len as usize;
+                    if path_len > 255 || !crate::memory::paging::user_range_is_mapped(req.path_ptr, path_len)
+                        || !crate::memory::paging::user_range_is_mapped(stat_ptr as u32, size_of::<VfsStatFs>()) {
+                        u32::MAX
+                    } else {
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(req.path_ptr as *const u8, path.as_mut_ptr(), path_len);
+                        }
+                        let path_str = core::str::from_utf8(&path[..path_len]).unwrap_or("");
+                        match vfs_statfs(path_str) {
+                            Ok(stat) => {
+                                unsafe { core::ptr::write_unaligned(stat_ptr, stat); }
+                                0
+                            }
+                            Err(e) => e as u32,
+                        }
+                    }
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_VFS_MOUNT => {
+                let req = unsafe { read_user::<VfsMountRequest>(*regs_ptr.add(REG_EBX)) };
+                if let Some(req) = req {
+                    let mut path = [0u8; 256];
+                    let mut fs_type = [0u8; 32];
+                    let mut options = [0u8; 256];
+                    let path_len = req.path_len as usize;
+                    let fs_len = req.fs_type_len as usize;
+                    let opt_len = req.options_len as usize;
+                    if path_len > 255 || fs_len > 31 || opt_len > 255
+                        || !crate::memory::paging::user_range_is_mapped(req.path_ptr, path_len)
+                        || !crate::memory::paging::user_range_is_mapped(req.fs_type_ptr, fs_len)
+                        || !crate::memory::paging::user_range_is_mapped(req.options_ptr, opt_len) {
+                        u32::MAX
+                    } else {
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(req.path_ptr as *const u8, path.as_mut_ptr(), path_len);
+                            core::ptr::copy_nonoverlapping(req.fs_type_ptr as *const u8, fs_type.as_mut_ptr(), fs_len);
+                            core::ptr::copy_nonoverlapping(req.options_ptr as *const u8, options.as_mut_ptr(), opt_len);
+                        }
+                        let path_str = core::str::from_utf8(&path[..path_len]).unwrap_or("");
+                        let fs_str = core::str::from_utf8(&fs_type[..fs_len]).unwrap_or("");
+                        let opt_str = core::str::from_utf8(&options[..opt_len]).unwrap_or("");
+                        
+                        // For now only nebula-fs is supported
+                        if fs_str == "nebula-fs" {
+                            let mut fs = crate::fs::nebula_fs::NebulaFs::new();
+                            match fs.mount(0, opt_str) {
+                                Ok(()) => {
+                                    match crate::fs::vfs::mount(path_str, Box::new(fs), opt_str) {
+                                        Ok(()) => 0,
+                                        Err(e) => e as u32,
+                                    }
+                                }
+                                Err(e) => e as u32,
+                            }
+                        } else {
+                            1 // Not supported
+                        }
+                    }
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_VFS_UNMOUNT => {
+                let req = unsafe { read_user::<VfsUnmountRequest>(*regs_ptr.add(REG_EBX)) };
+                if let Some(req) = req {
+                    let mut path = [0u8; 256];
+                    let path_len = req.path_len as usize;
+                    if path_len > 255 || !crate::memory::paging::user_range_is_mapped(req.path_ptr, path_len) {
+                        u32::MAX
+                    } else {
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(req.path_ptr as *const u8, path.as_mut_ptr(), path_len);
+                        }
+                        let path_str = core::str::from_utf8(&path[..path_len]).unwrap_or("");
+                        match vfs_unmount(path_str) {
+                            Ok(()) => 0,
+                            Err(e) => e as u32,
+                        }
+                    }
+                } else {
+                    u32::MAX
+                }
             }
             _ => u32::MAX,
         };

@@ -19,3 +19,28 @@
 
 pub mod vfs;
 pub mod nebula_fs;
+
+// Re-export VFS functions
+pub use vfs::{
+    init as vfs_init,
+    mount as vfs_mount,
+    unmount as vfs_unmount,
+    open as vfs_open,
+    close as vfs_close,
+    read as vfs_read,
+    write as vfs_write,
+    lseek as vfs_lseek,
+    stat as vfs_stat,
+    fstat as vfs_fstat,
+    mkdir as vfs_mkdir,
+    unlink as vfs_unlink,
+    rmdir as vfs_rmdir,
+    rename as vfs_rename,
+    read_dir as vfs_readdir,
+    sync as vfs_sync,
+    statfs as vfs_statfs,
+    VfsError,
+    FileAttr as VfsFileAttr,
+    DirEntry as VfsDirEntry,
+    StatFs as VfsStatFs,
+};

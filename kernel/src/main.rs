@@ -39,6 +39,7 @@ mod sync;
 mod userspace;
 
 use core::panic::PanicInfo;
+use alloc::boxed::Box;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {

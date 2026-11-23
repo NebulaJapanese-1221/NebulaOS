@@ -59,6 +59,24 @@ pub const SYSCALL_SET_CURSOR: u32 = 38;
 pub const SYSCALL_GET_WIDTH: u32 = 39;
 pub const SYSCALL_GET_HEIGHT: u32 = 40;
 
+// VFS syscalls
+pub const SYSCALL_VFS_OPEN: u32 = 41;
+pub const SYSCALL_VFS_CLOSE: u32 = 42;
+pub const SYSCALL_VFS_READ: u32 = 43;
+pub const SYSCALL_VFS_WRITE: u32 = 44;
+pub const SYSCALL_VFS_LSEEK: u32 = 45;
+pub const SYSCALL_VFS_STAT: u32 = 46;
+pub const SYSCALL_VFS_FSTAT: u32 = 47;
+pub const SYSCALL_VFS_MKDIR: u32 = 48;
+pub const SYSCALL_VFS_UNLINK: u32 = 49;
+pub const SYSCALL_VFS_RMDIR: u32 = 50;
+pub const SYSCALL_VFS_RENAME: u32 = 51;
+pub const SYSCALL_VFS_READDIR: u32 = 52;
+pub const SYSCALL_VFS_SYNC: u32 = 53;
+pub const SYSCALL_VFS_STATFS: u32 = 54;
+pub const SYSCALL_VFS_MOUNT: u32 = 55;
+pub const SYSCALL_VFS_UNMOUNT: u32 = 56;
+
 pub const CLIPBOARD_MAX: usize = 256;
 pub const MAX_WRITE_LENGTH: usize = 1024;
 pub const MAX_PROCESSES: usize = 8;
@@ -216,6 +234,131 @@ pub struct CursorInfo {
     pub x: u32,
     pub y: u32,
     pub cursor_type: u32,
+}
+
+// VFS structures
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VfsOpenRequest {
+    pub path_ptr: u32,
+    pub path_len: u32,
+    pub flags: u32,
+    pub mode: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VfsIoRequest {
+    pub fd: u32,
+    pub buf_ptr: u32,
+    pub buf_len: u32,
+    pub offset: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VfsLseekRequest {
+    pub fd: u32,
+    pub offset: i64,
+    pub whence: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VfsStatRequest {
+    pub path_ptr: u32,
+    pub path_len: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VfsFstatRequest {
+    pub fd: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VfsMkdirRequest {
+    pub path_ptr: u32,
+    pub path_len: u32,
+    pub mode: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VfsUnlinkRequest {
+    pub path_ptr: u32,
+    pub path_len: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VfsRenameRequest {
+    pub old_path_ptr: u32,
+    pub old_path_len: u32,
+    pub new_path_ptr: u32,
+    pub new_path_len: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VfsReaddirRequest {
+    pub fd: u32,
+    pub offset: u64,
+    pub buf_ptr: u32,
+    pub buf_len: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VfsMountRequest {
+    pub path_ptr: u32,
+    pub path_len: u32,
+    pub fs_type_ptr: u32,
+    pub fs_type_len: u32,
+    pub options_ptr: u32,
+    pub options_len: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VfsUnmountRequest {
+    pub path_ptr: u32,
+    pub path_len: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VfsFileAttr {
+    pub file_type: u32,
+    pub size: u64,
+    pub blocks: u64,
+    pub atime: u64,
+    pub mtime: u64,
+    pub ctime: u64,
+    pub mode: u32,
+    pub uid: u32,
+    pub gid: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VfsDirEntry {
+    pub name: [u8; 64],
+    pub inode_id: u64,
+    pub file_type: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VfsStatFs {
+    pub blocks: u64,
+    pub bfree: u64,
+    pub bavail: u64,
+    pub files: u64,
+    pub ffree: u64,
+    pub bsize: u32,
+    pub namelen: u32,
 }
 
 #[cfg(feature = "user-app")]
@@ -535,6 +678,224 @@ pub fn get_width() -> u32 {
 #[cfg(feature = "user-app")]
 pub fn get_height() -> u32 {
     invoke(SYSCALL_GET_HEIGHT, 0, 0)
+}
+
+// VFS wrapper functions
+#[cfg(feature = "user-app")]
+pub fn vfs_open(path: &str, flags: u32, mode: u32) -> Result<u32, SyscallError> {
+    let mut req = VfsOpenRequest {
+        path_ptr: path.as_ptr() as u32,
+        path_len: path.len() as u32,
+        flags,
+        mode,
+    };
+    let result = invoke(SYSCALL_VFS_OPEN, &mut req as *mut _ as u32, 0);
+    if result == u32::MAX {
+        Err(SyscallError::Unavailable)
+    } else {
+        Ok(result)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn vfs_close(fd: u32) -> Result<(), SyscallError> {
+    if invoke(SYSCALL_VFS_CLOSE, fd, 0) == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn vfs_read(fd: u32, buf: &mut [u8]) -> Result<usize, SyscallError> {
+    let mut req = VfsIoRequest {
+        fd,
+        buf_ptr: buf.as_mut_ptr() as u32,
+        buf_len: buf.len() as u32,
+        offset: 0,
+    };
+    let result = invoke(SYSCALL_VFS_READ, &mut req as *mut _ as u32, 0);
+    if result == u32::MAX {
+        Err(SyscallError::Unavailable)
+    } else {
+        Ok(result as usize)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn vfs_write(fd: u32, buf: &[u8]) -> Result<usize, SyscallError> {
+    let mut req = VfsIoRequest {
+        fd,
+        buf_ptr: buf.as_ptr() as u32,
+        buf_len: buf.len() as u32,
+        offset: 0,
+    };
+    let result = invoke(SYSCALL_VFS_WRITE, &mut req as *mut _ as u32, 0);
+    if result == u32::MAX {
+        Err(SyscallError::Unavailable)
+    } else {
+        Ok(result as usize)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn vfs_lseek(fd: u32, offset: i64, whence: u32) -> Result<u64, SyscallError> {
+    let mut req = VfsLseekRequest { fd, offset, whence };
+    let result = invoke(SYSCALL_VFS_LSEEK, &mut req as *mut _ as u32, 0);
+    if result == u32::MAX {
+        Err(SyscallError::Unavailable)
+    } else {
+        Ok(result as u64)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn vfs_stat(path: &str, attr: &mut VfsFileAttr) -> Result<(), SyscallError> {
+    let mut req = VfsStatRequest {
+        path_ptr: path.as_ptr() as u32,
+        path_len: path.len() as u32,
+    };
+    let result = invoke(SYSCALL_VFS_STAT, &mut req as *mut _ as u32, attr as *mut _ as u32);
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn vfs_fstat(fd: u32, attr: &mut VfsFileAttr) -> Result<(), SyscallError> {
+    let mut req = VfsFstatRequest { fd };
+    let result = invoke(SYSCALL_VFS_FSTAT, &mut req as *mut _ as u32, attr as *mut _ as u32);
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn vfs_mkdir(path: &str, mode: u32) -> Result<(), SyscallError> {
+    let mut req = VfsMkdirRequest {
+        path_ptr: path.as_ptr() as u32,
+        path_len: path.len() as u32,
+        mode,
+    };
+    if invoke(SYSCALL_VFS_MKDIR, &mut req as *mut _ as u32, 0) == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn vfs_unlink(path: &str) -> Result<(), SyscallError> {
+    let mut req = VfsUnlinkRequest {
+        path_ptr: path.as_ptr() as u32,
+        path_len: path.len() as u32,
+    };
+    if invoke(SYSCALL_VFS_UNLINK, &mut req as *mut _ as u32, 0) == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn vfs_rmdir(path: &str) -> Result<(), SyscallError> {
+    let mut req = VfsUnlinkRequest {
+        path_ptr: path.as_ptr() as u32,
+        path_len: path.len() as u32,
+    };
+    if invoke(SYSCALL_VFS_RMDIR, &mut req as *mut _ as u32, 0) == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn vfs_rename(old_path: &str, new_path: &str) -> Result<(), SyscallError> {
+    let mut req = VfsRenameRequest {
+        old_path_ptr: old_path.as_ptr() as u32,
+        old_path_len: old_path.len() as u32,
+        new_path_ptr: new_path.as_ptr() as u32,
+        new_path_len: new_path.len() as u32,
+    };
+    if invoke(SYSCALL_VFS_RENAME, &mut req as *mut _ as u32, 0) == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn vfs_readdir(fd: u32, offset: u64, entries: &mut [VfsDirEntry]) -> Result<usize, SyscallError> {
+    let mut req = VfsReaddirRequest {
+        fd,
+        offset,
+        buf_ptr: entries.as_mut_ptr() as u32,
+        buf_len: (entries.len() * core::mem::size_of::<VfsDirEntry>()) as u32,
+    };
+    let result = invoke(SYSCALL_VFS_READDIR, &mut req as *mut _ as u32, 0);
+    if result == u32::MAX {
+        Err(SyscallError::Unavailable)
+    } else {
+        Ok(result as usize)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn vfs_sync() -> Result<(), SyscallError> {
+    if invoke(SYSCALL_VFS_SYNC, 0, 0) == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn vfs_statfs(path: &str, stat: &mut VfsStatFs) -> Result<(), SyscallError> {
+    let mut req = VfsStatRequest {
+        path_ptr: path.as_ptr() as u32,
+        path_len: path.len() as u32,
+    };
+    let result = invoke(SYSCALL_VFS_STATFS, &mut req as *mut _ as u32, stat as *mut _ as u32);
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn vfs_mount(path: &str, fs_type: &str, options: &str) -> Result<(), SyscallError> {
+    let mut req = VfsMountRequest {
+        path_ptr: path.as_ptr() as u32,
+        path_len: path.len() as u32,
+        fs_type_ptr: fs_type.as_ptr() as u32,
+        fs_type_len: fs_type.len() as u32,
+        options_ptr: options.as_ptr() as u32,
+        options_len: options.len() as u32,
+    };
+    if invoke(SYSCALL_VFS_MOUNT, &mut req as *mut _ as u32, 0) == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn vfs_unmount(path: &str) -> Result<(), SyscallError> {
+    let mut req = VfsUnmountRequest {
+        path_ptr: path.as_ptr() as u32,
+        path_len: path.len() as u32,
+    };
+    if invoke(SYSCALL_VFS_UNMOUNT, &mut req as *mut _ as u32, 0) == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
 }
 
 #[cfg(feature = "user-app")]

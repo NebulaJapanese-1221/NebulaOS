@@ -20,7 +20,6 @@
 use alloc::vec::Vec;
 use alloc::string::{String, ToString};
 use alloc::boxed::Box;
-use alloc::collections::BTreeMap;
 use crate::sync::SpinLock;
 use crate::drivers::disk;
 use crate::fs::vfs::{FileSystem, Inode, File, FileAttr, FileType, VfsError, DirEntry, StatFs};
@@ -275,6 +274,7 @@ struct InodeWrapper {
 
 impl Inode for InodeWrapper {
     fn inode_id(&self) -> u64 { self.inode as u64 }
+    fn inode_num(&self) -> u64 { self.inode as u64 }
     fn attr(&self) -> Result<FileAttr, VfsError> {
         let inode = NebulaInode::load(self.inode)?;
         Ok(file_attr_from_inode(&inode))
@@ -314,9 +314,8 @@ impl Inode for InodeWrapper {
     }
     fn rename(&self, old_name: &str, target_dir: &dyn Inode, new_name: &str) -> Result<(), VfsError> {
         let parent = NebulaInode::load(self.inode)?;
-        let target_wrapper = target_dir.as_any().downcast_ref::<InodeWrapper>()
-            .ok_or(VfsError::InvalidName)?;
-        let target = NebulaInode::load(target_wrapper.inode)?;
+        let target_inode = target_dir.inode_num();
+        let target = NebulaInode::load(target_inode as u32)?;
         rename_file(&parent, old_name, &target, new_name)
     }
     fn read_dir(&self, offset: u64, entries: &mut Vec<DirEntry>) -> Result<u64, VfsError> {
@@ -352,20 +351,6 @@ impl Inode for InodeWrapper {
         inode.dirty = true;
         inode.save()?;
         Ok(())
-    }
-}
-
-impl core::any::Any for InodeWrapper {
-    fn type_id(&self) -> core::any::TypeId {
-        core::any::TypeId::of::<Self>()
-    }
-    
-    fn as_any(&self) -> &dyn core::any::Any {
-        self
-    }
-    
-    fn as_any_mut(&mut self) -> &mut dyn core::any::Any {
-        self
     }
 }
 
@@ -448,6 +433,11 @@ fn find_free_data_block() -> Result<u32, VfsError> {
         }
     }
     Err(VfsError::NoSpace)
+}
+
+fn free_block(sector: u32) -> Result<(), VfsError> {
+    let mut buf = [0u8; SECTOR_SIZE];
+    disk::write_sector(sector, buf.as_ptr())
 }
 
 fn find_dir_entry(parent: &NebulaInode, name: &str) -> Result<(DirEntryRaw, u32), VfsError> {
