@@ -12,13 +12,14 @@ NebulaOS is an experimental hobby operating system written from scratch in Rust.
 | `grub-mkrescue` or `grub2-mkrescue` | Build bootable ISO |
 | `xorriso` | GRUB rescue image tool |
 | `qemu-system-i386` | Emulator for testing (optional) |
+| 'rustup' |
 
 ## Installing Dependencies
 
 ### Fedora
 
 ```bash
-sudo dnf install cargo rustc nasm binutils grub2-tools xorriso qemu-system-i386 rustup
+sudo dnf install cargo rustc nasm binutils grub2-tools xorriso qemu-system-i386
 rustup toolchain install nightly
 rustup default nightly
 rustup component add rust-src
