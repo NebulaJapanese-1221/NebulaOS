@@ -40,6 +40,7 @@ mod userspace;
 
 use core::panic::PanicInfo;
 use alloc::boxed::Box;
+use fs::vfs::FileSystem;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {

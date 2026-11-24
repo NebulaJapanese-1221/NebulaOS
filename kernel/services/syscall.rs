@@ -16,17 +16,20 @@
 // along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::fs::{
-    vfs_init, vfs_mount, vfs_unmount, vfs_open, vfs_close, vfs_read, vfs_write, vfs_lseek, vfs_stat, vfs_fstat,
-    vfs_mkdir, vfs_unlink, vfs_rmdir, vfs_rename, vfs_readdir, vfs_sync, vfs_statfs,
-    VfsFileAttr, VfsDirEntry, VfsStatFs,
+    vfs_unmount, vfs_open, vfs_close, vfs_read, vfs_write, vfs_lseek, vfs_stat, vfs_fstat,
+    vfs_mkdir, vfs_unlink, vfs_rmdir, vfs_rename, vfs_freaddir, vfs_sync, vfs_statfs,
+    vfs_readlink, vfs_symlink, vfs_chmod, vfs_chown, vfs_utimes,
+    vfs_xattr_set, vfs_xattr_get, vfs_xattr_list, vfs_xattr_remove,
+    VfsFileAttr, VfsStatFs,
 };
+use crate::fs::vfs::FileSystem;
 use crate::services::process::{AppRect, UserEvent};
 use crate::sync::SpinLock;
 use alloc::vec;
 use alloc::vec::Vec;
 use alloc::boxed::Box;
 use crate::userspace::syscall::{
-    AppContext, AppEvent, AppRect as UserAppRect, CursorInfo, DeviceInfo, DrawCommand, MemoryInfo, ProcessInfo, RedrawRequest, SpawnAppRequest, StorageFileInfo,
+    AppContext, AppEvent, CursorInfo, DeviceInfo, DrawCommand, MemoryInfo, ProcessInfo, RedrawRequest, SpawnAppRequest, StorageFileInfo,
     StorageRequest, SystemStats, MAX_WRITE_LENGTH, SYSCALL_CLIPBOARD_GET, SYSCALL_CLIPBOARD_SET,
     SYSCALL_DEVICE_INFO, SYSCALL_DRAW_FILL_RECT, SYSCALL_DRAW_RECT, SYSCALL_DRAW_TEXT,
     SYSCALL_EXIT, SYSCALL_GET_APP_CONTEXT, SYSCALL_GET_CURSOR, SYSCALL_GET_HOSTNAME, SYSCALL_GET_HEIGHT,
@@ -417,7 +420,7 @@ fn handle_syscall(regs_ptr: *mut u32) -> u32 {
                 let req = unsafe { read_user::<VfsIoRequest>(*regs_ptr.add(REG_EBX)) };
                 if let Some(req) = req {
                     let mut buf = vec![0u8; req.buf_len as usize];
-                    match vfs_read(req.fd, &mut buf, req.offset) {
+                    match vfs_read(req.fd, &mut buf) {
                         Ok(n) => {
                             if crate::memory::paging::user_range_is_mapped(req.buf_ptr, n) {
                                 unsafe {
@@ -444,7 +447,7 @@ fn handle_syscall(regs_ptr: *mut u32) -> u32 {
                         unsafe {
                             core::ptr::copy_nonoverlapping(req.buf_ptr as *const u8, buf.as_mut_ptr(), req.buf_len as usize);
                         }
-                        match vfs_write(req.fd, &buf, req.offset) {
+                        match vfs_write(req.fd, &buf) {
                             Ok(n) => n as u32,
                             Err(e) => e as u32,
                         }
@@ -603,12 +606,34 @@ fn handle_syscall(regs_ptr: *mut u32) -> u32 {
                 let req = unsafe { read_user::<VfsReaddirRequest>(*regs_ptr.add(REG_EBX)) };
                 if let Some(req) = req {
                     let mut entries = Vec::new();
-                    match vfs_readdir(req.fd, req.offset, &mut entries) {
+                    match vfs_freaddir(req.fd, req.offset, &mut entries) {
                         Ok(n) => {
-                            let entry_size = size_of::<VfsDirEntry>();
-                            let copy_len = (req.buf_len as usize).min(n * entry_size);
+                            let entry_size = size_of::<crate::userspace::syscall::VfsDirEntry>();
+                            let copy_len = (req.buf_len as usize).min((n as usize) * entry_size);
                             if copy_len > 0 && crate::memory::paging::user_range_is_mapped(req.buf_ptr, copy_len) {
-                                let src = entries.as_ptr() as *const u8;
+                                // Convert kernel DirEntry to userspace VfsDirEntry
+                                let mut user_entries = Vec::with_capacity(entries.len());
+                                for e in &entries {
+                                    let mut name = [0u8; 64];
+                                    let name_bytes = e.name.as_bytes();
+                                    let copy_n = name_bytes.len().min(63);
+                                    name[..copy_n].copy_from_slice(&name_bytes[..copy_n]);
+                                    let file_type_u32 = match e.file_type {
+                                        crate::fs::vfs::FileType::Regular => 0,
+                                        crate::fs::vfs::FileType::Directory => 1,
+                                        crate::fs::vfs::FileType::Symlink => 2,
+                                        crate::fs::vfs::FileType::BlockDevice => 3,
+                                        crate::fs::vfs::FileType::CharDevice => 4,
+                                        crate::fs::vfs::FileType::Fifo => 5,
+                                        crate::fs::vfs::FileType::Socket => 6,
+                                    };
+                                    user_entries.push(crate::userspace::syscall::VfsDirEntry {
+                                        name,
+                                        inode_id: e.inode_id,
+                                        file_type: file_type_u32,
+                                    });
+                                }
+                                let src = user_entries.as_ptr() as *const u8;
                                 unsafe {
                                     core::ptr::copy_nonoverlapping(src, req.buf_ptr as *mut u8, copy_len);
                                 }
@@ -1356,5 +1381,6 @@ fn storage_error(error: crate::drivers::disk::StorageError) -> u32 {
         StorageError::FileTooLarge => 6,
         StorageError::DirectoryFull => 7,
         StorageError::NotFound => 8,
+        StorageError::OutOfMemory => 12,
     }
 }

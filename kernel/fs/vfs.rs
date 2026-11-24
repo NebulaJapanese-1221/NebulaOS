@@ -20,6 +20,7 @@
 use alloc::vec::Vec;
 use alloc::string::{String, ToString};
 use alloc::boxed::Box;
+use alloc::sync::Arc;
 use crate::sync::SpinLock;
 
 pub const MAX_PATH: usize = 256;
@@ -33,6 +34,7 @@ pub enum VfsError {
     IsDirectory,
     NoSpace,
     NoMemory,
+    OutOfMemory,
     InvalidName,
     NotEmpty,
     PermissionDenied,
@@ -41,6 +43,7 @@ pub enum VfsError {
     NotMounted,
     TooManyOpenFiles,
     BadFileDescriptor,
+    DirectoryFull,
 }
 
 impl From<VfsError> for crate::drivers::disk::StorageError {
@@ -50,10 +53,31 @@ impl From<VfsError> for crate::drivers::disk::StorageError {
             VfsError::AlreadyExists => crate::drivers::disk::StorageError::InvalidName,
             VfsError::NoSpace => crate::drivers::disk::StorageError::FileTooLarge,
             VfsError::NoMemory => crate::drivers::disk::StorageError::OutOfMemory,
+            VfsError::OutOfMemory => crate::drivers::disk::StorageError::OutOfMemory,
             VfsError::InvalidName => crate::drivers::disk::StorageError::InvalidName,
             VfsError::NotEmpty => crate::drivers::disk::StorageError::DirectoryFull,
+            VfsError::DirectoryFull => crate::drivers::disk::StorageError::DirectoryFull,
             VfsError::IoError => crate::drivers::disk::StorageError::Io,
             _ => crate::drivers::disk::StorageError::Io,
+        }
+    }
+}
+
+impl From<crate::drivers::disk::StorageError> for VfsError {
+    fn from(err: crate::drivers::disk::StorageError) -> Self {
+        match err {
+            crate::drivers::disk::StorageError::NoDisk => VfsError::IoError,
+            crate::drivers::disk::StorageError::NotReady => VfsError::IoError,
+            crate::drivers::disk::StorageError::ReadError => VfsError::IoError,
+            crate::drivers::disk::StorageError::WriteError => VfsError::IoError,
+            crate::drivers::disk::StorageError::NotFormatted => VfsError::NotMounted,
+            crate::drivers::disk::StorageError::NotFound => VfsError::NotFound,
+            crate::drivers::disk::StorageError::InvalidName => VfsError::InvalidName,
+            crate::drivers::disk::StorageError::NotBlank => VfsError::AlreadyExists,
+            crate::drivers::disk::StorageError::DirectoryFull => VfsError::DirectoryFull,
+            crate::drivers::disk::StorageError::FileTooLarge => VfsError::NoSpace,
+            crate::drivers::disk::StorageError::Io => VfsError::IoError,
+            crate::drivers::disk::StorageError::OutOfMemory => VfsError::OutOfMemory,
         }
     }
 }
@@ -102,7 +126,7 @@ pub trait FileSystem: Send + Sync {
     fn name(&self) -> &'static str;
     fn mount(&mut self, device: u32, options: &str) -> Result<(), VfsError>;
     fn unmount(&mut self) -> Result<(), VfsError>;
-    fn root_inode(&self) -> Box<dyn Inode>;
+    fn root_inode(&self) -> Arc<dyn Inode>;
     fn statfs(&self) -> Result<StatFs, VfsError>;
     fn sync(&mut self) -> Result<(), VfsError>;
 }
@@ -112,25 +136,25 @@ pub trait Inode: Send + Sync {
     fn inode_num(&self) -> u64 { self.inode_id() }
     fn attr(&self) -> Result<FileAttr, VfsError>;
     fn set_attr(&self, attr: &FileAttr) -> Result<(), VfsError>;
-    fn lookup(&self, name: &str) -> Result<Box<dyn Inode>, VfsError>;
-    fn create(&self, name: &str, file_type: FileType, mode: u32) -> Result<Box<dyn Inode>, VfsError>;
+    fn lookup(&self, name: &str) -> Result<Arc<dyn Inode>, VfsError>;
+    fn create(&self, name: &str, file_type: FileType, mode: u32) -> Result<Arc<dyn Inode>, VfsError>;
     fn unlink(&self, name: &str) -> Result<(), VfsError>;
-    fn mkdir(&self, name: &str, mode: u32) -> Result<Box<dyn Inode>, VfsError>;
+    fn mkdir(&self, name: &str, mode: u32) -> Result<Arc<dyn Inode>, VfsError>;
     fn rmdir(&self, name: &str) -> Result<(), VfsError>;
     fn rename(&self, old_name: &str, target_dir: &dyn Inode, new_name: &str) -> Result<(), VfsError>;
     fn read_dir(&self, offset: u64, entries: &mut Vec<DirEntry>) -> Result<u64, VfsError>;
-    fn open_file(&self, flags: u32) -> Result<Box<dyn File>, VfsError>;
+    fn open_file(&self, flags: u32) -> Result<Arc<dyn File>, VfsError>;
     fn readlink(&self) -> Result<String, VfsError>;
     fn symlink(&self, target: &str, name: &str) -> Result<(), VfsError>;
 }
 
 pub trait File: Send + Sync {
-    fn read(&mut self, buf: &mut [u8], offset: u64) -> Result<usize, VfsError>;
-    fn write(&mut self, buf: &[u8], offset: u64) -> Result<usize, VfsError>;
-    fn flush(&mut self) -> Result<(), VfsError>;
-    fn fsync(&mut self) -> Result<(), VfsError>;
-    fn ioctl(&mut self, request: u32, arg: u64) -> Result<u64, VfsError>;
-    fn get_inode(&self) -> Box<dyn Inode>;
+    fn read(&self, buf: &mut [u8], offset: u64) -> Result<usize, VfsError>;
+    fn write(&self, buf: &[u8], offset: u64) -> Result<usize, VfsError>;
+    fn flush(&self) -> Result<(), VfsError>;
+    fn fsync(&self) -> Result<(), VfsError>;
+    fn ioctl(&self, request: u32, arg: u64) -> Result<u64, VfsError>;
+    fn get_inode(&self) -> Arc<dyn Inode>;
 }
 
 #[derive(Debug, Clone)]
@@ -154,16 +178,17 @@ pub struct StatFs {
 struct MountPoint {
     path: String,
     fs: Box<dyn FileSystem>,
-    root_inode: Box<dyn Inode>,
+    root_inode: Arc<dyn Inode>,
 }
 
 static MOUNTS: SpinLock<Vec<MountPoint>> = SpinLock::new(Vec::new());
 static NEXT_FD: SpinLock<u32> = SpinLock::new(3);
 static FILE_TABLE: SpinLock<Vec<Option<FileDesc>>> = SpinLock::new(Vec::new());
 
+#[derive(Clone)]
 struct FileDesc {
-    file: Box<dyn File>,
-    inode: Box<dyn Inode>,
+    file: Arc<dyn File>,
+    inode: Arc<dyn Inode>,
     flags: u32,
     offset: u64,
     ref_count: u32,
@@ -181,7 +206,7 @@ pub fn init() {
     file_table[2] = Some(FileDesc::stderr());
 }
 
-pub fn mount(path: &str, fs: Box<dyn FileSystem>, options: &str) -> Result<(), VfsError> {
+pub fn mount(path: &str, fs: Box<dyn FileSystem>, _options: &str) -> Result<(), VfsError> {
     let path = normalize_path(path);
     let mut mounts = MOUNTS.lock();
     
@@ -228,7 +253,7 @@ fn find_mount(path: &str) -> Option<(usize, String)> {
     best_match
 }
 
-fn resolve_path(path: &str) -> Result<(Box<dyn Inode>, String), VfsError> {
+fn resolve_path(path: &str) -> Result<(Arc<dyn Inode>, String), VfsError> {
     let path = normalize_path(path);
     let (mount_idx, mount_path) = find_mount(&path).ok_or(VfsError::NotMounted)?;
     let mounts = MOUNTS.lock();
@@ -311,7 +336,8 @@ pub fn read(fd: u32, buf: &mut [u8]) -> Result<usize, VfsError> {
     let desc = file_table.get_mut(fd as usize).and_then(|d| d.as_mut())
         .ok_or(VfsError::BadFileDescriptor)?;
     
-    let n = desc.file.read(buf, desc.offset)?;
+    let mut file = Arc::get_mut(&mut desc.file).ok_or(VfsError::IoError)?;
+    let n = file.read(buf, desc.offset)?;
     desc.offset += n as u64;
     Ok(n)
 }
@@ -323,13 +349,15 @@ pub fn write(fd: u32, buf: &[u8]) -> Result<usize, VfsError> {
     
     let offset = if desc.flags & 0x400 != 0 {
         // O_APPEND - get file size
-        let attr = desc.inode.attr()?;
+        let mut inode = Arc::get_mut(&mut desc.inode).ok_or(VfsError::IoError)?;
+        let attr = inode.attr()?;
         attr.size
     } else {
         desc.offset
     };
     
-    let n = desc.file.write(buf, offset)?;
+    let mut file = Arc::get_mut(&mut desc.file).ok_or(VfsError::IoError)?;
+    let n = file.write(buf, offset)?;
     desc.offset = offset + n as u64;
     Ok(n)
 }
@@ -342,14 +370,16 @@ pub fn lseek(fd: u32, offset: i64, whence: u32) -> Result<u64, VfsError> {
     let new_offset = match whence {
         0 => offset as u64, // SEEK_SET
         1 => {
-            let attr = desc.inode.attr()?;
+            let mut inode = Arc::get_mut(&mut desc.inode).ok_or(VfsError::IoError)?;
+            let attr = inode.attr()?;
             if offset < 0 && (-offset) as u64 > desc.offset {
                 return Err(VfsError::InvalidName);
             }
             (desc.offset as i64 + offset) as u64
         }
         2 => {
-            let attr = desc.inode.attr()?;
+            let mut inode = Arc::get_mut(&mut desc.inode).ok_or(VfsError::IoError)?;
+            let attr = inode.attr()?;
             if offset < 0 && (-offset) as u64 > attr.size {
                 return Err(VfsError::InvalidName);
             }
@@ -368,7 +398,8 @@ pub fn stat(path: &str) -> Result<FileAttr, VfsError> {
     let inode = if name.is_empty() {
         parent
     } else {
-        parent.lookup(&name)?
+        let new_inode = parent.lookup(&name)?;
+        Arc::from(new_inode)
     };
     
     inode.attr()
@@ -421,7 +452,7 @@ pub fn rename(old_path: &str, new_path: &str) -> Result<(), VfsError> {
 pub fn read_dir(path: &str, offset: u64, entries: &mut Vec<DirEntry>) -> Result<u64, VfsError> {
     let (parent, name) = resolve_path(path)?;
     
-    let inode = if name.is_empty() {
+    let inode: Arc<dyn Inode> = if name.is_empty() {
         parent
     } else {
         parent.lookup(&name)?
@@ -430,9 +461,18 @@ pub fn read_dir(path: &str, offset: u64, entries: &mut Vec<DirEntry>) -> Result<
     inode.read_dir(offset, entries)
 }
 
+pub fn freaddir(fd: u32, offset: u64, entries: &mut Vec<DirEntry>) -> Result<u64, VfsError> {
+    let file_table = FILE_TABLE.lock();
+    let desc = file_table.get(fd as usize).and_then(|d| d.as_ref())
+        .ok_or(VfsError::BadFileDescriptor)?;
+    
+    // Use the inode directly from the file descriptor
+    desc.inode.read_dir(offset, entries)
+}
+
 pub fn sync() -> Result<(), VfsError> {
-    let mounts = MOUNTS.lock();
-    for mount in mounts.iter() {
+    let mut mounts = MOUNTS.lock();
+    for mount in mounts.iter_mut() {
         mount.fs.sync()?;
     }
     Ok(())
@@ -447,7 +487,7 @@ pub fn statfs(path: &str) -> Result<StatFs, VfsError> {
 pub fn readlink(path: &str, buf: &mut [u8]) -> Result<usize, VfsError> {
     let (parent, name) = resolve_path(path)?;
     
-    let inode = if name.is_empty() {
+    let inode: Arc<dyn Inode> = if name.is_empty() {
         return Err(VfsError::InvalidName);
     } else {
         parent.lookup(&name)?
@@ -473,7 +513,7 @@ pub fn symlink(target: &str, linkpath: &str) -> Result<(), VfsError> {
 pub fn chmod(path: &str, mode: u32) -> Result<(), VfsError> {
     let (parent, name) = resolve_path(path)?;
     
-    let inode = if name.is_empty() {
+    let inode: Arc<dyn Inode> = if name.is_empty() {
         parent
     } else {
         parent.lookup(&name)?
@@ -487,7 +527,7 @@ pub fn chmod(path: &str, mode: u32) -> Result<(), VfsError> {
 pub fn chown(path: &str, uid: u32, gid: u32) -> Result<(), VfsError> {
     let (parent, name) = resolve_path(path)?;
     
-    let inode = if name.is_empty() {
+    let inode: Arc<dyn Inode> = if name.is_empty() {
         parent
     } else {
         parent.lookup(&name)?
@@ -502,7 +542,7 @@ pub fn chown(path: &str, uid: u32, gid: u32) -> Result<(), VfsError> {
 pub fn utimes(path: &str, atime: u64, mtime: u64) -> Result<(), VfsError> {
     let (parent, name) = resolve_path(path)?;
     
-    let inode = if name.is_empty() {
+    let inode: Arc<dyn Inode> = if name.is_empty() {
         parent
     } else {
         parent.lookup(&name)?
@@ -518,7 +558,7 @@ pub fn utimes(path: &str, atime: u64, mtime: u64) -> Result<(), VfsError> {
 pub fn xattr_set(path: &str, name: &str, value: &[u8], _flags: u32) -> Result<(), VfsError> {
     let (parent, name_) = resolve_path(path)?;
     
-    let inode = if name_.is_empty() {
+    let inode: Arc<dyn Inode> = if name_.is_empty() {
         parent
     } else {
         parent.lookup(&name_)?
@@ -528,7 +568,7 @@ pub fn xattr_set(path: &str, name: &str, value: &[u8], _flags: u32) -> Result<()
     // This is a simple implementation - a real one would use extended attributes in the filesystem
     let xattr_path = alloc::format!(".xattr/{}", name);
     inode.create(&xattr_path, FileType::Regular, 0o600)?;
-    let file = inode.open_file(0)?;
+    let mut file = inode.open_file(0)?;
     file.write(value, 0)?;
     file.flush()?;
     Ok(())
@@ -537,7 +577,7 @@ pub fn xattr_set(path: &str, name: &str, value: &[u8], _flags: u32) -> Result<()
 pub fn xattr_get(path: &str, name: &str, buf: &mut [u8]) -> Result<usize, VfsError> {
     let (parent, name_) = resolve_path(path)?;
     
-    let inode = if name_.is_empty() {
+    let inode: Arc<dyn Inode> = if name_.is_empty() {
         parent
     } else {
         parent.lookup(&name_)?
@@ -552,7 +592,7 @@ pub fn xattr_get(path: &str, name: &str, buf: &mut [u8]) -> Result<usize, VfsErr
 pub fn xattr_list(path: &str, buf: &mut [u8]) -> Result<usize, VfsError> {
     let (parent, name_) = resolve_path(path)?;
     
-    let inode = if name_.is_empty() {
+    let inode: Arc<dyn Inode> = if name_.is_empty() {
         parent
     } else {
         parent.lookup(&name_)?
@@ -622,8 +662,8 @@ fn normalize_path(path: &str) -> String {
 impl FileDesc {
     fn stdin() -> Self {
         Self {
-            file: Box::new(NullFile),
-            inode: Box::new(NullInode),
+            file: Arc::new(NullFile),
+            inode: Arc::new(NullInode),
             flags: 0,
             offset: 0,
             ref_count: 1,
@@ -633,8 +673,8 @@ impl FileDesc {
     
     fn stdout() -> Self {
         Self {
-            file: Box::new(ConsoleFile),
-            inode: Box::new(NullInode),
+            file: Arc::new(ConsoleFile),
+            inode: Arc::new(NullInode),
             flags: 1,
             offset: 0,
             ref_count: 1,
@@ -644,8 +684,8 @@ impl FileDesc {
     
     fn stderr() -> Self {
         Self {
-            file: Box::new(ConsoleFile),
-            inode: Box::new(NullInode),
+            file: Arc::new(ConsoleFile),
+            inode: Arc::new(NullInode),
             flags: 1,
             offset: 0,
             ref_count: 1,
@@ -656,31 +696,31 @@ impl FileDesc {
 
 struct NullFile;
 impl File for NullFile {
-    fn read(&mut self, buf: &mut [u8], _offset: u64) -> Result<usize, VfsError> {
+    fn read(&self, buf: &mut [u8], _offset: u64) -> Result<usize, VfsError> {
         for b in buf.iter_mut() { *b = 0; }
         Ok(buf.len())
     }
-    fn write(&mut self, _buf: &[u8], _offset: u64) -> Result<usize, VfsError> { Ok(0) }
-    fn flush(&mut self) -> Result<(), VfsError> { Ok(()) }
-    fn fsync(&mut self) -> Result<(), VfsError> { Ok(()) }
-    fn ioctl(&mut self, _request: u32, _arg: u64) -> Result<u64, VfsError> { Err(VfsError::NotSupported) }
-    fn get_inode(&self) -> Box<dyn Inode> { Box::new(NullInode) }
+    fn write(&self, _buf: &[u8], _offset: u64) -> Result<usize, VfsError> { Ok(0) }
+    fn flush(&self) -> Result<(), VfsError> { Ok(()) }
+    fn fsync(&self) -> Result<(), VfsError> { Ok(()) }
+    fn ioctl(&self, _request: u32, _arg: u64) -> Result<u64, VfsError> { Err(VfsError::NotSupported) }
+    fn get_inode(&self) -> Arc<dyn Inode> { Arc::new(NullInode) }
 }
 
 struct ConsoleFile;
 impl File for ConsoleFile {
-    fn read(&mut self, buf: &mut [u8], _offset: u64) -> Result<usize, VfsError> {
+    fn read(&self, buf: &mut [u8], _offset: u64) -> Result<usize, VfsError> {
         for b in buf.iter_mut() { *b = 0; }
         Ok(buf.len())
     }
-    fn write(&mut self, buf: &[u8], _offset: u64) -> Result<usize, VfsError> {
+    fn write(&self, buf: &[u8], _offset: u64) -> Result<usize, VfsError> {
         crate::drivers::serial::write_string(core::str::from_utf8(buf).unwrap_or(""));
         Ok(buf.len())
     }
-    fn flush(&mut self) -> Result<(), VfsError> { Ok(()) }
-    fn fsync(&mut self) -> Result<(), VfsError> { Ok(()) }
-    fn ioctl(&mut self, _request: u32, _arg: u64) -> Result<u64, VfsError> { Err(VfsError::NotSupported) }
-    fn get_inode(&self) -> Box<dyn Inode> { Box::new(NullInode) }
+    fn flush(&self) -> Result<(), VfsError> { Ok(()) }
+    fn fsync(&self) -> Result<(), VfsError> { Ok(()) }
+    fn ioctl(&self, _request: u32, _arg: u64) -> Result<u64, VfsError> { Err(VfsError::NotSupported) }
+    fn get_inode(&self) -> Arc<dyn Inode> { Arc::new(NullInode) }
 }
 
 struct NullInode;
@@ -688,14 +728,14 @@ impl Inode for NullInode {
     fn inode_id(&self) -> u64 { 0 }
     fn attr(&self) -> Result<FileAttr, VfsError> { Ok(FileAttr::default()) }
     fn set_attr(&self, _attr: &FileAttr) -> Result<(), VfsError> { Ok(()) }
-    fn lookup(&self, _name: &str) -> Result<Box<dyn Inode>, VfsError> { Err(VfsError::NotFound) }
-    fn create(&self, _name: &str, _file_type: FileType, _mode: u32) -> Result<Box<dyn Inode>, VfsError> { Err(VfsError::NotSupported) }
+    fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, VfsError> { Err(VfsError::NotFound) }
+    fn create(&self, _name: &str, _file_type: FileType, _mode: u32) -> Result<Arc<dyn Inode>, VfsError> { Err(VfsError::NotSupported) }
     fn unlink(&self, _name: &str) -> Result<(), VfsError> { Err(VfsError::NotSupported) }
-    fn mkdir(&self, _name: &str, _mode: u32) -> Result<Box<dyn Inode>, VfsError> { Err(VfsError::NotSupported) }
+    fn mkdir(&self, _name: &str, _mode: u32) -> Result<Arc<dyn Inode>, VfsError> { Err(VfsError::NotSupported) }
     fn rmdir(&self, _name: &str) -> Result<(), VfsError> { Err(VfsError::NotSupported) }
     fn rename(&self, _old_name: &str, _target_dir: &dyn Inode, _new_name: &str) -> Result<(), VfsError> { Err(VfsError::NotSupported) }
     fn read_dir(&self, _offset: u64, _entries: &mut Vec<DirEntry>) -> Result<u64, VfsError> { Ok(0) }
-    fn open_file(&self, _flags: u32) -> Result<Box<dyn File>, VfsError> { Err(VfsError::NotSupported) }
+    fn open_file(&self, _flags: u32) -> Result<Arc<dyn File>, VfsError> { Err(VfsError::NotSupported) }
     fn readlink(&self) -> Result<String, VfsError> { Err(VfsError::NotSupported) }
     fn symlink(&self, _target: &str, _name: &str) -> Result<(), VfsError> { Err(VfsError::NotSupported) }
 }

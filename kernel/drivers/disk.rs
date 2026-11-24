@@ -72,6 +72,7 @@ pub enum StorageError {
     DirectoryFull,
     FileTooLarge,
     Io,
+    OutOfMemory,
 }
 
 #[derive(Clone, Copy)]

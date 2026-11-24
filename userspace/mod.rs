@@ -19,3 +19,4 @@
 pub mod apps;
 pub mod desktop;
 pub mod syscall;
+pub mod libc;

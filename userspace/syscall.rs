@@ -15,7 +15,8 @@
 // You should have received a copy of the GNU General Public License
 // along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
 
-//! Rust wrappers for the system-call ABI available to Ring-3 processes.
+//! Raw system-call ABI definitions for Ring-3 processes.
+//! Use libc module for POSIX-like wrappers.
 
 pub const SYSCALL_EXIT: u32 = 0;
 pub const SYSCALL_PRINT: u32 = 1;
@@ -436,11 +437,21 @@ pub struct VfsFileAttr {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub struct VfsDirEntry {
     pub name: [u8; 64],
     pub inode_id: u64,
     pub file_type: u32,
+}
+
+impl Default for VfsDirEntry {
+    fn default() -> Self {
+        Self {
+            name: [0; 64],
+            inode_id: 0,
+            file_type: 0,
+        }
+    }
 }
 
 #[repr(C)]
@@ -456,21 +467,23 @@ pub struct VfsStatFs {
 }
 
 #[cfg(feature = "user-app")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SyscallError {
-    MessageTooLong,
-    Unavailable,
-    InvalidArgument,
+#[inline]
+pub fn invoke(number: u32, first_argument: u32, second_argument: u32) -> u32 {
+    let mut result = number;
+    unsafe {
+        core::arch::asm!(
+            "int 0x80",
+            inout("eax") result,
+            in("ebx") first_argument,
+            in("ecx") second_argument,
+        );
+    }
+    result
 }
 
 #[cfg(feature = "user-app")]
-pub fn write(message: &[u8]) -> Result<(), SyscallError> {
-    if message.len() > MAX_WRITE_LENGTH {
-        return Err(SyscallError::MessageTooLong);
-    }
-
-    let result = invoke(SYSCALL_PRINT, message.as_ptr() as u32, message.len() as u32);
-    if result == message.len() as u32 {
+pub fn call_struct<T>(number: u32, value: &mut T) -> Result<(), SyscallError> {
+    if invoke(number, value as *mut T as u32, 0) == 0 {
         Ok(())
     } else {
         Err(SyscallError::Unavailable)
@@ -488,102 +501,8 @@ pub fn uptime_ticks() -> Result<u32, SyscallError> {
 }
 
 #[cfg(feature = "user-app")]
-pub fn exit(code: u32) -> Result<(), SyscallError> {
-    if invoke(SYSCALL_EXIT, code, 0) == u32::MAX {
-        Err(SyscallError::Unavailable)
-    } else {
-        Ok(())
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn draw(command: &mut DrawCommand) -> Result<(), SyscallError> {
-    let number = match command.kind {
-        0 => SYSCALL_DRAW_FILL_RECT,
-        1 => SYSCALL_DRAW_RECT,
-        2 => SYSCALL_DRAW_TEXT,
-        _ => return Err(SyscallError::InvalidArgument),
-    };
-    call_struct(number, command)
-}
-
-#[cfg(feature = "user-app")]
-pub fn poll_event(event: &mut AppEvent) -> Result<bool, SyscallError> {
-    let result = invoke(SYSCALL_POLL_EVENT, event as *mut AppEvent as u32, 0);
-    match result {
-        0 => Ok(false),
-        1 => Ok(true),
-        _ => Err(SyscallError::Unavailable),
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn app_context(context: &mut AppContext) -> Result<(), SyscallError> {
-    if invoke(
-        SYSCALL_GET_APP_CONTEXT,
-        context as *mut AppContext as u32,
-        0,
-    ) == 0
-    {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn storage(request: &mut StorageRequest) -> u32 {
-    let number = match request.op {
-        0 => SYSCALL_STORAGE_LIST,
-        1 => SYSCALL_STORAGE_READ,
-        2 => SYSCALL_STORAGE_WRITE,
-        3 => SYSCALL_STORAGE_DELETE,
-        4 => SYSCALL_STORAGE_RENAME,
-        5 => SYSCALL_STORAGE_FORMAT,
-        _ => return u32::MAX,
-    };
-    invoke(number, request as *mut StorageRequest as u32, 0)
-}
-
-#[cfg(feature = "user-app")]
 pub fn system_stats(stats: &mut SystemStats) -> Result<(), SyscallError> {
     call_struct(SYSCALL_SYSTEM_STATS, stats)
-}
-
-#[cfg(feature = "user-app")]
-pub fn set_dark_theme(enabled: bool) -> Result<(), SyscallError> {
-    if invoke(SYSCALL_SET_WALLPAPER_THEME, u32::from(enabled), 0) == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn set_mouse_sensitivity(sensitivity: u32) -> Result<(), SyscallError> {
-    if !matches!(sensitivity, 1..=4) {
-        return Err(SyscallError::InvalidArgument);
-    }
-    if invoke(SYSCALL_SET_MOUSE_SENSITIVITY, sensitivity, 0) == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn process_info(info: &mut ProcessInfo) -> Result<(), SyscallError> {
-    call_struct(SYSCALL_PROCESS_INFO, info)
-}
-
-#[cfg(feature = "user-app")]
-pub fn memory_info(info: &mut MemoryInfo) -> Result<(), SyscallError> {
-    call_struct(SYSCALL_MEMORY_INFO, info)
-}
-
-#[cfg(feature = "user-app")]
-pub fn device_info(info: &mut DeviceInfo) -> Result<(), SyscallError> {
-    call_struct(SYSCALL_DEVICE_INFO, info)
 }
 
 #[cfg(feature = "user-app")]
@@ -606,29 +525,11 @@ pub fn pci_device(index: u32, info: &mut PciDeviceInfo) -> Result<(), SyscallErr
 }
 
 #[cfg(feature = "user-app")]
-pub fn yield_now() -> Result<(), SyscallError> {
-    if invoke(SYSCALL_YIELD, 0, 0) == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn sleep_ticks(ticks: u32) -> Result<(), SyscallError> {
-    if invoke(SYSCALL_SLEEP, ticks, 0) == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn terminate_process(pid: u32) -> Result<(), SyscallError> {
-    if pid == 0 {
+pub fn set_mouse_sensitivity(sensitivity: u32) -> Result<(), SyscallError> {
+    if !matches!(sensitivity, 1..=4) {
         return Err(SyscallError::InvalidArgument);
     }
-    if invoke(SYSCALL_TERMINATE_PROCESS, pid, 0) == 0 {
+    if invoke(SYSCALL_SET_MOUSE_SENSITIVITY, sensitivity, 0) == 0 {
         Ok(())
     } else {
         Err(SyscallError::Unavailable)
@@ -636,8 +537,8 @@ pub fn terminate_process(pid: u32) -> Result<(), SyscallError> {
 }
 
 #[cfg(feature = "user-app")]
-pub fn reboot() -> Result<(), SyscallError> {
-    if invoke(SYSCALL_REBOOT, 0, 0) == 0 {
+pub fn set_dark_theme(enabled: bool) -> Result<(), SyscallError> {
+    if invoke(SYSCALL_SET_WALLPAPER_THEME, u32::from(enabled), 0) == 0 {
         Ok(())
     } else {
         Err(SyscallError::Unavailable)
@@ -645,515 +546,23 @@ pub fn reboot() -> Result<(), SyscallError> {
 }
 
 #[cfg(feature = "user-app")]
-pub fn shutdown() -> Result<(), SyscallError> {
-    if invoke(SYSCALL_SHUTDOWN, 0, 0) == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn hostname(output: &mut [u8]) -> Result<usize, SyscallError> {
-    let result = invoke(SYSCALL_GET_HOSTNAME, output.as_mut_ptr() as u32, output.len() as u32);
-    if result == u32::MAX {
-        Err(SyscallError::Unavailable)
-    } else {
-        Ok(result as usize)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn nice(increment: i32) -> Result<i32, SyscallError> {
-    let result = invoke(SYSCALL_NICE, increment as u32, 0);
-    if result == u32::MAX {
-        Err(SyscallError::Unavailable)
-    } else {
-        Ok(result as i32)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn clipboard_set(data: &[u8]) -> Result<usize, SyscallError> {
-    if data.len() > CLIPBOARD_MAX {
-        return Err(SyscallError::InvalidArgument);
-    }
-    let result = invoke(SYSCALL_CLIPBOARD_SET, data.as_ptr() as u32, data.len() as u32);
-    if result == u32::MAX {
-        Err(SyscallError::Unavailable)
-    } else {
-        Ok(result as usize)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn clipboard_get(output: &mut [u8]) -> Result<usize, SyscallError> {
-    let result = invoke(SYSCALL_CLIPBOARD_GET, output.as_mut_ptr() as u32, output.len() as u32);
-    if result == u32::MAX {
-        Err(SyscallError::Unavailable)
-    } else {
-        Ok(result as usize)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn spawn_app(req: &SpawnAppRequest) -> Result<u32, SyscallError> {
-    let result = invoke(SYSCALL_SPAWN_APP, req as *const _ as u32, 0);
-    if result == u32::MAX {
-        Err(SyscallError::Unavailable)
-    } else {
-        Ok(result)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn request_redraw(req: &RedrawRequest) -> Result<(), SyscallError> {
-    if invoke(SYSCALL_REQUEST_REDRAW, req as *const _ as u32, 0) == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn get_key() -> Option<u8> {
-    let res = invoke(SYSCALL_GET_KEY, 0, 0);
-    if res == u32::MAX || res == 0 { None } else { Some(res as u8) }
-}
-
-#[cfg(feature = "user-app")]
-pub fn get_mouse() -> Option<(u32, u32, bool, bool, bool)> {
-    let mut x = 0u32;
-    let mut y = 0u32;
-    let mut buttons = 0u32;
-    let res = invoke(SYSCALL_GET_MOUSE, &mut x as *mut _ as u32, &mut y as *mut _ as u32);
-    if res == u32::MAX { None } else { Some((x, y, buttons & 1 != 0, buttons & 2 != 0, buttons & 4 != 0)) }
-}
-
-#[cfg(feature = "user-app")]
-pub fn present() -> Result<(), SyscallError> {
-    if invoke(SYSCALL_PRESENT, 0, 0) == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn present_rect(x: u32, y: u32, width: u32, height: u32) -> Result<(), SyscallError> {
-    if invoke(SYSCALL_PRESENT_RECT, x, y, (width << 16) | height) == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn get_cursor() -> Option<CursorInfo> {
-    let mut info = CursorInfo::default();
-    let res = invoke(SYSCALL_GET_CURSOR, &mut info as *mut _ as u32, 0);
-    if res == u32::MAX { None } else { Some(info) }
-}
-
-#[cfg(feature = "user-app")]
-pub fn set_cursor(info: &CursorInfo) -> Result<(), SyscallError> {
-    if invoke(SYSCALL_SET_CURSOR, info as *const _ as u32, 0) == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn get_width() -> u32 {
-    invoke(SYSCALL_GET_WIDTH, 0, 0)
-}
-
-#[cfg(feature = "user-app")]
-pub fn get_height() -> u32 {
-    invoke(SYSCALL_GET_HEIGHT, 0, 0)
-}
-
-// VFS wrapper functions
-#[cfg(feature = "user-app")]
-pub fn vfs_open(path: &str, flags: u32, mode: u32) -> Result<u32, SyscallError> {
-    let mut req = VfsOpenRequest {
-        path_ptr: path.as_ptr() as u32,
-        path_len: path.len() as u32,
-        flags,
-        mode,
+pub fn storage(request: &mut StorageRequest) -> u32 {
+    let number = match request.op {
+        0 => SYSCALL_STORAGE_LIST,
+        1 => SYSCALL_STORAGE_READ,
+        2 => SYSCALL_STORAGE_WRITE,
+        3 => SYSCALL_STORAGE_DELETE,
+        4 => SYSCALL_STORAGE_RENAME,
+        5 => SYSCALL_STORAGE_FORMAT,
+        _ => return u32::MAX,
     };
-    let result = invoke(SYSCALL_VFS_OPEN, &mut req as *mut _ as u32, 0);
-    if result == u32::MAX {
-        Err(SyscallError::Unavailable)
-    } else {
-        Ok(result)
-    }
+    invoke(number, request as *mut StorageRequest as u32, 0)
 }
 
 #[cfg(feature = "user-app")]
-pub fn vfs_close(fd: u32) -> Result<(), SyscallError> {
-    if invoke(SYSCALL_VFS_CLOSE, fd, 0) == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn vfs_read(fd: u32, buf: &mut [u8]) -> Result<usize, SyscallError> {
-    let mut req = VfsIoRequest {
-        fd,
-        buf_ptr: buf.as_mut_ptr() as u32,
-        buf_len: buf.len() as u32,
-        offset: 0,
-    };
-    let result = invoke(SYSCALL_VFS_READ, &mut req as *mut _ as u32, 0);
-    if result == u32::MAX {
-        Err(SyscallError::Unavailable)
-    } else {
-        Ok(result as usize)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn vfs_write(fd: u32, buf: &[u8]) -> Result<usize, SyscallError> {
-    let mut req = VfsIoRequest {
-        fd,
-        buf_ptr: buf.as_ptr() as u32,
-        buf_len: buf.len() as u32,
-        offset: 0,
-    };
-    let result = invoke(SYSCALL_VFS_WRITE, &mut req as *mut _ as u32, 0);
-    if result == u32::MAX {
-        Err(SyscallError::Unavailable)
-    } else {
-        Ok(result as usize)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn vfs_lseek(fd: u32, offset: i64, whence: u32) -> Result<u64, SyscallError> {
-    let mut req = VfsLseekRequest { fd, offset, whence };
-    let result = invoke(SYSCALL_VFS_LSEEK, &mut req as *mut _ as u32, 0);
-    if result == u32::MAX {
-        Err(SyscallError::Unavailable)
-    } else {
-        Ok(result as u64)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn vfs_stat(path: &str, attr: &mut VfsFileAttr) -> Result<(), SyscallError> {
-    let mut req = VfsStatRequest {
-        path_ptr: path.as_ptr() as u32,
-        path_len: path.len() as u32,
-    };
-    let result = invoke(SYSCALL_VFS_STAT, &mut req as *mut _ as u32, attr as *mut _ as u32);
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn vfs_fstat(fd: u32, attr: &mut VfsFileAttr) -> Result<(), SyscallError> {
-    let mut req = VfsFstatRequest { fd };
-    let result = invoke(SYSCALL_VFS_FSTAT, &mut req as *mut _ as u32, attr as *mut _ as u32);
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn vfs_mkdir(path: &str, mode: u32) -> Result<(), SyscallError> {
-    let mut req = VfsMkdirRequest {
-        path_ptr: path.as_ptr() as u32,
-        path_len: path.len() as u32,
-        mode,
-    };
-    if invoke(SYSCALL_VFS_MKDIR, &mut req as *mut _ as u32, 0) == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn vfs_unlink(path: &str) -> Result<(), SyscallError> {
-    let mut req = VfsUnlinkRequest {
-        path_ptr: path.as_ptr() as u32,
-        path_len: path.len() as u32,
-    };
-    if invoke(SYSCALL_VFS_UNLINK, &mut req as *mut _ as u32, 0) == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn vfs_rmdir(path: &str) -> Result<(), SyscallError> {
-    let mut req = VfsUnlinkRequest {
-        path_ptr: path.as_ptr() as u32,
-        path_len: path.len() as u32,
-    };
-    if invoke(SYSCALL_VFS_RMDIR, &mut req as *mut _ as u32, 0) == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn vfs_rename(old_path: &str, new_path: &str) -> Result<(), SyscallError> {
-    let mut req = VfsRenameRequest {
-        old_path_ptr: old_path.as_ptr() as u32,
-        old_path_len: old_path.len() as u32,
-        new_path_ptr: new_path.as_ptr() as u32,
-        new_path_len: new_path.len() as u32,
-    };
-    if invoke(SYSCALL_VFS_RENAME, &mut req as *mut _ as u32, 0) == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn vfs_readdir(fd: u32, offset: u64, entries: &mut [VfsDirEntry]) -> Result<usize, SyscallError> {
-    let mut req = VfsReaddirRequest {
-        fd,
-        offset,
-        buf_ptr: entries.as_mut_ptr() as u32,
-        buf_len: (entries.len() * core::mem::size_of::<VfsDirEntry>()) as u32,
-    };
-    let result = invoke(SYSCALL_VFS_READDIR, &mut req as *mut _ as u32, 0);
-    if result == u32::MAX {
-        Err(SyscallError::Unavailable)
-    } else {
-        Ok(result as usize)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn vfs_sync() -> Result<(), SyscallError> {
-    if invoke(SYSCALL_VFS_SYNC, 0, 0) == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn vfs_statfs(path: &str, stat: &mut VfsStatFs) -> Result<(), SyscallError> {
-    let mut req = VfsStatRequest {
-        path_ptr: path.as_ptr() as u32,
-        path_len: path.len() as u32,
-    };
-    let result = invoke(SYSCALL_VFS_STATFS, &mut req as *mut _ as u32, stat as *mut _ as u32);
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn vfs_mount(path: &str, fs_type: &str, options: &str) -> Result<(), SyscallError> {
-    let mut req = VfsMountRequest {
-        path_ptr: path.as_ptr() as u32,
-        path_len: path.len() as u32,
-        fs_type_ptr: fs_type.as_ptr() as u32,
-        fs_type_len: fs_type.len() as u32,
-        options_ptr: options.as_ptr() as u32,
-        options_len: options.len() as u32,
-    };
-    if invoke(SYSCALL_VFS_MOUNT, &mut req as *mut _ as u32, 0) == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn vfs_unmount(path: &str) -> Result<(), SyscallError> {
-    let mut req = VfsUnmountRequest {
-        path_ptr: path.as_ptr() as u32,
-        path_len: path.len() as u32,
-    };
-    if invoke(SYSCALL_VFS_UNMOUNT, &mut req as *mut _ as u32, 0) == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn vfs_readlink(path: &str, buf: &mut [u8]) -> Result<usize, SyscallError> {
-    let mut req = VfsReadlinkRequest {
-        path_ptr: path.as_ptr() as u32,
-        path_len: path.len() as u32,
-        buf_ptr: buf.as_mut_ptr() as u32,
-        buf_len: buf.len() as u32,
-    };
-    let result = invoke(SYSCALL_VFS_READLINK, &mut req as *mut _ as u32, 0);
-    if result == u32::MAX {
-        Err(SyscallError::Unavailable)
-    } else {
-        Ok(result as usize)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn vfs_symlink(target: &str, linkpath: &str) -> Result<(), SyscallError> {
-    let mut req = VfsSymlinkRequest {
-        target_ptr: target.as_ptr() as u32,
-        target_len: target.len() as u32,
-        linkpath_ptr: linkpath.as_ptr() as u32,
-        linkpath_len: linkpath.len() as u32,
-    };
-    if invoke(SYSCALL_VFS_SYMLINK, &mut req as *mut _ as u32, 0) == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn vfs_chmod(path: &str, mode: u32) -> Result<(), SyscallError> {
-    let mut req = VfsChmodRequest {
-        path_ptr: path.as_ptr() as u32,
-        path_len: path.len() as u32,
-        mode,
-    };
-    if invoke(SYSCALL_VFS_CHMOD, &mut req as *mut _ as u32, 0) == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn vfs_chown(path: &str, uid: u32, gid: u32) -> Result<(), SyscallError> {
-    let mut req = VfsChownRequest {
-        path_ptr: path.as_ptr() as u32,
-        path_len: path.len() as u32,
-        uid,
-        gid,
-    };
-    if invoke(SYSCALL_VFS_CHOWN, &mut req as *mut _ as u32, 0) == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn vfs_utimes(path: &str, atime: u64, mtime: u64) -> Result<(), SyscallError> {
-    let mut req = VfsUtimesRequest {
-        path_ptr: path.as_ptr() as u32,
-        path_len: path.len() as u32,
-        atime,
-        mtime,
-    };
-    if invoke(SYSCALL_VFS_UTIMES, &mut req as *mut _ as u32, 0) == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn vfs_xattr_set(path: &str, name: &str, value: &[u8], flags: u32) -> Result<(), SyscallError> {
-    let mut req = VfsXattrSetRequest {
-        path_ptr: path.as_ptr() as u32,
-        path_len: path.len() as u32,
-        name_ptr: name.as_ptr() as u32,
-        name_len: name.len() as u32,
-        value_ptr: value.as_ptr() as u32,
-        value_len: value.len() as u32,
-        flags,
-    };
-    if invoke(SYSCALL_VFS_XATTR_SET, &mut req as *mut _ as u32, 0) == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn vfs_xattr_get(path: &str, name: &str, buf: &mut [u8]) -> Result<usize, SyscallError> {
-    let mut req = VfsXattrGetRequest {
-        path_ptr: path.as_ptr() as u32,
-        path_len: path.len() as u32,
-        name_ptr: name.as_ptr() as u32,
-        name_len: name.len() as u32,
-        value_ptr: buf.as_mut_ptr() as u32,
-        value_len: buf.len() as u32,
-    };
-    let result = invoke(SYSCALL_VFS_XATTR_GET, &mut req as *mut _ as u32, 0);
-    if result == u32::MAX {
-        Err(SyscallError::Unavailable)
-    } else {
-        Ok(result as usize)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn vfs_xattr_list(path: &str, buf: &mut [u8]) -> Result<usize, SyscallError> {
-    let mut req = VfsXattrListRequest {
-        path_ptr: path.as_ptr() as u32,
-        path_len: path.len() as u32,
-        list_ptr: buf.as_mut_ptr() as u32,
-        list_len: buf.len() as u32,
-    };
-    let result = invoke(SYSCALL_VFS_XATTR_LIST, &mut req as *mut _ as u32, 0);
-    if result == u32::MAX {
-        Err(SyscallError::Unavailable)
-    } else {
-        Ok(result as usize)
-    }
-}
-
-#[cfg(feature = "user-app")]
-pub fn vfs_xattr_remove(path: &str, name: &str) -> Result<(), SyscallError> {
-    let mut req = VfsXattrRemoveRequest {
-        path_ptr: path.as_ptr() as u32,
-        path_len: path.len() as u32,
-        name_ptr: name.as_ptr() as u32,
-        name_len: name.len() as u32,
-    };
-    if invoke(SYSCALL_VFS_XATTR_REMOVE, &mut req as *mut _ as u32, 0) == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-fn call_struct<T>(number: u32, value: &mut T) -> Result<(), SyscallError> {
-    if invoke(number, value as *mut T as u32, 0) == 0 {
-        Ok(())
-    } else {
-        Err(SyscallError::Unavailable)
-    }
-}
-
-#[cfg(feature = "user-app")]
-#[inline]
-fn invoke(number: u32, first_argument: u32, second_argument: u32) -> u32 {
-    let mut result = number;
-    unsafe {
-        core::arch::asm!(
-            "int 0x80",
-            inout("eax") result,
-            in("ebx") first_argument,
-            in("ecx") second_argument,
-        );
-    }
-    result
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SyscallError {
+    MessageTooLong,
+    Unavailable,
+    InvalidArgument,
 }

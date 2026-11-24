@@ -19,7 +19,7 @@
 
 use alloc::vec::Vec;
 use alloc::string::{String, ToString};
-use alloc::boxed::Box;
+use alloc::sync::Arc;
 use crate::sync::SpinLock;
 use crate::drivers::disk;
 use crate::fs::vfs::{FileSystem, Inode, File, FileAttr, FileType, VfsError, DirEntry, StatFs};
@@ -88,7 +88,7 @@ struct NebulaInode {
 impl NebulaInode {
     fn new(inode_num: u32, file_type: FileType) -> Self {
         let now = crate::drivers::pit::ticks() as u64;
-        let mut inode_data = InodeRaw {
+        let inode_data = InodeRaw {
             file_type: file_type as u8,
             _pad: [0; 3],
             size: 0,
@@ -170,14 +170,32 @@ impl NebulaInode {
     }
 }
 
+struct NebulaInodeLock {
+    inner: SpinLock<NebulaInode>,
+}
+
+impl NebulaInodeLock {
+    fn new(inner: NebulaInode) -> Self {
+        Self { inner: SpinLock::new(inner) }
+    }
+    
+    fn with<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut NebulaInode) -> R,
+    {
+        let mut guard = self.inner.lock();
+        f(&mut *guard)
+    }
+}
+
 struct NebulaFile {
-    inode: NebulaInode,
+    inode: NebulaInodeLock,
     offset: u64,
 }
 
 impl File for NebulaFile {
-    fn read(&mut self, buf: &mut [u8], offset: u64) -> Result<usize, VfsError> {
-        let file_size = self.inode.inode_data.size as usize;
+    fn read(&self, buf: &mut [u8], offset: u64) -> Result<usize, VfsError> {
+        let file_size = self.inode.with(|inode| inode.inode_data.size as usize);
         if offset as usize >= file_size {
             return Ok(0);
         }
@@ -187,15 +205,17 @@ impl File for NebulaFile {
         let mut buf_offset = offset;
         
         while read < to_read {
-            let block_index = buf_offset / SECTOR_SIZE as u64;
-            let block_offset = (buf_offset % SECTOR_SIZE as u64) as usize;
-            let block = self.inode.get_block(block_index).ok_or(VfsError::IoError)?;
+            let block = self.inode.with(|inode| {
+                let block_index = buf_offset / SECTOR_SIZE as u64;
+                let _block_offset = (buf_offset % SECTOR_SIZE as u64) as usize;
+                inode.get_block(block_index).ok_or(VfsError::IoError)
+            })?;
             
             let mut sector_buf = [0u8; SECTOR_SIZE];
             disk::read_sector(block, sector_buf.as_mut_ptr())?;
             
-            let chunk = (SECTOR_SIZE - block_offset).min(to_read - read);
-            buf[read..read + chunk].copy_from_slice(&sector_buf[block_offset..block_offset + chunk]);
+            let chunk = (SECTOR_SIZE - (buf_offset % SECTOR_SIZE as u64) as usize).min(to_read - read);
+            buf[read..read + chunk].copy_from_slice(&sector_buf[(buf_offset % SECTOR_SIZE as u64) as usize..(buf_offset % SECTOR_SIZE as u64) as usize + chunk]);
             
             read += chunk;
             buf_offset += chunk as u64;
@@ -204,26 +224,29 @@ impl File for NebulaFile {
         Ok(read)
     }
     
-    fn write(&mut self, buf: &[u8], offset: u64) -> Result<usize, VfsError> {
+    fn write(&self, buf: &[u8], offset: u64) -> Result<usize, VfsError> {
         let mut written = 0;
         let mut buf_offset = offset;
         
         while written < buf.len() {
-            let block_index = buf_offset / SECTOR_SIZE as u64;
-            let block_offset = (buf_offset % SECTOR_SIZE as u64) as usize;
-            
-            let block = if block_offset == 0 && buf.len() - written >= SECTOR_SIZE {
-                // Full block write - allocate new
-                self.inode.allocate_block()?
-            } else {
-                // Partial write - need to read existing block or allocate
-                match self.inode.get_block(block_index) {
-                    Some(b) => b,
-                    None => self.inode.allocate_block()?,
+            let block = self.inode.with(|inode| {
+                let block_index = buf_offset / SECTOR_SIZE as u64;
+                let block_offset = (buf_offset % SECTOR_SIZE as u64) as usize;
+                
+                if block_offset == 0 && buf.len() - written >= SECTOR_SIZE {
+                    // Full block write - allocate new
+                    inode.allocate_block()
+                } else {
+                    // Partial write - need to read existing block or allocate
+                    match inode.get_block(block_index) {
+                        Some(b) => Ok(b),
+                        None => inode.allocate_block(),
+                    }
                 }
-            };
+            })?;
             
             let mut sector_buf = [0u8; SECTOR_SIZE];
+            let block_offset = (buf_offset % SECTOR_SIZE as u64) as usize;
             if block_offset != 0 || buf.len() - written < SECTOR_SIZE {
                 disk::read_sector(block, sector_buf.as_mut_ptr())?;
             }
@@ -236,35 +259,37 @@ impl File for NebulaFile {
             written += chunk;
             buf_offset += chunk as u64;
             
-            let new_size = (offset + written as u64) as u64;
-            if new_size > self.inode.inode_data.size {
-                self.inode.inode_data.size = new_size;
-                self.inode.dirty = true;
-            }
+            self.inode.with(|inode| {
+                let new_size = (offset + written as u64) as u64;
+                if new_size > inode.inode_data.size {
+                    inode.inode_data.size = new_size;
+                    inode.dirty = true;
+                }
+            });
         }
         
-        self.inode.inode_data.mtime = crate::drivers::pit::ticks() as u64;
-        self.inode.dirty = true;
+        self.inode.with(|inode| {
+            inode.inode_data.mtime = crate::drivers::pit::ticks() as u64;
+            inode.dirty = true;
+        });
         
         Ok(written)
     }
     
-    fn flush(&mut self) -> Result<(), VfsError> {
-        self.inode.save()
+    fn flush(&self) -> Result<(), VfsError> {
+        self.inode.with(|inode| inode.save())
     }
     
-    fn fsync(&mut self) -> Result<(), VfsError> {
-        self.inode.save()
+    fn fsync(&self) -> Result<(), VfsError> {
+        self.inode.with(|inode| inode.save())
     }
     
-    fn ioctl(&mut self, _request: u32, _arg: u64) -> Result<u64, VfsError> {
+    fn ioctl(&self, _request: u32, _arg: u64) -> Result<u64, VfsError> {
         Err(VfsError::NotSupported)
     }
     
-    fn get_inode(&self) -> Box<dyn Inode> {
-        // This is tricky since we need a separate Inode reference
-        // For now, return a wrapper
-        Box::new(InodeWrapper { inode: self.inode.inode_num })
+    fn get_inode(&self) -> Arc<dyn Inode> {
+        self.inode.with(|inode| Arc::new(InodeWrapper { inode: inode.inode_num }))
     }
 }
 
@@ -290,23 +315,23 @@ impl Inode for InodeWrapper {
         inode.dirty = true;
         inode.save()
     }
-    fn lookup(&self, name: &str) -> Result<Box<dyn Inode>, VfsError> {
+    fn lookup(&self, name: &str) -> Result<Arc<dyn Inode>, VfsError> {
         let parent = NebulaInode::load(self.inode)?;
-        find_dir_entry(&parent, name).map(|(_, inode_num)| Box::new(InodeWrapper { inode: inode_num }) as Box<dyn Inode>)
+        find_dir_entry(&parent, name).map(|(_, inode_num)| Arc::new(InodeWrapper { inode: inode_num }) as Arc<dyn Inode>)
     }
-    fn create(&self, name: &str, file_type: FileType, mode: u32) -> Result<Box<dyn Inode>, VfsError> {
+    fn create(&self, name: &str, file_type: FileType, mode: u32) -> Result<Arc<dyn Inode>, VfsError> {
         let parent = NebulaInode::load(self.inode)?;
         let inode_num = create_file(&parent, name, file_type, mode)?;
-        Ok(Box::new(InodeWrapper { inode: inode_num }) as Box<dyn Inode>)
+        Ok(Arc::new(InodeWrapper { inode: inode_num }) as Arc<dyn Inode>)
     }
     fn unlink(&self, name: &str) -> Result<(), VfsError> {
         let parent = NebulaInode::load(self.inode)?;
         unlink_file(&parent, name)
     }
-    fn mkdir(&self, name: &str, mode: u32) -> Result<Box<dyn Inode>, VfsError> {
+    fn mkdir(&self, name: &str, mode: u32) -> Result<Arc<dyn Inode>, VfsError> {
         let parent = NebulaInode::load(self.inode)?;
         let inode_num = create_file(&parent, name, FileType::Directory, mode)?;
-        Ok(Box::new(InodeWrapper { inode: inode_num }) as Box<dyn Inode>)
+        Ok(Arc::new(InodeWrapper { inode: inode_num }) as Arc<dyn Inode>)
     }
     fn rmdir(&self, name: &str) -> Result<(), VfsError> {
         let parent = NebulaInode::load(self.inode)?;
@@ -322,9 +347,9 @@ impl Inode for InodeWrapper {
         let inode = NebulaInode::load(self.inode)?;
         read_directory(&inode, offset, entries)
     }
-    fn open_file(&self, _flags: u32) -> Result<Box<dyn File>, VfsError> {
+    fn open_file(&self, _flags: u32) -> Result<Arc<dyn File>, VfsError> {
         let inode = NebulaInode::load(self.inode)?;
-        Ok(Box::new(NebulaFile { inode, offset: 0 }))
+        Ok(Arc::new(NebulaFile { inode: NebulaInodeLock::new(inode), offset: 0 }))
     }
     fn readlink(&self) -> Result<String, VfsError> {
         let inode = NebulaInode::load(self.inode)?;
@@ -389,8 +414,8 @@ impl FileSystem for NebulaFs {
         Ok(())
     }
     
-    fn root_inode(&self) -> Box<dyn Inode> {
-        Box::new(InodeWrapper { inode: 2 }) // Root directory is inode 2
+    fn root_inode(&self) -> Arc<dyn Inode> {
+        Arc::new(InodeWrapper { inode: 2 }) // Root directory is inode 2
     }
     
     fn statfs(&self) -> Result<StatFs, VfsError> {
@@ -437,7 +462,8 @@ fn find_free_data_block() -> Result<u32, VfsError> {
 
 fn free_block(sector: u32) -> Result<(), VfsError> {
     let mut buf = [0u8; SECTOR_SIZE];
-    disk::write_sector(sector, buf.as_ptr())
+    disk::write_sector(sector, buf.as_ptr())?;
+    Ok(())
 }
 
 fn find_dir_entry(parent: &NebulaInode, name: &str) -> Result<(DirEntryRaw, u32), VfsError> {
@@ -446,7 +472,7 @@ fn find_dir_entry(parent: &NebulaInode, name: &str) -> Result<(DirEntryRaw, u32)
     disk::read_sector(block, buf.as_mut_ptr())?;
     let entries = unsafe { &*(buf.as_ptr() as *const [DirEntryRaw; 64]) };
     
-    for (i, entry) in entries.iter().enumerate() {
+    for (_i, entry) in entries.iter().enumerate() {
         if entry.name[0] == 0 { continue; }
         let entry_name = core::str::from_utf8(&entry.name).unwrap_or("").trim_end_matches('\0');
         if entry_name == name {
@@ -607,7 +633,8 @@ fn update_file_count(delta: i32) -> Result<(), VfsError> {
     let mut sb = unsafe { *(buf.as_ptr() as *mut SuperBlock) };
     sb.file_count = (sb.file_count as i32 + delta).max(0) as u32;
     unsafe { *(buf.as_mut_ptr() as *mut SuperBlock) = sb; }
-    disk::write_sector(SUPER_SECTOR, buf.as_ptr())
+    disk::write_sector(SUPER_SECTOR, buf.as_ptr())?;
+    Ok(())
 }
 
 fn count_used_blocks() -> u64 {

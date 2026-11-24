@@ -22,8 +22,6 @@ pub mod nebula_fs;
 
 // Re-export VFS functions
 pub use vfs::{
-    init as vfs_init,
-    mount as vfs_mount,
     unmount as vfs_unmount,
     open as vfs_open,
     close as vfs_close,
@@ -36,7 +34,7 @@ pub use vfs::{
     unlink as vfs_unlink,
     rmdir as vfs_rmdir,
     rename as vfs_rename,
-    read_dir as vfs_readdir,
+    freaddir as vfs_freaddir,
     sync as vfs_sync,
     statfs as vfs_statfs,
     readlink as vfs_readlink,
@@ -48,8 +46,6 @@ pub use vfs::{
     xattr_get as vfs_xattr_get,
     xattr_list as vfs_xattr_list,
     xattr_remove as vfs_xattr_remove,
-    VfsError,
     FileAttr as VfsFileAttr,
-    DirEntry as VfsDirEntry,
     StatFs as VfsStatFs,
 };
