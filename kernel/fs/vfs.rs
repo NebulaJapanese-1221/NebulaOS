@@ -444,6 +444,157 @@ pub fn statfs(path: &str) -> Result<StatFs, VfsError> {
     mounts[mount_idx].fs.statfs()
 }
 
+pub fn readlink(path: &str, buf: &mut [u8]) -> Result<usize, VfsError> {
+    let (parent, name) = resolve_path(path)?;
+    
+    let inode = if name.is_empty() {
+        return Err(VfsError::InvalidName);
+    } else {
+        parent.lookup(&name)?
+    };
+    
+    let target = inode.readlink()?;
+    let target_bytes = target.as_bytes();
+    let copy_len = target_bytes.len().min(buf.len());
+    buf[..copy_len].copy_from_slice(&target_bytes[..copy_len]);
+    Ok(copy_len)
+}
+
+pub fn symlink(target: &str, linkpath: &str) -> Result<(), VfsError> {
+    let (parent, name) = resolve_path(linkpath)?;
+    
+    if name.is_empty() {
+        return Err(VfsError::InvalidName);
+    }
+    
+    parent.symlink(target, &name)
+}
+
+pub fn chmod(path: &str, mode: u32) -> Result<(), VfsError> {
+    let (parent, name) = resolve_path(path)?;
+    
+    let inode = if name.is_empty() {
+        parent
+    } else {
+        parent.lookup(&name)?
+    };
+    
+    let mut attr = inode.attr()?;
+    attr.mode = (attr.mode & 0o170000) | (mode & 0o7777);
+    inode.set_attr(&attr)
+}
+
+pub fn chown(path: &str, uid: u32, gid: u32) -> Result<(), VfsError> {
+    let (parent, name) = resolve_path(path)?;
+    
+    let inode = if name.is_empty() {
+        parent
+    } else {
+        parent.lookup(&name)?
+    };
+    
+    let mut attr = inode.attr()?;
+    attr.uid = uid;
+    attr.gid = gid;
+    inode.set_attr(&attr)
+}
+
+pub fn utimes(path: &str, atime: u64, mtime: u64) -> Result<(), VfsError> {
+    let (parent, name) = resolve_path(path)?;
+    
+    let inode = if name.is_empty() {
+        parent
+    } else {
+        parent.lookup(&name)?
+    };
+    
+    let mut attr = inode.attr()?;
+    attr.atime = atime;
+    attr.mtime = mtime;
+    attr.ctime = crate::drivers::pit::ticks() as u64;
+    inode.set_attr(&attr)
+}
+
+pub fn xattr_set(path: &str, name: &str, value: &[u8], _flags: u32) -> Result<(), VfsError> {
+    let (parent, name_) = resolve_path(path)?;
+    
+    let inode = if name_.is_empty() {
+        parent
+    } else {
+        parent.lookup(&name_)?
+    };
+    
+    // For now, store xattrs as hidden files in a special namespace
+    // This is a simple implementation - a real one would use extended attributes in the filesystem
+    let xattr_path = alloc::format!(".xattr/{}", name);
+    inode.create(&xattr_path, FileType::Regular, 0o600)?;
+    let file = inode.open_file(0)?;
+    file.write(value, 0)?;
+    file.flush()?;
+    Ok(())
+}
+
+pub fn xattr_get(path: &str, name: &str, buf: &mut [u8]) -> Result<usize, VfsError> {
+    let (parent, name_) = resolve_path(path)?;
+    
+    let inode = if name_.is_empty() {
+        parent
+    } else {
+        parent.lookup(&name_)?
+    };
+    
+    let xattr_path = alloc::format!(".xattr/{}", name);
+    let xattr_inode = inode.lookup(&xattr_path)?;
+    let file = xattr_inode.open_file(0)?;
+    file.read(buf, 0)
+}
+
+pub fn xattr_list(path: &str, buf: &mut [u8]) -> Result<usize, VfsError> {
+    let (parent, name_) = resolve_path(path)?;
+    
+    let inode = if name_.is_empty() {
+        parent
+    } else {
+        parent.lookup(&name_)?
+    };
+    
+    let xattr_dir = inode.lookup(".xattr");
+    if xattr_dir.is_err() {
+        return Ok(0);
+    }
+    let xattr_dir = xattr_dir?;
+    
+    let mut entries = Vec::new();
+    xattr_dir.read_dir(0, &mut entries)?;
+    
+    let mut offset = 0;
+    for entry in entries {
+        let name = entry.name;
+        let name_bytes = name.as_bytes();
+        if offset + name.len() + 1 > buf.len() {
+            break;
+        }
+        buf[offset..offset + name.len()].copy_from_slice(name_bytes);
+        offset += name.len();
+        buf[offset] = 0;
+        offset += 1;
+    }
+    Ok(offset)
+}
+
+pub fn xattr_remove(path: &str, name: &str) -> Result<(), VfsError> {
+    let (parent, name_) = resolve_path(path)?;
+    
+    let inode = if name_.is_empty() {
+        parent
+    } else {
+        parent.lookup(&name_)?
+    };
+    
+    let xattr_path = alloc::format!(".xattr/{}", name);
+    inode.unlink(&xattr_path)
+}
+
 fn normalize_path(path: &str) -> String {
     let mut result = String::new();
     let mut components = Vec::new();

@@ -76,6 +76,15 @@ pub const SYSCALL_VFS_SYNC: u32 = 53;
 pub const SYSCALL_VFS_STATFS: u32 = 54;
 pub const SYSCALL_VFS_MOUNT: u32 = 55;
 pub const SYSCALL_VFS_UNMOUNT: u32 = 56;
+pub const SYSCALL_VFS_READLINK: u32 = 57;
+pub const SYSCALL_VFS_SYMLINK: u32 = 58;
+pub const SYSCALL_VFS_CHMOD: u32 = 59;
+pub const SYSCALL_VFS_CHOWN: u32 = 60;
+pub const SYSCALL_VFS_UTIMES: u32 = 61;
+pub const SYSCALL_VFS_XATTR_SET: u32 = 62;
+pub const SYSCALL_VFS_XATTR_GET: u32 = 63;
+pub const SYSCALL_VFS_XATTR_LIST: u32 = 64;
+pub const SYSCALL_VFS_XATTR_REMOVE: u32 = 65;
 
 pub const CLIPBOARD_MAX: usize = 256;
 pub const MAX_WRITE_LENGTH: usize = 1024;
@@ -325,6 +334,91 @@ pub struct VfsMountRequest {
 pub struct VfsUnmountRequest {
     pub path_ptr: u32,
     pub path_len: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VfsReadlinkRequest {
+    pub path_ptr: u32,
+    pub path_len: u32,
+    pub buf_ptr: u32,
+    pub buf_len: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VfsSymlinkRequest {
+    pub target_ptr: u32,
+    pub target_len: u32,
+    pub linkpath_ptr: u32,
+    pub linkpath_len: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VfsChmodRequest {
+    pub path_ptr: u32,
+    pub path_len: u32,
+    pub mode: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VfsChownRequest {
+    pub path_ptr: u32,
+    pub path_len: u32,
+    pub uid: u32,
+    pub gid: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VfsUtimesRequest {
+    pub path_ptr: u32,
+    pub path_len: u32,
+    pub atime: u64,
+    pub mtime: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VfsXattrSetRequest {
+    pub path_ptr: u32,
+    pub path_len: u32,
+    pub name_ptr: u32,
+    pub name_len: u32,
+    pub value_ptr: u32,
+    pub value_len: u32,
+    pub flags: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VfsXattrGetRequest {
+    pub path_ptr: u32,
+    pub path_len: u32,
+    pub name_ptr: u32,
+    pub name_len: u32,
+    pub value_ptr: u32,
+    pub value_len: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VfsXattrListRequest {
+    pub path_ptr: u32,
+    pub path_len: u32,
+    pub list_ptr: u32,
+    pub list_len: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct VfsXattrRemoveRequest {
+    pub path_ptr: u32,
+    pub path_len: u32,
+    pub name_ptr: u32,
+    pub name_len: u32,
 }
 
 #[repr(C)]
@@ -892,6 +986,148 @@ pub fn vfs_unmount(path: &str) -> Result<(), SyscallError> {
         path_len: path.len() as u32,
     };
     if invoke(SYSCALL_VFS_UNMOUNT, &mut req as *mut _ as u32, 0) == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn vfs_readlink(path: &str, buf: &mut [u8]) -> Result<usize, SyscallError> {
+    let mut req = VfsReadlinkRequest {
+        path_ptr: path.as_ptr() as u32,
+        path_len: path.len() as u32,
+        buf_ptr: buf.as_mut_ptr() as u32,
+        buf_len: buf.len() as u32,
+    };
+    let result = invoke(SYSCALL_VFS_READLINK, &mut req as *mut _ as u32, 0);
+    if result == u32::MAX {
+        Err(SyscallError::Unavailable)
+    } else {
+        Ok(result as usize)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn vfs_symlink(target: &str, linkpath: &str) -> Result<(), SyscallError> {
+    let mut req = VfsSymlinkRequest {
+        target_ptr: target.as_ptr() as u32,
+        target_len: target.len() as u32,
+        linkpath_ptr: linkpath.as_ptr() as u32,
+        linkpath_len: linkpath.len() as u32,
+    };
+    if invoke(SYSCALL_VFS_SYMLINK, &mut req as *mut _ as u32, 0) == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn vfs_chmod(path: &str, mode: u32) -> Result<(), SyscallError> {
+    let mut req = VfsChmodRequest {
+        path_ptr: path.as_ptr() as u32,
+        path_len: path.len() as u32,
+        mode,
+    };
+    if invoke(SYSCALL_VFS_CHMOD, &mut req as *mut _ as u32, 0) == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn vfs_chown(path: &str, uid: u32, gid: u32) -> Result<(), SyscallError> {
+    let mut req = VfsChownRequest {
+        path_ptr: path.as_ptr() as u32,
+        path_len: path.len() as u32,
+        uid,
+        gid,
+    };
+    if invoke(SYSCALL_VFS_CHOWN, &mut req as *mut _ as u32, 0) == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn vfs_utimes(path: &str, atime: u64, mtime: u64) -> Result<(), SyscallError> {
+    let mut req = VfsUtimesRequest {
+        path_ptr: path.as_ptr() as u32,
+        path_len: path.len() as u32,
+        atime,
+        mtime,
+    };
+    if invoke(SYSCALL_VFS_UTIMES, &mut req as *mut _ as u32, 0) == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn vfs_xattr_set(path: &str, name: &str, value: &[u8], flags: u32) -> Result<(), SyscallError> {
+    let mut req = VfsXattrSetRequest {
+        path_ptr: path.as_ptr() as u32,
+        path_len: path.len() as u32,
+        name_ptr: name.as_ptr() as u32,
+        name_len: name.len() as u32,
+        value_ptr: value.as_ptr() as u32,
+        value_len: value.len() as u32,
+        flags,
+    };
+    if invoke(SYSCALL_VFS_XATTR_SET, &mut req as *mut _ as u32, 0) == 0 {
+        Ok(())
+    } else {
+        Err(SyscallError::Unavailable)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn vfs_xattr_get(path: &str, name: &str, buf: &mut [u8]) -> Result<usize, SyscallError> {
+    let mut req = VfsXattrGetRequest {
+        path_ptr: path.as_ptr() as u32,
+        path_len: path.len() as u32,
+        name_ptr: name.as_ptr() as u32,
+        name_len: name.len() as u32,
+        value_ptr: buf.as_mut_ptr() as u32,
+        value_len: buf.len() as u32,
+    };
+    let result = invoke(SYSCALL_VFS_XATTR_GET, &mut req as *mut _ as u32, 0);
+    if result == u32::MAX {
+        Err(SyscallError::Unavailable)
+    } else {
+        Ok(result as usize)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn vfs_xattr_list(path: &str, buf: &mut [u8]) -> Result<usize, SyscallError> {
+    let mut req = VfsXattrListRequest {
+        path_ptr: path.as_ptr() as u32,
+        path_len: path.len() as u32,
+        list_ptr: buf.as_mut_ptr() as u32,
+        list_len: buf.len() as u32,
+    };
+    let result = invoke(SYSCALL_VFS_XATTR_LIST, &mut req as *mut _ as u32, 0);
+    if result == u32::MAX {
+        Err(SyscallError::Unavailable)
+    } else {
+        Ok(result as usize)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn vfs_xattr_remove(path: &str, name: &str) -> Result<(), SyscallError> {
+    let mut req = VfsXattrRemoveRequest {
+        path_ptr: path.as_ptr() as u32,
+        path_len: path.len() as u32,
+        name_ptr: name.as_ptr() as u32,
+        name_len: name.len() as u32,
+    };
+    if invoke(SYSCALL_VFS_XATTR_REMOVE, &mut req as *mut _ as u32, 0) == 0 {
         Ok(())
     } else {
         Err(SyscallError::Unavailable)
