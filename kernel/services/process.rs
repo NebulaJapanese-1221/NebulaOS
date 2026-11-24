@@ -18,7 +18,7 @@
 use crate::arch::{gdt, smp, tss};
 use crate::memory::{frame_allocator, paging};
 use crate::sync::SpinLock;
-use crate::userspace::syscall::{ProcessEntry, ProcessInfo};
+use crate::userspace::libc::{ProcessEntry, ProcessInfo};
 
 const MAX_PROCESSES: usize = 8;
 const STACK_FRAME_WORDS: usize = 19;
@@ -60,6 +60,8 @@ struct Process {
     kernel_stack_frame: usize,
     kernel_stack_top: u32,
     app_id: u32,
+    parent_pid: u32,
+    exit_status: i32,
     content: AppRect,
     events: [UserEvent; EVENT_QUEUE_SIZE],
     event_head: usize,
@@ -79,6 +81,8 @@ impl Process {
         kernel_stack_frame: 0,
         kernel_stack_top: 0,
         app_id: 0,
+        parent_pid: 0,
+        exit_status: 0,
         content: AppRect {
             x: 0,
             y: 0,
@@ -176,6 +180,7 @@ pub fn add_user_process(
         *frame.add(18) = user_data;
     }
 
+    let current_pid = current_pid();
     let mut processes = PROCESSES.lock();
     let slot = processes
         .iter()
@@ -186,6 +191,8 @@ pub fn add_user_process(
         kernel_stack_frame,
         kernel_stack_top,
         app_id,
+        parent_pid: current_pid,
+        exit_status: 0,
         content,
         events: [UserEvent::default(); EVENT_QUEUE_SIZE],
         event_head: 0,
@@ -544,5 +551,215 @@ fn reap_zombies(processes: &mut [Process; MAX_PROCESSES]) {
         paging::destroy_user_address_space(process.page_directory);
         frame_allocator::free_frame(process.kernel_stack_frame);
         *process = Process::EMPTY;
+    }
+}
+
+// Process management syscalls
+
+/// Get current process ID
+pub fn sys_getpid() -> u32 {
+    current_pid()
+}
+
+/// Get parent process ID
+pub fn sys_getppid() -> u32 {
+    let current_pid = current_pid();
+    if current_pid == 0 {
+        return 0;
+    }
+    let processes = PROCESSES.lock();
+    if let Some(process) = processes.get((current_pid - 1) as usize) {
+        process.parent_pid
+    } else {
+        0
+    }
+}
+
+/// Get real user ID (placeholder - returns 0 for root)
+pub fn sys_getuid() -> u32 {
+    0
+}
+
+/// Get real group ID (placeholder - returns 0 for root)
+pub fn sys_getgid() -> u32 {
+    0
+}
+
+/// Get effective user ID (placeholder - returns 0 for root)
+pub fn sys_geteuid() -> u32 {
+    0
+}
+
+/// Get effective group ID (placeholder - returns 0 for root)
+pub fn sys_getegid() -> u32 {
+    0
+}
+
+/// Fork - create a child process as a copy of the parent
+pub fn sys_fork() -> Result<u32, ()> {
+    let current_pid = current_pid();
+    if current_pid == 0 {
+        return Err(());
+    }
+
+    let mut processes = PROCESSES.lock();
+    let parent_index = (current_pid - 1) as usize;
+    let parent = &processes[parent_index];
+
+    // Find a free slot for the child
+    let child_slot = processes
+        .iter()
+        .position(|process| process.state == ProcessState::Unused)
+        .ok_or(())?;
+
+    // Create child process as copy of parent
+    let mut child = *parent;
+    child.state = ProcessState::Ready;
+    child.running_cpu = NO_CPU;
+    child.parent_pid = current_pid;
+    child.exit_status = 0;
+
+    // Allocate new kernel stack for child
+    let child_kernel_stack_frame = frame_allocator::alloc_frame().ok_or(())?;
+    child.kernel_stack_frame = child_kernel_stack_frame;
+    child.kernel_stack_top = (child_kernel_stack_frame + 4096) as u32;
+    child.saved_esp = child.kernel_stack_top - (STACK_FRAME_WORDS * core::mem::size_of::<u32>()) as u32;
+
+    // Copy parent's user stack and page directory would need to be cloned
+    // For now, share the page directory (copy-on-write would be better)
+    // This is a simplified implementation
+
+    // Allocate new page directory for child (copy parent's)
+    // For simplicity, we'll use the same page directory - in reality need COW
+    // child.page_directory = clone_page_directory(parent.page_directory)?;
+
+    processes[child_slot] = child;
+
+    Ok((child_slot + 1) as u32)
+}
+
+/// Execute a new program - replaces current process image
+pub fn sys_execve(
+    _path_ptr: u32,
+    _path_len: u32,
+    _argv_ptr: u32,
+    _argc: u32,
+    _envp_ptr: u32,
+    _envc: u32,
+) -> Result<(), ()> {
+    // This would require:
+    // 1. Load ELF binary from filesystem
+    // 2. Set up new address space
+    // 3. Load program into memory
+    // 4. Set up stack with argc, argv, envp
+    // 5. Jump to entry point
+    // For now, return not implemented
+    Err(())
+}
+
+/// Wait for a child process to change state
+pub fn sys_waitpid(pid: i32, status_ptr: u32, _options: u32) -> Result<i32, ()> {
+    let current_pid = current_pid();
+    if current_pid == 0 {
+        return Err(());
+    }
+
+    let mut processes = PROCESSES.lock();
+    let parent_index = (current_pid - 1) as usize;
+
+    // Find child process
+    let target_pid = if pid > 0 {
+        pid as u32
+    } else if pid == -1 {
+        // Any child - find first zombie child
+        let mut found = None;
+        for (i, process) in processes.iter().enumerate() {
+            if process.parent_pid == current_pid && process.state == ProcessState::Zombie {
+                found = Some((i + 1) as u32);
+                break;
+            }
+        }
+        found.ok_or(())?
+    } else {
+        // pid < -1 means wait for process group - not implemented
+        return Err(());
+    };
+
+    let child_index = (target_pid - 1) as usize;
+    if child_index >= MAX_PROCESSES {
+        return Err(());
+    }
+
+    let child = &processes[child_index];
+    if child.parent_pid != current_pid {
+        return Err(()); // Not our child
+    }
+
+    if child.state != ProcessState::Zombie {
+        // No child has exited yet - in real impl, would block
+        return Err(()); // ECHILD or EAGAIN
+    }
+
+    let exit_status = child.exit_status;
+
+    // Clean up child
+    paging::destroy_user_address_space(child.page_directory);
+    frame_allocator::free_frame(child.kernel_stack_frame);
+    processes[child_index] = Process::EMPTY;
+
+    // Write status to user space if pointer provided
+    if status_ptr != 0 {
+        // Simple status encoding: exit_status << 8
+        let status = (exit_status << 8) as u32;
+        unsafe {
+            *(status_ptr as *mut u32) = status;
+        }
+    }
+
+    Ok(target_pid as i32)
+}
+
+/// Send signal to process
+pub fn sys_kill(pid: i32, sig: u32) -> Result<(), ()> {
+    if pid <= 0 {
+        return Err(()); // Process groups not implemented
+    }
+
+    let target_pid = pid as u32;
+    if target_pid == 0 {
+        return Err(());
+    }
+
+    let mut processes = PROCESSES.lock();
+    let target_index = (target_pid - 1) as usize;
+
+    if target_index >= MAX_PROCESSES {
+        return Err(());
+    }
+
+    let target = &mut processes[target_index];
+    if target.state == ProcessState::Unused || target.state == ProcessState::Zombie {
+        return Err(()); // ESRCH
+    }
+
+    // For now, only implement SIGKILL (9) and SIGTERM (15)
+    match sig {
+        9 => {
+            // SIGKILL - force terminate
+            target.state = ProcessState::Zombie;
+            target.exit_status = 9; // Signal number
+            Ok(())
+        }
+        15 => {
+            // SIGTERM - graceful terminate
+            target.state = ProcessState::Zombie;
+            target.exit_status = 15;
+            Ok(())
+        }
+        _ => {
+            // Other signals - just store for now
+            target.exit_status = sig as i32;
+            Ok(())
+        }
     }
 }

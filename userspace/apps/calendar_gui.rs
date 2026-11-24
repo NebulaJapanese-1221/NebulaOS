@@ -16,7 +16,7 @@
 // along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
 
 use super::gui::{Application, Canvas, Event, PointerEvent, Rect};
-use crate::syscall;
+use crate::libc::uptime_ticks;
 
 const TEXT: u32 = 0x111827;
 const ACCENT: u32 = 0x66D9EF;
@@ -34,14 +34,14 @@ pub struct Calendar {
 
 impl Calendar {
     pub fn new() -> Self {
-        let ticks = syscall::uptime_ticks().unwrap_or(0);
+        let ticks = uptime_ticks().unwrap_or(0);
         let month = ((ticks / 3600) % 12) as u8 + 1;
         let year = 2026 + (ticks / 43200) as u32;
         Self { month, year }
     }
 
     fn refresh(&mut self) {
-        let ticks = syscall::uptime_ticks().unwrap_or(0);
+        let ticks = uptime_ticks().unwrap_or(0);
         self.month = ((ticks / 3600) % 12) as u8 + 1;
         self.year = 2026 + (ticks / 43200) as u32;
     }

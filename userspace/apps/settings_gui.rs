@@ -16,6 +16,7 @@
 // along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
 
 use super::gui::{Application, Button, Canvas, Checkbox, Event, Menu, PointerEvent, Rect};
+use crate::libc::{set_mouse_sensitivity, set_dark_theme};
 
 const CATEGORIES: [&str; 3] = ["DISPLAY", "MOUSE", "SYSTEM"];
 const SENSITIVITIES: [&str; 4] = ["1 - LOW", "2 - MED-LOW", "3 - MED-HIGH", "4 - HIGH"];
@@ -86,7 +87,7 @@ impl Settings {
         let selected = selected.min(SENSITIVITIES.len() - 1);
         let old = self.mouse_sensitivity.selected;
         self.mouse_sensitivity.selected = selected;
-        if crate::syscall::set_mouse_sensitivity((selected + 1) as u32).is_err() {
+        if set_mouse_sensitivity((selected + 1) as u32).is_err() {
             self.mouse_sensitivity.selected = old;
             self.status = "SYSTEM SERVICE UNAVAILABLE";
         } else {
@@ -103,7 +104,7 @@ impl Settings {
     }
 
     fn apply_theme(&mut self) {
-        if crate::syscall::set_dark_theme(self.dark_theme.checked).is_err() {
+        if set_dark_theme(self.dark_theme.checked).is_err() {
             self.dark_theme.checked = !self.dark_theme.checked;
             self.status = "SYSTEM SERVICE UNAVAILABLE";
         } else {

@@ -16,6 +16,10 @@
 // along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
 
 use super::gui::{Application, Canvas, Event, PointerEvent, Rect};
+use crate::libc::{
+    system_stats, uptime_ticks, pci_count, pci_device,
+    SystemStats, PciDeviceInfo,
+};
 
 pub struct SystemMonitor;
 
@@ -31,9 +35,9 @@ impl Application for SystemMonitor {
     }
 
     fn render(&self, canvas: &mut dyn Canvas, area: Rect, _pointer: PointerEvent) {
-        let mut stats = crate::syscall::SystemStats::default();
-        let available = crate::syscall::system_stats(&mut stats).is_ok();
-        let uptime = crate::syscall::uptime_ticks();
+        let mut stats = SystemStats::default();
+        let available = system_stats(&mut stats).is_ok();
+        let uptime = uptime_ticks();
         canvas.draw_text(area.x + 24, area.y + 24, "SYSTEM HEALTH", 0x1596B5, 1);
         canvas.draw_text(area.x + 24, area.y + 56, "UPTIME TICKS", 0x111827, 1);
         if let Ok(ticks) = uptime {
@@ -65,12 +69,12 @@ impl Application for SystemMonitor {
         );
 
         // PCI device info
-        let pci_count = crate::syscall::pci_count().unwrap_or(0);
+        let pci_count = pci_count().unwrap_or(0);
         canvas.draw_text(area.x + 24, area.y + 216, "PCI DEVICES", 0x1596B5, 1);
         draw_number(canvas, area.x + 180, area.y + 216, pci_count);
         for i in 0..pci_count.min(4) {
-            let mut info = crate::syscall::PciDeviceInfo::default();
-            if crate::syscall::pci_device(i, &mut info).is_ok() {
+            let mut info = PciDeviceInfo::default();
+            if pci_device(i, &mut info).is_ok() {
                 let y = area.y + 236 + i as u32 * 20;
                 canvas.draw_text(area.x + 24, y, "PCI", 0x111827, 1);
                 draw_hex(canvas, area.x + 56, y, info.bus as u32);

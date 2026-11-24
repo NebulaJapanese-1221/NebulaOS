@@ -28,7 +28,7 @@ use crate::sync::SpinLock;
 use alloc::vec;
 use alloc::vec::Vec;
 use alloc::boxed::Box;
-use crate::userspace::syscall::{
+use crate::userspace::libc::{
     AppContext, AppEvent, CursorInfo, DeviceInfo, DrawCommand, MemoryInfo, ProcessInfo, RedrawRequest, SpawnAppRequest, StorageFileInfo,
     StorageRequest, SystemStats, MAX_WRITE_LENGTH, SYSCALL_CLIPBOARD_GET, SYSCALL_CLIPBOARD_SET,
     SYSCALL_DEVICE_INFO, SYSCALL_DRAW_FILL_RECT, SYSCALL_DRAW_RECT, SYSCALL_DRAW_TEXT,
@@ -46,10 +46,13 @@ use crate::userspace::syscall::{
     SYSCALL_VFS_MOUNT, SYSCALL_VFS_UNMOUNT,
     SYSCALL_VFS_READLINK, SYSCALL_VFS_SYMLINK, SYSCALL_VFS_CHMOD, SYSCALL_VFS_CHOWN, SYSCALL_VFS_UTIMES,
     SYSCALL_VFS_XATTR_SET, SYSCALL_VFS_XATTR_GET, SYSCALL_VFS_XATTR_LIST, SYSCALL_VFS_XATTR_REMOVE,
+    SYSCALL_FORK, SYSCALL_EXECVE, SYSCALL_WAITPID, SYSCALL_GETPID, SYSCALL_GETPPID,
+    SYSCALL_KILL, SYSCALL_GETUID, SYSCALL_GETGID, SYSCALL_GETEUID, SYSCALL_GETEGID,
     VfsOpenRequest, VfsIoRequest, VfsLseekRequest, VfsStatRequest, VfsFstatRequest, VfsMkdirRequest,
     VfsUnlinkRequest, VfsRenameRequest, VfsReaddirRequest, VfsMountRequest, VfsUnmountRequest,
     VfsReadlinkRequest, VfsSymlinkRequest, VfsChmodRequest, VfsChownRequest, VfsUtimesRequest,
     VfsXattrSetRequest, VfsXattrGetRequest, VfsXattrListRequest, VfsXattrRemoveRequest,
+    ExecveRequest, WaitpidRequest, KillRequest,
 };
 use core::mem::size_of;
 
@@ -175,7 +178,7 @@ fn handle_syscall(regs_ptr: *mut u32) -> u32 {
                 let index = *regs_ptr.add(REG_EBX) as usize;
                 let dst = *regs_ptr.add(REG_ECX);
                 if let Some(dev) = crate::drivers::pci::device_at(index) {
-                    let info = crate::userspace::syscall::PciDeviceInfo {
+                    let info = crate::userspace::libc::PciDeviceInfo {
                         bus: dev.bus,
                         device: dev.device,
                         function: dev.function,
@@ -227,6 +230,70 @@ fn handle_syscall(regs_ptr: *mut u32) -> u32 {
                     ticks,
                 ) {
                     0
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_FORK => {
+                match crate::services::process::sys_fork() {
+                    Ok(pid) => pid,
+                    Err(_) => u32::MAX,
+                }
+            }
+            SYSCALL_EXECVE => {
+                let req = unsafe { read_user::<ExecveRequest>(*regs_ptr.add(REG_EBX)) };
+                if let Some(req) = req {
+                    match crate::services::process::sys_execve(
+                        req.path_ptr,
+                        req.path_len,
+                        req.argv_ptr,
+                        req.argc,
+                        req.envp_ptr,
+                        req.envc,
+                    ) {
+                        Ok(()) => 0,
+                        Err(_) => u32::MAX,
+                    }
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_WAITPID => {
+                let req = unsafe { read_user::<WaitpidRequest>(*regs_ptr.add(REG_EBX)) };
+                if let Some(req) = req {
+                    match crate::services::process::sys_waitpid(req.pid, req.status_ptr, req.options) {
+                        Ok(pid) => pid as u32,
+                        Err(_) => u32::MAX,
+                    }
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_GETPID => {
+                crate::services::process::sys_getpid()
+            }
+            SYSCALL_GETPPID => {
+                crate::services::process::sys_getppid()
+            }
+            SYSCALL_GETUID => {
+                crate::services::process::sys_getuid()
+            }
+            SYSCALL_GETGID => {
+                crate::services::process::sys_getgid()
+            }
+            SYSCALL_GETEUID => {
+                crate::services::process::sys_geteuid()
+            }
+            SYSCALL_GETEGID => {
+                crate::services::process::sys_getegid()
+            }
+            SYSCALL_KILL => {
+                let req = unsafe { read_user::<KillRequest>(*regs_ptr.add(REG_EBX)) };
+                if let Some(req) = req {
+                    match crate::services::process::sys_kill(req.pid, req.sig) {
+                        Ok(()) => 0,
+                        Err(_) => u32::MAX,
+                    }
                 } else {
                     u32::MAX
                 }
@@ -608,7 +675,7 @@ fn handle_syscall(regs_ptr: *mut u32) -> u32 {
                     let mut entries = Vec::new();
                     match vfs_freaddir(req.fd, req.offset, &mut entries) {
                         Ok(n) => {
-                            let entry_size = size_of::<crate::userspace::syscall::VfsDirEntry>();
+                            let entry_size = size_of::<crate::userspace::libc::VfsDirEntry>();
                             let copy_len = (req.buf_len as usize).min((n as usize) * entry_size);
                             if copy_len > 0 && crate::memory::paging::user_range_is_mapped(req.buf_ptr, copy_len) {
                                 // Convert kernel DirEntry to userspace VfsDirEntry
@@ -627,7 +694,7 @@ fn handle_syscall(regs_ptr: *mut u32) -> u32 {
                                         crate::fs::vfs::FileType::Fifo => 5,
                                         crate::fs::vfs::FileType::Socket => 6,
                                     };
-                                    user_entries.push(crate::userspace::syscall::VfsDirEntry {
+                                    user_entries.push(crate::userspace::libc::VfsDirEntry {
                                         name,
                                         inode_id: e.inode_id,
                                         file_type: file_type_u32,

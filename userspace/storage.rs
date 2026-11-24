@@ -15,7 +15,12 @@
 // You should have received a copy of the GNU General Public License
 // along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::syscall::{self, StorageFileInfo, StorageRequest};
+use crate::libc::{
+    invoke,
+    SYSCALL_STORAGE_LIST, SYSCALL_STORAGE_READ, SYSCALL_STORAGE_WRITE,
+    SYSCALL_STORAGE_DELETE, SYSCALL_STORAGE_RENAME, SYSCALL_STORAGE_FORMAT,
+    StorageFileInfo, StorageRequest,
+};
 
 const FILE_SLOTS: usize = 16;
 const FILE_BUFFER_SIZE: usize = 512;
@@ -46,7 +51,8 @@ pub fn list_files() -> Result<[FileInfo; FILE_SLOTS], StorageError> {
         out_len: core::mem::size_of_val(&files) as u32,
         ..StorageRequest::default()
     };
-    check(syscall::storage(&mut request))?;
+    let result = invoke(SYSCALL_STORAGE_LIST, &mut request as *mut _ as u32, 0);
+    check(result)?;
     Ok(core::array::from_fn(|index| FileInfo {
         name: files[index].name,
         length: files[index].length,
@@ -62,7 +68,7 @@ pub fn read_file(name: &[u8], output: &mut [u8; FILE_BUFFER_SIZE]) -> Result<usi
         out_len: output.len() as u32,
         ..StorageRequest::default()
     };
-    let length = syscall::storage(&mut request);
+    let length = invoke(SYSCALL_STORAGE_READ, &mut request as *mut _ as u32, 0);
     check(length)?;
     let length = request.out_len as usize;
     if length > output.len() {
@@ -80,7 +86,7 @@ pub fn write_file(name: &[u8], content: &[u8]) -> Result<(), StorageError> {
         data_len: content.len() as u32,
         ..StorageRequest::default()
     };
-    check(syscall::storage(&mut request))
+    check(invoke(SYSCALL_STORAGE_WRITE, &mut request as *mut _ as u32, 0))
 }
 
 pub fn delete_file(name: &[u8]) -> Result<(), StorageError> {
@@ -90,7 +96,7 @@ pub fn delete_file(name: &[u8]) -> Result<(), StorageError> {
         name_len: name.len() as u32,
         ..StorageRequest::default()
     };
-    check(syscall::storage(&mut request))
+    check(invoke(SYSCALL_STORAGE_DELETE, &mut request as *mut _ as u32, 0))
 }
 
 pub fn rename_file(old_name: &[u8], new_name: &[u8]) -> Result<(), StorageError> {
@@ -102,7 +108,7 @@ pub fn rename_file(old_name: &[u8], new_name: &[u8]) -> Result<(), StorageError>
         data_len: new_name.len() as u32,
         ..StorageRequest::default()
     };
-    check(syscall::storage(&mut request))
+    check(invoke(SYSCALL_STORAGE_RENAME, &mut request as *mut _ as u32, 0))
 }
 
 pub fn mkdir(name: &[u8]) -> Result<(), StorageError> {
@@ -112,7 +118,7 @@ pub fn mkdir(name: &[u8]) -> Result<(), StorageError> {
         name_len: name.len() as u32,
         ..StorageRequest::default()
     };
-    check(syscall::storage(&mut request))
+    check(invoke(SYSCALL_STORAGE_FORMAT, &mut request as *mut _ as u32, 0))
 }
 
 pub fn format_if_blank() -> Result<(), StorageError> {
@@ -120,7 +126,7 @@ pub fn format_if_blank() -> Result<(), StorageError> {
         op: 5,
         ..StorageRequest::default()
     };
-    check(syscall::storage(&mut request))
+    check(invoke(SYSCALL_STORAGE_FORMAT, &mut request as *mut _ as u32, 0))
 }
 
 fn check(status: u32) -> Result<(), StorageError> {

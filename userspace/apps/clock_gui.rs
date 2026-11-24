@@ -16,7 +16,6 @@
 // along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
 
 use super::gui::{Application, Canvas, Event, PointerEvent, Rect};
-use crate::syscall;
 
 const TEXT: u32 = 0x111827;
 const ACCENT: u32 = 0x66D9EF;

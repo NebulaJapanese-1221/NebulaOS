@@ -16,7 +16,7 @@
 // along with NebulaOS. If not, see <https://www.gnu.org/licenses/>.
 
 use super::gui::{Application, Button, Canvas, Event, PointerEvent, Rect, TextField};
-use crate::syscall;
+use crate::libc::{process_info, terminate_process, ProcessInfo, ProcessEntry};
 
 const TEXT: u32 = 0x111827;
 const MUTED: u32 = 0xA8B5C9;
@@ -28,7 +28,7 @@ const MAX_ROWS: usize = 8;
 const STATE_LABELS: [&str; 4] = ["UNUSED", "READY", "RUNNING", "BLOCKED"];
 
 pub struct TaskManager {
-    info: syscall::ProcessInfo,
+    info: ProcessInfo,
     kill_field: TextField,
     kill_input: [u8; 16],
     kill_len: usize,
@@ -39,7 +39,7 @@ pub struct TaskManager {
 impl TaskManager {
     pub fn new() -> Self {
         Self {
-            info: syscall::ProcessInfo::default(),
+            info: ProcessInfo::default(),
             kill_field: TextField::new(Rect {
                 x: 0,
                 y: 0,
@@ -54,8 +54,8 @@ impl TaskManager {
     }
 
     fn refresh(&mut self) {
-        self.info = syscall::ProcessInfo::default();
-        let _ = syscall::process_info(&mut self.info);
+        self.info = ProcessInfo::default();
+        let _ = process_info(&mut self.info);
     }
 
     fn draw_row(canvas: &mut dyn Canvas, x: u32, y: u32, pid: u32, app_id: u32, state: u32, events: u32, color: u32) {
@@ -240,9 +240,8 @@ impl Application for TaskManager {
             self.status = "Invalid PID.";
             return;
         }
-        let current = syscall::ProcessInfo::default();
-        let _ = current;
-        match syscall::terminate_process(pid) {
+        let _ = ProcessInfo::default();
+        match terminate_process(pid) {
             Ok(()) => {
                 self.status = "Process terminated.";
                 self.refresh();
