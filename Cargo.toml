@@ -8,6 +8,11 @@ name = "nebulaos"
 path = "kernel/src/main.rs"
 crate-type = ["staticlib"]
 
+[[bin]]
+name = "userspace"
+path = "userspace/main.rs"
+required-features = ["user-app"]
+
 [features]
 user-app = []
 

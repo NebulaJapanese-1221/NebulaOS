@@ -1,0 +1,21 @@
+[package]
+name = "nebulaos-userspace"
+version = "0.0.1"
+edition = "2021"
+
+[lib]
+name = "nebulaos_userspace"
+path = "src/lib.rs"
+crate-type = ["staticlib", "cdylib"]
+
+[features]
+user-app = []
+
+[profile.release]
+opt-level = "z"
+panic = "abort"
+lto = true
+codegen-units = 1
+
+[dependencies]
+nebulaos = { path = "..", features = ["user-app"] }

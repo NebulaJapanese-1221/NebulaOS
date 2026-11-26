@@ -1,0 +1,12 @@
+[build]
+target = "targets/i686-unknown-nebula.json"
+
+[unstable]
+json-target-spec = true
+build-std = ["core", "alloc", "compiler_builtins"]
+
+[target.i686-unknown-nebula]
+rustflags = [
+  "-C", "link-arg=-Tlinker.ld",
+  "-Z", "unstable-options",
+]

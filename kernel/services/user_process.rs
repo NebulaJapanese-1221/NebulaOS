@@ -54,12 +54,14 @@ static LAST_OUTPUT: SpinLock<LastOutput> = SpinLock::new(LastOutput {
 
 // No embedded userspace ELF after removing userspace/demo.
 // These zero-length statics satisfy the linker; spawn_app always fails.
-static USER_APP_START: u8 = 0;
-static USER_APP_END: u8 = 0;
+extern "C" {
+    static __start_user_app: u8;
+    static __stop_user_app: u8;
+}
 
 pub fn spawn_app(app_id: u32, content: AppRect) -> Result<u32, UserProcessError> {
-    let image_start = core::ptr::addr_of!(USER_APP_START);
-    let image_end = core::ptr::addr_of!(USER_APP_END);
+    let image_start = core::ptr::addr_of!(__start_user_app);
+    let image_end = core::ptr::addr_of!(__stop_user_app);
     let Some(embedded_len) = (image_end as usize).checked_sub(image_start as usize) else {
         return Err(UserProcessError::InvalidElf);
     };

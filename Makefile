@@ -9,7 +9,7 @@
 #
 # NebulaOS is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
@@ -34,14 +34,25 @@ LD_ARCH_FLAG := -m elf_i386
 BOOT_OBJ := kernel/arch/isr.o kernel/arch/ap_trampoline.o
 
 KERNEL_LIB := target/$(TARGET)/release/libnebulaos.a
+USERSPACE_LIB := userspace_standalone/target/$(TARGET)/release/libnebulaos_userspace.a
+USERSPACE_ELF := userspace_standalone/target/$(TARGET)/release/userspace
+USERSPACE_BIN := userspace_standalone/target/$(TARGET)/release/userspace.bin
 DISK := nebulaos.disk
 
 export RUSTC_TARGET_PATH := targets
 
 all: $(ISO)
 
+# ---- Userspace ELF ----
+$(USERSPACE_LIB): userspace_standalone/Cargo.toml userspace_standalone/Cargo.lock $(shell find userspace_standalone -type f -name '*.rs')
+	cd userspace_standalone && $(CARGO) build --release --features user-app
+
+$(USERSPACE_BIN): $(USERSPACE_LIB)
+	$(LD) $(LD_ARCH_FLAG) -T linker.ld -o $(USERSPACE_ELF) $(USERSPACE_LIB) --whole-archive $(USERSPACE_LIB) --no-whole-archive
+	$(OBJCOPY) -O binary $(USERSPACE_ELF) $@
+
 # ---- Kernel library ----
-$(KERNEL_LIB): Cargo.toml Cargo.lock .cargo/config.toml targets/$(TARGET).json $(shell find kernel userspace -type f -name '*.rs')
+$(KERNEL_LIB): Cargo.toml Cargo.lock .cargo/config.toml targets/$(TARGET).json $(shell find kernel -type f -name '*.rs') $(USERSPACE_BIN)
 	$(CARGO) build --release
 
 # ---- Boot objects ----
@@ -50,8 +61,9 @@ $(BOOT_OBJ): kernel/arch/isr.asm kernel/arch/ap_trampoline.asm
 	$(NASM) -f elf32 kernel/arch/ap_trampoline.asm -o kernel/arch/ap_trampoline.o
 
 # ---- Kernel ELF ----
-$(KERNEL_IMG): $(KERNEL_LIB) $(BOOT_OBJ) linker.ld
-	$(LD) $(LD_ARCH_FLAG) -T linker.ld -o $(KERNEL_IMG) $(BOOT_OBJ) $(KERNEL_LIB)
+$(KERNEL_IMG): $(KERNEL_LIB) $(BOOT_OBJ) linker.ld $(USERSPACE_BIN)
+	$(LD) $(LD_ARCH_FLAG) -T linker.ld -o $(KERNEL_IMG) $(BOOT_OBJ) $(KERNEL_LIB) --whole-archive $(KERNEL_LIB) --no-whole-archive
+	$(OBJCOPY) --add-section .user_app=$(USERSPACE_BIN) --change-section-vma .user_app=0x40000000 --set-section-flags .user_app=contents,alloc,load,readonly $@ $@
 
 # ---- ISO ----
 $(ISO): $(KERNEL_IMG) Makefile
@@ -79,4 +91,5 @@ data-disk:
 
 clean:
 	$(CARGO) clean
-	rm -rf boot/iso $(KERNEL_IMG) $(BOOT_OBJ) nebulaos.img $(ISO)
+	cd userspace_standalone && $(CARGO) clean
+	rm -rf boot/iso $(KERNEL_IMG) $(BOOT_OBJ) $(USERSPACE_LIB) $(USERSPACE_BIN) nebulaos.img $(ISO)
