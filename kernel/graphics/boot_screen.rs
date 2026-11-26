@@ -103,8 +103,8 @@ impl BootScreen {
     }
 
     fn render(&self) {
-        let width = framebuffer::get_width();
-        let height = framebuffer::get_height();
+        let width = framebuffer::get_width_default();
+        let height = framebuffer::get_height_default();
         if width == 0 || height == 0 {
             return;
         }
@@ -112,7 +112,7 @@ impl BootScreen {
         // Deep space gradient background
         for y in 0..height {
             let blend = y * 255 / height.max(1);
-            framebuffer::fill_rect(0, y, width, 1, blend_rgb(BG_TOP, BG_BOTTOM, blend));
+            framebuffer::fill_rect_default(0, y, width, 1, blend_rgb(BG_TOP, BG_BOTTOM, blend));
         }
 
         // Subtle vignette
@@ -121,15 +121,15 @@ impl BootScreen {
         // Header: NebulaOS title
         let title_x = MARGIN_X;
         let title_y = MARGIN_Y;
-        framebuffer::draw_text(title_x, title_y, "NEBULAOS", TEXT, 3);
-        framebuffer::draw_text(
+        framebuffer::draw_text_default(title_x, title_y, "NEBULAOS", TEXT, 3);
+        framebuffer::draw_text_default(
             title_x,
             title_y + 44,
             "A modern, from-scratch operating system",
             MUTED,
             1,
         );
-        framebuffer::draw_text(
+        framebuffer::draw_text_default(
             title_x,
             title_y + 64,
             &format!("Version {}", VERSION),
@@ -138,25 +138,25 @@ impl BootScreen {
         );
 
         // Horizontal divider
-        framebuffer::draw_rect(MARGIN_X, title_y + 92, 320, 2, PANEL);
+        framebuffer::draw_rect_default(MARGIN_X, title_y + 92, 320, 2, PANEL);
 
         // Progress section
         let progress_y = title_y + 120;
-        framebuffer::draw_text(MARGIN_X, progress_y, "BOOT PROGRESS", MUTED, 1);
+        framebuffer::draw_text_default(MARGIN_X, progress_y, "BOOT PROGRESS", MUTED, 1);
         let bar_width = 400u32;
         let bar_x = MARGIN_X;
         let bar_y = progress_y + 24;
         let bar_height = 10u32;
 
-        framebuffer::fill_rect(bar_x, bar_y, bar_width, bar_height, PANEL);
+        framebuffer::fill_rect_default(bar_x, bar_y, bar_width, bar_height, PANEL);
         let filled = bar_width * self.stage.progress() / 100;
         if filled > 0 {
-            framebuffer::fill_rect(bar_x, bar_y, filled, bar_height, ACCENT);
+            framebuffer::fill_rect_default(bar_x, bar_y, filled, bar_height, ACCENT);
         }
-        framebuffer::draw_rect(bar_x, bar_y, bar_width, bar_height, ACCENT_DIM);
+        framebuffer::draw_rect_default(bar_x, bar_y, bar_width, bar_height, ACCENT_DIM);
 
         let pct = self.stage.progress();
-        framebuffer::draw_text(
+        framebuffer::draw_text_default(
             bar_x + bar_width + 12,
             bar_y.saturating_sub(2),
             &format!("{}%", pct),
@@ -182,21 +182,21 @@ impl BootScreen {
             // Status dot
             let dot_x = MARGIN_X;
             let dot_y = y + 2;
-            framebuffer::fill_rect(dot_x, dot_y, 8, 8, dot_color);
-            framebuffer::draw_rect(dot_x, dot_y, 8, 8, if done { OK } else { PANEL });
+            framebuffer::fill_rect_default(dot_x, dot_y, 8, 8, dot_color);
+            framebuffer::draw_rect_default(dot_x, dot_y, 8, 8, if done { OK } else { PANEL });
 
             // Title
-            framebuffer::draw_text(dot_x + 20, y, title, text_color, 1);
+            framebuffer::draw_text_default(dot_x + 20, y, title, text_color, 1);
             // Description
-            framebuffer::draw_text(dot_x + 20, y + 16, desc, if done { MUTED } else { PANEL }, 1);
+            framebuffer::draw_text_default(dot_x + 20, y + 16, desc, if done { MUTED } else { PANEL }, 1);
 
             y += 52;
         }
 
         // Footer
         let footer_y = height - 40;
-        framebuffer::draw_rect(MARGIN_X, footer_y - 10, 320, 1, PANEL);
-        framebuffer::draw_text(
+        framebuffer::draw_rect_default(MARGIN_X, footer_y - 10, 320, 1, PANEL);
+        framebuffer::draw_text_default(
             MARGIN_X,
             footer_y,
             "Press F12 during boot for diagnostic mode",
@@ -204,7 +204,7 @@ impl BootScreen {
             1,
         );
 
-        framebuffer::present();
+        framebuffer::present_default();
     }
 
     fn draw_vignette(&self, _width: u32, _height: u32) {

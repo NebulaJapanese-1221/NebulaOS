@@ -46,6 +46,12 @@ use crate::userspace::libc::{
     SYSCALL_VFS_MOUNT, SYSCALL_VFS_UNMOUNT,
     SYSCALL_VFS_READLINK, SYSCALL_VFS_SYMLINK, SYSCALL_VFS_CHMOD, SYSCALL_VFS_CHOWN, SYSCALL_VFS_UTIMES,
     SYSCALL_VFS_XATTR_SET, SYSCALL_VFS_XATTR_GET, SYSCALL_VFS_XATTR_LIST, SYSCALL_VFS_XATTR_REMOVE,
+    SYSCALL_AUDIO_INIT, SYSCALL_AUDIO_VOLUME_GET, SYSCALL_AUDIO_VOLUME_SET, SYSCALL_AUDIO_PLAY_TONE,
+    SYSCALL_AUDIO_STOP, SYSCALL_AUDIO_BEEP, SYSCALL_AUDIO_STARTUP_CHIME, SYSCALL_AUDIO_PLAY_MELODY,
+    SYSCALL_AUDIO_QUEUE_TONE, SYSCALL_AUDIO_POLL, SYSCALL_AUDIO_AC97_AVAILABLE,
+    SYSCALL_FB_GET_COUNT, SYSCALL_FB_GET_PRIMARY, SYSCALL_FB_GET_WIDTH, SYSCALL_FB_GET_HEIGHT,
+    SYSCALL_FB_SET_CURSOR, SYSCALL_FB_GET_CURSOR, SYSCALL_FB_PRESENT, SYSCALL_FB_PRESENT_RECT,
+    SYSCALL_FB_FILL_RECT, SYSCALL_FB_DRAW_RECT, SYSCALL_FB_DRAW_TEXT, SYSCALL_FB_CLEAR,
     SYSCALL_FORK, SYSCALL_EXECVE, SYSCALL_WAITPID, SYSCALL_GETPID, SYSCALL_GETPPID,
     SYSCALL_KILL, SYSCALL_GETUID, SYSCALL_GETGID, SYSCALL_GETEUID, SYSCALL_GETEGID,
     VfsOpenRequest, VfsIoRequest, VfsLseekRequest, VfsStatRequest, VfsFstatRequest, VfsMkdirRequest,
@@ -53,6 +59,8 @@ use crate::userspace::libc::{
     VfsReadlinkRequest, VfsSymlinkRequest, VfsChmodRequest, VfsChownRequest, VfsUtimesRequest,
     VfsXattrSetRequest, VfsXattrGetRequest, VfsXattrListRequest, VfsXattrRemoveRequest,
     ExecveRequest, WaitpidRequest, KillRequest,
+    AudioToneRequest, AudioMelodyRequest,
+    FbCursorRequest, FbRectRequest, FbFillRectRequest, FbDrawRectRequest, FbDrawTextRequest,
 };
 use core::mem::size_of;
 
@@ -416,7 +424,7 @@ fn handle_syscall(regs_ptr: *mut u32) -> u32 {
                 }
             }
             SYSCALL_PRESENT => {
-                crate::drivers::framebuffer::present();
+                crate::drivers::framebuffer::present_default();
                 0
             }
             SYSCALL_PRESENT_RECT => {
@@ -425,7 +433,7 @@ fn handle_syscall(regs_ptr: *mut u32) -> u32 {
                 let wh = *regs_ptr.add(48 / 4);
                 let width = wh >> 16;
                 let height = wh & 0xFFFF;
-                crate::drivers::framebuffer::present_rect(x, y, width, height);
+                crate::drivers::framebuffer::present_rect_default(x, y, width, height);
                 0
             }
             SYSCALL_GET_CURSOR => {
@@ -434,26 +442,26 @@ fn handle_syscall(regs_ptr: *mut u32) -> u32 {
                     u32::MAX
                 } else {
                     let mut info = info.unwrap();
-                    info.x = crate::drivers::framebuffer::get_cursor_x();
-                    info.y = crate::drivers::framebuffer::get_cursor_y();
-                    info.cursor_type = crate::drivers::framebuffer::get_cursor_type() as u32;
+                    info.x = crate::drivers::framebuffer::get_cursor_x_default();
+                    info.y = crate::drivers::framebuffer::get_cursor_y_default();
+                    info.cursor_type = crate::drivers::framebuffer::get_cursor_type_default() as u32;
                     unsafe { write_user(*regs_ptr.add(REG_EBX), &info) as u32 }
                 }
             }
             SYSCALL_SET_CURSOR => {
                 let info = unsafe { read_user::<CursorInfo>(*regs_ptr.add(REG_EBX)) };
                 if let Some(info) = info {
-                    crate::drivers::framebuffer::set_cursor(info.x, info.y, crate::drivers::framebuffer::CursorType::from_u32(info.cursor_type));
+                    crate::drivers::framebuffer::set_cursor_default(info.x, info.y, crate::drivers::framebuffer::CursorType::from_u32(info.cursor_type));
                     0
                 } else {
                     u32::MAX
                 }
             }
             SYSCALL_GET_WIDTH => {
-                crate::drivers::framebuffer::get_width()
+                crate::drivers::framebuffer::get_width_default()
             }
             SYSCALL_GET_HEIGHT => {
-                crate::drivers::framebuffer::get_height()
+                crate::drivers::framebuffer::get_height_default()
             }
             SYSCALL_VFS_OPEN => {
                 let req = unsafe { read_user::<VfsOpenRequest>(*regs_ptr.add(REG_EBX)) };
@@ -1061,6 +1069,192 @@ fn handle_syscall(regs_ptr: *mut u32) -> u32 {
                     u32::MAX
                 }
             }
+            SYSCALL_AUDIO_INIT => {
+                crate::drivers::audio::init();
+                0
+            }
+            SYSCALL_AUDIO_VOLUME_GET => {
+                crate::drivers::audio::volume() as u32
+            }
+            SYSCALL_AUDIO_VOLUME_SET => {
+                let level = *regs_ptr.add(REG_EBX) as u8;
+                crate::drivers::audio::set_volume(level);
+                0
+            }
+            SYSCALL_AUDIO_PLAY_TONE => {
+                let req = unsafe { read_user::<AudioToneRequest>(*regs_ptr.add(REG_EBX)) };
+                if let Some(req) = req {
+                    crate::drivers::audio::play_tone(req.frequency, req.duration);
+                    0
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_AUDIO_STOP => {
+                crate::drivers::audio::stop();
+                0
+            }
+            SYSCALL_AUDIO_BEEP => {
+                crate::drivers::audio::beep();
+                0
+            }
+            SYSCALL_AUDIO_STARTUP_CHIME => {
+                crate::drivers::audio::startup_chime();
+                0
+            }
+            SYSCALL_AUDIO_PLAY_MELODY => {
+                let req = unsafe { read_user::<AudioMelodyRequest>(*regs_ptr.add(REG_EBX)) };
+                if let Some(req) = req {
+                    let note_count = req.note_count as usize;
+                    if note_count <= 32 {
+                        let mut notes = [(0u32, 0u32); 32];
+                        if crate::memory::paging::user_range_is_mapped(req.data_ptr, note_count * 8) {
+                            let data_ptr = req.data_ptr as *const u8;
+                            for i in 0..note_count {
+                                let base = i * 8;
+                                let freq = u32::from_le_bytes([
+                                    unsafe { *data_ptr.add(base) },
+                                    unsafe { *data_ptr.add(base + 1) },
+                                    unsafe { *data_ptr.add(base + 2) },
+                                    unsafe { *data_ptr.add(base + 3) },
+                                ]);
+                                let dur = u32::from_le_bytes([
+                                    unsafe { *data_ptr.add(base + 4) },
+                                    unsafe { *data_ptr.add(base + 5) },
+                                    unsafe { *data_ptr.add(base + 6) },
+                                    unsafe { *data_ptr.add(base + 7) },
+                                ]);
+                                notes[i] = (freq, dur);
+                            }
+                            crate::drivers::audio::play_melody(&notes[..note_count]);
+                            0
+                        } else {
+                            u32::MAX
+                        }
+                    } else {
+                        u32::MAX
+                    }
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_AUDIO_QUEUE_TONE => {
+                let req = unsafe { read_user::<AudioToneRequest>(*regs_ptr.add(REG_EBX)) };
+                if let Some(req) = req {
+                    crate::drivers::audio::queue_tone(req.frequency, req.duration);
+                    0
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_AUDIO_POLL => {
+                if crate::drivers::audio::poll() {
+                    1
+                } else {
+                    0
+                }
+            }
+            SYSCALL_AUDIO_AC97_AVAILABLE => {
+                if crate::drivers::audio::ac97_is_available() {
+                    1
+                } else {
+                    0
+                }
+            }
+            SYSCALL_FB_GET_COUNT => {
+                crate::drivers::framebuffer::get_framebuffer_count()
+            }
+            SYSCALL_FB_GET_PRIMARY => {
+                crate::drivers::framebuffer::get_primary_fb_id()
+            }
+            SYSCALL_FB_GET_WIDTH => {
+                let fb_id = *regs_ptr.add(REG_EBX);
+                crate::drivers::framebuffer::get_width(fb_id)
+            }
+            SYSCALL_FB_GET_HEIGHT => {
+                let fb_id = *regs_ptr.add(REG_EBX);
+                crate::drivers::framebuffer::get_height(fb_id)
+            }
+            SYSCALL_FB_SET_CURSOR => {
+                let req = unsafe { read_user::<FbCursorRequest>(*regs_ptr.add(REG_EBX)) };
+                if let Some(req) = req {
+                    crate::drivers::framebuffer::set_cursor(req.fb_id, req.x, req.y, crate::drivers::framebuffer::CursorType::from_u32(req.kind));
+                    0
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_FB_GET_CURSOR => {
+                let req = unsafe { read_user::<FbCursorRequest>(*regs_ptr.add(REG_EBX)) };
+                if let Some(mut req) = req {
+                    req.x = crate::drivers::framebuffer::get_cursor_x(req.fb_id);
+                    req.y = crate::drivers::framebuffer::get_cursor_y(req.fb_id);
+                    req.kind = crate::drivers::framebuffer::get_cursor_type(req.fb_id) as u32;
+                    unsafe { write_user(*regs_ptr.add(REG_EBX), &req) as u32 }
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_FB_PRESENT => {
+                let fb_id = *regs_ptr.add(REG_EBX);
+                crate::drivers::framebuffer::present(fb_id);
+                0
+            }
+            SYSCALL_FB_PRESENT_RECT => {
+                let req = unsafe { read_user::<FbRectRequest>(*regs_ptr.add(REG_EBX)) };
+                if let Some(req) = req {
+                    crate::drivers::framebuffer::present_rect(req.fb_id, req.x, req.y, req.width, req.height);
+                    0
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_FB_FILL_RECT => {
+                let req = unsafe { read_user::<FbFillRectRequest>(*regs_ptr.add(REG_EBX)) };
+                if let Some(req) = req {
+                    crate::drivers::framebuffer::fill_rect(req.fb_id, req.x, req.y, req.width, req.height, req.color);
+                    0
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_FB_DRAW_RECT => {
+                let req = unsafe { read_user::<FbDrawRectRequest>(*regs_ptr.add(REG_EBX)) };
+                if let Some(req) = req {
+                    crate::drivers::framebuffer::draw_rect(req.fb_id, req.x, req.y, req.width, req.height, req.color);
+                    0
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_FB_DRAW_TEXT => {
+                let req = unsafe { read_user::<FbDrawTextRequest>(*regs_ptr.add(REG_EBX)) };
+                if let Some(req) = req {
+                    let length = req.text_len as usize;
+                    if length > MAX_WRITE_LENGTH
+                        || req.scale == 0
+                        || req.scale > 8
+                        || !crate::memory::paging::user_range_is_mapped(req.text_ptr, length)
+                    {
+                        u32::MAX
+                    } else {
+                        let bytes = unsafe { core::slice::from_raw_parts(req.text_ptr as *const u8, length) };
+                        let Ok(text) = core::str::from_utf8(bytes) else {
+                            return u32::MAX;
+                        };
+                        crate::drivers::framebuffer::draw_text(req.fb_id, req.x, req.y, text, req.color, req.scale);
+                        0
+                    }
+                } else {
+                    u32::MAX
+                }
+            }
+            SYSCALL_FB_CLEAR => {
+                let fb_id = *regs_ptr.add(REG_EBX);
+                let color = *regs_ptr.add(REG_ECX);
+                crate::drivers::framebuffer::clear_screen(fb_id, color);
+                0
+            }
             _ => u32::MAX,
         };
         *regs_ptr.add(REG_EAX) = result;
@@ -1088,7 +1282,7 @@ fn poll_user_event(address: u32) -> u32 {
         return u32::MAX;
     }
     if let Some(content) = crate::services::process::take_current_draw_dirty() {
-        crate::drivers::framebuffer::present_rect(
+        crate::drivers::framebuffer::present_rect_default(
             content.x,
             content.y,
             content.width,
@@ -1184,8 +1378,8 @@ fn write_memory_info(address: u32) -> u32 {
 fn write_device_info(address: u32) -> u32 {
     let mouse = crate::drivers::mouse::state();
     let info = DeviceInfo {
-        framebuffer_width: crate::drivers::framebuffer::get_width(),
-        framebuffer_height: crate::drivers::framebuffer::get_height(),
+        framebuffer_width: crate::drivers::framebuffer::get_width_default(),
+        framebuffer_height: crate::drivers::framebuffer::get_height_default(),
         mouse_x: mouse.x.max(0) as u32,
         mouse_y: mouse.y.max(0) as u32,
         mouse_buttons: u32::from(mouse.left)
@@ -1220,8 +1414,8 @@ fn draw_user_command(address: u32, syscall: u32) -> u32 {
     }
     let x = area.x + command.x;
     let y = area.y + command.y;
-    let fb_width = crate::drivers::framebuffer::get_width();
-    let fb_height = crate::drivers::framebuffer::get_height();
+    let fb_width = crate::drivers::framebuffer::get_width_default();
+    let fb_height = crate::drivers::framebuffer::get_height_default();
     if x.checked_add(command.width)
         .is_none_or(|right| right > fb_width)
         || y.checked_add(command.height)
@@ -1231,7 +1425,7 @@ fn draw_user_command(address: u32, syscall: u32) -> u32 {
     }
     match syscall {
         SYSCALL_DRAW_FILL_RECT if command.kind == 0 => {
-            crate::drivers::framebuffer::fill_rect(
+            crate::drivers::framebuffer::fill_rect_default(
                 x,
                 y,
                 command.width,
@@ -1242,7 +1436,7 @@ fn draw_user_command(address: u32, syscall: u32) -> u32 {
             0
         }
         SYSCALL_DRAW_RECT if command.kind == 1 => {
-            crate::drivers::framebuffer::draw_rect(
+            crate::drivers::framebuffer::draw_rect_default(
                 x,
                 y,
                 command.width,
@@ -1286,7 +1480,7 @@ fn draw_user_command(address: u32, syscall: u32) -> u32 {
             let Ok(text) = core::str::from_utf8(bytes) else {
                 return u32::MAX;
             };
-            crate::drivers::framebuffer::draw_text(x, y, text, command.color, command.scale);
+            crate::drivers::framebuffer::draw_text_default(x, y, text, command.color, command.scale);
             crate::services::process::mark_current_draw_dirty();
             0
         }

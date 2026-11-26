@@ -22,9 +22,11 @@ use core::ptr;
 
 const MULTIBOOT_INFO_MAX_SIZE: usize = 1024 * 1024;
 const MAX_FRAMEBUFFER_SIZE: usize = 64 * 1024 * 1024;
+const MAX_FRAMEBUFFERS: usize = 4;
 
 #[derive(Clone, Copy)]
 pub struct Framebuffer {
+    pub id: u32,
     pub width: u32,
     pub height: u32,
     pub pitch: u32,
@@ -40,7 +42,9 @@ pub struct Framebuffer {
     blue_size: u8,
 }
 
-static mut FB: Option<Framebuffer> = None;
+static mut FRAMEBUFFERS: [Option<Framebuffer>; MAX_FRAMEBUFFERS] = [None; MAX_FRAMEBUFFERS];
+static mut FRAMEBUFFER_COUNT: u32 = 0;
+static mut PRIMARY_FB_ID: u32 = 0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CursorType {
@@ -66,6 +70,7 @@ impl CursorType {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct CursorState {
+    fb_id: u32,
     x: u32,
     y: u32,
     kind: CursorType,
@@ -74,24 +79,29 @@ struct CursorState {
 
 const CURSOR_SIZE: u32 = 20;
 
-static mut CURSOR: CursorState = CursorState {
+static mut CURSORS: [CursorState; MAX_FRAMEBUFFERS] = [CursorState {
+    fb_id: 0,
     x: 0,
     y: 0,
     kind: CursorType::Arrow,
     visible: false,
-};
-static mut DISPLAYED_CURSOR: CursorState = CursorState {
+}; MAX_FRAMEBUFFERS];
+
+static mut DISPLAYED_CURSORS: [CursorState; MAX_FRAMEBUFFERS] = [CursorState {
+    fb_id: 0,
     x: 0,
     y: 0,
     kind: CursorType::Arrow,
     visible: false,
-};
+}; MAX_FRAMEBUFFERS];
+
 static FRAMEBUFFER_LOCK: SpinLock<()> = SpinLock::new(());
 
 const MAX_DIRTY_RECTS: usize = 64;
 
 #[derive(Clone, Copy)]
 struct DirtyRect {
+    fb_id: u32,
     x: u32,
     y: u32,
     w: u32,
@@ -99,10 +109,10 @@ struct DirtyRect {
 }
 
 static DIRTY_RECTS: SpinLock<[DirtyRect; MAX_DIRTY_RECTS]> =
-    SpinLock::new([DirtyRect { x: 0, y: 0, w: 0, h: 0 }; MAX_DIRTY_RECTS]);
+    SpinLock::new([DirtyRect { fb_id: 0, x: 0, y: 0, w: 0, h: 0 }; MAX_DIRTY_RECTS]);
 static DIRTY_COUNT: SpinLock<usize> = SpinLock::new(0);
 
-pub fn mark_dirty(x: u32, y: u32, width: u32, height: u32) {
+pub fn mark_dirty(fb_id: u32, x: u32, y: u32, width: u32, height: u32) {
     if width == 0 || height == 0 {
         return;
     }
@@ -111,37 +121,40 @@ pub fn mark_dirty(x: u32, y: u32, width: u32, height: u32) {
     if count >= MAX_DIRTY_RECTS {
         return;
     }
-    rects[count] = DirtyRect { x, y, w: width, h: height };
+    rects[count] = DirtyRect { fb_id, x, y, w: width, h: height };
     *DIRTY_COUNT.lock() = count + 1;
 }
 
+pub fn mark_dirty_default(x: u32, y: u32, width: u32, height: u32) {
+    mark_dirty(unsafe { PRIMARY_FB_ID }, x, y, width, height);
+}
+
 pub fn present_dirty() {
-    let Some(framebuffer) = get_fb() else {
-        return;
-    };
     let rects = DIRTY_RECTS.lock();
     let count = *DIRTY_COUNT.lock();
-    let bytes_per_pixel = (framebuffer.bpp as usize).div_ceil(8);
 
     unsafe {
         for i in 0..count {
             let rect = rects[i];
-            let right = rect.x.saturating_add(rect.w).min(framebuffer.width);
-            let bottom = rect.y.saturating_add(rect.h).min(framebuffer.height);
-            let left = rect.x.min(framebuffer.width);
-            let top = rect.y.min(framebuffer.height);
-            if right <= left || bottom <= top {
-                continue;
-            }
-            for row in top..bottom {
-                for column in left..right {
-                    let offset = row as usize * framebuffer.pitch as usize
-                        + column as usize * bytes_per_pixel;
-                    for byte in 0..bytes_per_pixel {
-                        framebuffer
-                            .display_pixels
-                            .add(offset + byte)
-                            .write_volatile(framebuffer.pixels.add(offset + byte).read());
+            if let Some(framebuffer) = get_fb_by_id(rect.fb_id) {
+                let bytes_per_pixel = (framebuffer.bpp as usize).div_ceil(8);
+                let right = rect.x.saturating_add(rect.w).min(framebuffer.width);
+                let bottom = rect.y.saturating_add(rect.h).min(framebuffer.height);
+                let left = rect.x.min(framebuffer.width);
+                let top = rect.y.min(framebuffer.height);
+                if right <= left || bottom <= top {
+                    continue;
+                }
+                for row in top..bottom {
+                    for column in left..right {
+                        let offset = row as usize * framebuffer.pitch as usize
+                            + column as usize * bytes_per_pixel;
+                        for byte in 0..bytes_per_pixel {
+                            framebuffer
+                                .display_pixels
+                                .add(offset + byte)
+                                .write_volatile(framebuffer.pixels.add(offset + byte).read());
+                        }
                     }
                 }
             }
@@ -150,6 +163,18 @@ pub fn present_dirty() {
 
     // Clear dirty list
     *DIRTY_COUNT.lock() = 0;
+}
+
+fn get_fb_by_id(id: u32) -> Option<Framebuffer> {
+    if (id as usize) < MAX_FRAMEBUFFERS {
+        unsafe { ptr::read_volatile(ptr::addr_of!(FRAMEBUFFERS[id as usize])) }
+    } else {
+        None
+    }
+}
+
+pub fn get_fb() -> Option<Framebuffer> {
+    get_fb_by_id(unsafe { PRIMARY_FB_ID })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -173,6 +198,9 @@ pub fn init(multiboot_info: *const u8) -> Result<Framebuffer, FramebufferError> 
     }
 
     let mut tag_offset = 8usize;
+    let mut fb_count = 0;
+    let mut primary_fb: Option<Framebuffer> = None;
+
     while tag_offset
         .checked_add(8)
         .is_some_and(|end| end <= total_size)
@@ -199,7 +227,16 @@ pub fn init(multiboot_info: *const u8) -> Result<Framebuffer, FramebufferError> 
             let framebuffer_type = unsafe { ptr::read(multiboot_info.add(tag_offset + 29)) };
 
             if framebuffer_type != 1 {
-                return Err(FramebufferError::NoRgbFramebuffer);
+                // Skip non-RGB framebuffers but continue parsing
+                tag_offset = tag_offset
+                    .checked_add(
+                        tag_size
+                            .checked_add(7)
+                            .ok_or(FramebufferError::InvalidBootInformation)?
+                            & !7,
+                    )
+                    .ok_or(FramebufferError::InvalidBootInformation)?;
+                continue;
             }
 
             let red_position = unsafe { ptr::read(multiboot_info.add(tag_offset + 32)) };
@@ -243,6 +280,7 @@ pub fn init(multiboot_info: *const u8) -> Result<Framebuffer, FramebufferError> 
                 .ok_or(FramebufferError::BackBufferAllocationFailed)?;
 
             let framebuffer = Framebuffer {
+                id: fb_count,
                 width,
                 height,
                 pitch,
@@ -257,22 +295,32 @@ pub fn init(multiboot_info: *const u8) -> Result<Framebuffer, FramebufferError> 
                 blue_position,
                 blue_size,
             };
+
             unsafe {
-                ptr::addr_of_mut!(FB).write(Some(framebuffer));
-                ptr::addr_of_mut!(CURSOR).write(CursorState {
-                    x: 0,
-                    y: 0,
-                    kind: CursorType::Arrow,
-                    visible: false,
-                });
-                ptr::addr_of_mut!(DISPLAYED_CURSOR).write(CursorState {
-                    x: 0,
-                    y: 0,
-                    kind: CursorType::Arrow,
-                    visible: false,
-                });
+                if fb_count < MAX_FRAMEBUFFERS as u32 {
+                    let idx = fb_count as usize;
+                    ptr::addr_of_mut!(FRAMEBUFFERS[idx]).write(Some(framebuffer));
+                    ptr::addr_of_mut!(CURSORS[idx]).write(CursorState {
+                        fb_id: fb_count,
+                        x: 0,
+                        y: 0,
+                        kind: CursorType::Arrow,
+                        visible: false,
+                    });
+                    ptr::addr_of_mut!(DISPLAYED_CURSORS[idx]).write(CursorState {
+                        fb_id: fb_count,
+                        x: 0,
+                        y: 0,
+                        kind: CursorType::Arrow,
+                        visible: false,
+                    });
+                    fb_count += 1;
+                }
             }
-            return Ok(framebuffer);
+
+            if primary_fb.is_none() {
+                primary_fb = Some(framebuffer);
+            }
         }
 
         if tag_type == 0 {
@@ -288,7 +336,16 @@ pub fn init(multiboot_info: *const u8) -> Result<Framebuffer, FramebufferError> 
             .ok_or(FramebufferError::InvalidBootInformation)?;
     }
 
-    Err(FramebufferError::NoRgbFramebuffer)
+    unsafe {
+        FRAMEBUFFER_COUNT = fb_count;
+        PRIMARY_FB_ID = 0;
+    }
+
+    if let Some(fb) = primary_fb {
+        Ok(fb)
+    } else {
+        Err(FramebufferError::NoRgbFramebuffer)
+    }
 }
 
 unsafe fn read_u32(base: *const u8, offset: usize) -> u32 {
@@ -297,10 +354,6 @@ unsafe fn read_u32(base: *const u8, offset: usize) -> u32 {
 
 unsafe fn read_u64(base: *const u8, offset: usize) -> u64 {
     ptr::read_unaligned(base.add(offset).cast::<u64>())
-}
-
-pub fn get_fb() -> Option<Framebuffer> {
-    unsafe { ptr::read_volatile(ptr::addr_of!(FB)) }
 }
 
 fn channel(value: u32, size: u8) -> u32 {
@@ -334,14 +387,18 @@ fn write_pixel(framebuffer: Framebuffer, offset: usize, bytes_per_pixel: usize, 
     }
 }
 
-pub fn fill_rect(x: u32, y: u32, width: u32, height: u32, color: u32) {
+pub fn fill_rect(fb_id: u32, x: u32, y: u32, width: u32, height: u32, color: u32) {
     let _guard = FRAMEBUFFER_LOCK.lock();
-    fill_rect_unlocked(x, y, width, height, color);
-    mark_dirty(x, y, width, height);
+    fill_rect_unlocked(fb_id, x, y, width, height, color);
+    mark_dirty(fb_id, x, y, width, height);
 }
 
-fn fill_rect_unlocked(x: u32, y: u32, width: u32, height: u32, color: u32) {
-    let Some(framebuffer) = get_fb() else {
+pub fn fill_rect_default(x: u32, y: u32, width: u32, height: u32, color: u32) {
+    fill_rect(unsafe { PRIMARY_FB_ID }, x, y, width, height, color);
+}
+
+fn fill_rect_unlocked(fb_id: u32, x: u32, y: u32, width: u32, height: u32, color: u32) {
+    let Some(framebuffer) = get_fb_by_id(fb_id) else {
         return;
     };
     let right = x.saturating_add(width).min(framebuffer.width);
@@ -357,18 +414,22 @@ fn fill_rect_unlocked(x: u32, y: u32, width: u32, height: u32, color: u32) {
     }
 }
 
-pub fn clear_screen(color: u32) {
+pub fn clear_screen(fb_id: u32, color: u32) {
     let _guard = FRAMEBUFFER_LOCK.lock();
-    let Some(framebuffer) = get_fb() else {
+    let Some(framebuffer) = get_fb_by_id(fb_id) else {
         return;
     };
-    fill_rect_unlocked(0, 0, framebuffer.width, framebuffer.height, color);
-    mark_dirty(0, 0, framebuffer.width, framebuffer.height);
+    fill_rect_unlocked(fb_id, 0, 0, framebuffer.width, framebuffer.height, color);
+    mark_dirty(fb_id, 0, 0, framebuffer.width, framebuffer.height);
 }
 
-pub fn present() {
+pub fn clear_screen_default(color: u32) {
+    clear_screen(unsafe { PRIMARY_FB_ID }, color);
+}
+
+pub fn present(fb_id: u32) {
     let _guard = FRAMEBUFFER_LOCK.lock();
-    let Some(framebuffer) = get_fb() else {
+    let Some(framebuffer) = get_fb_by_id(fb_id) else {
         return;
     };
     unsafe {
@@ -403,7 +464,7 @@ pub fn present() {
             offset += 1;
         }
     }
-    let cursor = unsafe { ptr::read_volatile(ptr::addr_of!(CURSOR)) };
+    let cursor = unsafe { ptr::read_volatile(ptr::addr_of!(CURSORS[fb_id as usize])) };
     draw_cursor_on_display(
         framebuffer,
         cursor,
@@ -413,15 +474,20 @@ pub fn present() {
         framebuffer.height,
     );
     unsafe {
-        ptr::addr_of_mut!(DISPLAYED_CURSOR).write(cursor);
+        ptr::addr_of_mut!(DISPLAYED_CURSORS[fb_id as usize]).write(cursor);
     }
     *DIRTY_COUNT.lock() = 0;
 }
 
-pub fn set_cursor(x: u32, y: u32, kind: CursorType) {
+pub fn present_default() {
+    present(unsafe { PRIMARY_FB_ID });
+}
+
+pub fn set_cursor(fb_id: u32, x: u32, y: u32, kind: CursorType) {
     let _guard = FRAMEBUFFER_LOCK.lock();
     unsafe {
-        ptr::addr_of_mut!(CURSOR).write(CursorState {
+        ptr::addr_of_mut!(CURSORS[fb_id as usize]).write(CursorState {
+            fb_id,
             x,
             y,
             kind,
@@ -430,13 +496,17 @@ pub fn set_cursor(x: u32, y: u32, kind: CursorType) {
     }
 }
 
-pub fn present_cursor_update() {
+pub fn set_cursor_default(x: u32, y: u32, kind: CursorType) {
+    set_cursor(unsafe { PRIMARY_FB_ID }, x, y, kind);
+}
+
+pub fn present_cursor_update(fb_id: u32) {
     let _guard = FRAMEBUFFER_LOCK.lock();
-    let Some(framebuffer) = get_fb() else {
+    let Some(framebuffer) = get_fb_by_id(fb_id) else {
         return;
     };
-    let previous = unsafe { ptr::read_volatile(ptr::addr_of!(DISPLAYED_CURSOR)) };
-    let current = unsafe { ptr::read_volatile(ptr::addr_of!(CURSOR)) };
+    let previous = unsafe { ptr::read_volatile(ptr::addr_of!(DISPLAYED_CURSORS[fb_id as usize])) };
+    let current = unsafe { ptr::read_volatile(ptr::addr_of!(CURSORS[fb_id as usize])) };
     if previous == current {
         return;
     }
@@ -450,17 +520,25 @@ pub fn present_cursor_update() {
         present_region(framebuffer, x, y, CURSOR_SIZE, CURSOR_SIZE, current);
     }
     unsafe {
-        ptr::addr_of_mut!(DISPLAYED_CURSOR).write(current);
+        ptr::addr_of_mut!(DISPLAYED_CURSORS[fb_id as usize]).write(current);
     }
 }
 
-pub fn present_rect(x: u32, y: u32, width: u32, height: u32) {
+pub fn present_cursor_update_default() {
+    present_cursor_update(unsafe { PRIMARY_FB_ID });
+}
+
+pub fn present_rect(fb_id: u32, x: u32, y: u32, width: u32, height: u32) {
     let _guard = FRAMEBUFFER_LOCK.lock();
-    let Some(framebuffer) = get_fb() else {
+    let Some(framebuffer) = get_fb_by_id(fb_id) else {
         return;
     };
-    let cursor = unsafe { ptr::read_volatile(ptr::addr_of!(CURSOR)) };
+    let cursor = unsafe { ptr::read_volatile(ptr::addr_of!(CURSORS[fb_id as usize])) };
     present_region(framebuffer, x, y, width, height, cursor);
+}
+
+pub fn present_rect_default(x: u32, y: u32, width: u32, height: u32) {
+    present_rect(unsafe { PRIMARY_FB_ID }, x, y, width, height);
 }
 
 fn present_region(
@@ -669,35 +747,41 @@ fn cursor_bitmap(kind: CursorType) -> &'static [&'static str; CURSOR_SIZE as usi
     }
 }
 
-pub fn draw_rect(x: u32, y: u32, width: u32, height: u32, color: u32) {
+pub fn draw_rect(fb_id: u32, x: u32, y: u32, width: u32, height: u32, color: u32) {
     let _guard = FRAMEBUFFER_LOCK.lock();
     if width == 0 || height == 0 {
         return;
     }
-    fill_rect_unlocked(x, y, width, 2.min(height), color);
+    fill_rect_unlocked(fb_id, x, y, width, 2.min(height), color);
     fill_rect_unlocked(
+        fb_id,
         x,
         y.saturating_add(height - 2.min(height)),
         width,
         2.min(height),
         color,
     );
-    fill_rect_unlocked(x, y, 2.min(width), height, color);
+    fill_rect_unlocked(fb_id, x, y, 2.min(width), height, color);
     fill_rect_unlocked(
+        fb_id,
         x.saturating_add(width - 2.min(width)),
         y,
         2.min(width),
         height,
         color,
     );
-    mark_dirty(x, y, width, height);
+    mark_dirty(fb_id, x, y, width, height);
 }
 
-pub fn draw_text(mut x: u32, y: u32, text: &str, color: u32, scale: u32) {
+pub fn draw_rect_default(x: u32, y: u32, width: u32, height: u32, color: u32) {
+    draw_rect(unsafe { PRIMARY_FB_ID }, x, y, width, height, color);
+}
+
+pub fn draw_text(fb_id: u32, mut x: u32, y: u32, text: &str, color: u32, scale: u32) {
     let _guard = FRAMEBUFFER_LOCK.lock();
     let scale = scale.max(1);
     let start_x = x;
-    let Some(framebuffer) = get_fb() else {
+    let Some(framebuffer) = get_fb_by_id(fb_id) else {
         return;
     };
     let mut text_right = x;
@@ -717,6 +801,7 @@ pub fn draw_text(mut x: u32, y: u32, text: &str, color: u32, scale: u32) {
                 for column in 0..5 {
                     if bits & (1 << (4 - column)) != 0 {
                         fill_rect_unlocked(
+                            fb_id,
                             x + column * scale,
                             y + row as u32 * scale,
                             scale,
@@ -737,25 +822,69 @@ pub fn draw_text(mut x: u32, y: u32, text: &str, color: u32, scale: u32) {
         }
     }
     let text_width = text_right.saturating_sub(start_x);
-    mark_dirty(start_x, y, text_width, text_bottom.saturating_sub(y));
+    mark_dirty(fb_id, start_x, y, text_width, text_bottom.saturating_sub(y));
 }
 
-pub fn get_width() -> u32 {
-    get_fb().map(|fb| fb.width).unwrap_or(0)
+pub fn draw_text_default(x: u32, y: u32, text: &str, color: u32, scale: u32) {
+    draw_text(unsafe { PRIMARY_FB_ID }, x, y, text, color, scale);
 }
 
-pub fn get_height() -> u32 {
-    get_fb().map(|fb| fb.height).unwrap_or(0)
+pub fn get_width(fb_id: u32) -> u32 {
+    get_fb_by_id(fb_id).map(|fb| fb.width).unwrap_or(0)
 }
 
-pub fn get_cursor_x() -> u32 {
-    unsafe { ptr::read_volatile(ptr::addr_of!(CURSOR)).x }
+pub fn get_width_default() -> u32 {
+    get_width(unsafe { PRIMARY_FB_ID })
 }
 
-pub fn get_cursor_y() -> u32 {
-    unsafe { ptr::read_volatile(ptr::addr_of!(CURSOR)).y }
+pub fn get_height(fb_id: u32) -> u32 {
+    get_fb_by_id(fb_id).map(|fb| fb.height).unwrap_or(0)
 }
 
-pub fn get_cursor_type() -> CursorType {
-    unsafe { ptr::read_volatile(ptr::addr_of!(CURSOR)).kind }
+pub fn get_height_default() -> u32 {
+    get_height(unsafe { PRIMARY_FB_ID })
+}
+
+pub fn get_cursor_x(fb_id: u32) -> u32 {
+    if (fb_id as usize) < MAX_FRAMEBUFFERS {
+        unsafe { ptr::read_volatile(ptr::addr_of!(CURSORS[fb_id as usize])).x }
+    } else {
+        0
+    }
+}
+
+pub fn get_cursor_x_default() -> u32 {
+    get_cursor_x(unsafe { PRIMARY_FB_ID })
+}
+
+pub fn get_cursor_y(fb_id: u32) -> u32 {
+    if (fb_id as usize) < MAX_FRAMEBUFFERS {
+        unsafe { ptr::read_volatile(ptr::addr_of!(CURSORS[fb_id as usize])).y }
+    } else {
+        0
+    }
+}
+
+pub fn get_cursor_y_default() -> u32 {
+    get_cursor_y(unsafe { PRIMARY_FB_ID })
+}
+
+pub fn get_cursor_type(fb_id: u32) -> CursorType {
+    if (fb_id as usize) < MAX_FRAMEBUFFERS {
+        unsafe { ptr::read_volatile(ptr::addr_of!(CURSORS[fb_id as usize])).kind }
+    } else {
+        CursorType::Arrow
+    }
+}
+
+pub fn get_cursor_type_default() -> CursorType {
+    get_cursor_type(unsafe { PRIMARY_FB_ID })
+}
+
+pub fn get_framebuffer_count() -> u32 {
+    unsafe { FRAMEBUFFER_COUNT }
+}
+
+pub fn get_primary_fb_id() -> u32 {
+    unsafe { PRIMARY_FB_ID }
 }

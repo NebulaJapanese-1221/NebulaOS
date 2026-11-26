@@ -55,7 +55,7 @@ const PANEL: u32 = 0x111827;
 const ACCENT: u32 = 0x66D9EF;
 const TEXT: u32 = 0xF1F5F9;
 const MUTED: u32 = 0xA8B5C9;
-const APP_COUNT: usize = 8;
+const APP_COUNT: usize = 10;
 const MAX_DESKTOPS: usize = 4;
 const VERSION: &str = "1.0.0";
 
@@ -69,6 +69,8 @@ enum AppKind {
     Paint,
     SystemMonitor,
     Terminal,
+    Mixer,
+    ImageViewer,
 }
 
 impl AppKind {
@@ -82,6 +84,8 @@ impl AppKind {
             5 => Self::Paint,
             6 => Self::SystemMonitor,
             7 => Self::Terminal,
+            8 => Self::Mixer,
+            9 => Self::ImageViewer,
             _ => return None,
         })
     }
@@ -96,6 +100,8 @@ impl AppKind {
             Self::Paint => "PAINT",
             Self::SystemMonitor => "SYSTEM MONITOR",
             Self::Terminal => "TERMINAL",
+            Self::Mixer => "MIXER",
+            Self::ImageViewer => "IMAGE VIEWER",
         }
     }
 }

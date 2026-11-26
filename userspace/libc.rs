@@ -93,17 +93,44 @@ pub const SYSCALL_VFS_XATTR_GET: u32 = 63;
 pub const SYSCALL_VFS_XATTR_LIST: u32 = 64;
 pub const SYSCALL_VFS_XATTR_REMOVE: u32 = 65;
 
+// Audio syscalls
+pub const SYSCALL_AUDIO_INIT: u32 = 66;
+pub const SYSCALL_AUDIO_VOLUME_GET: u32 = 67;
+pub const SYSCALL_AUDIO_VOLUME_SET: u32 = 68;
+pub const SYSCALL_AUDIO_PLAY_TONE: u32 = 69;
+pub const SYSCALL_AUDIO_STOP: u32 = 70;
+pub const SYSCALL_AUDIO_BEEP: u32 = 71;
+pub const SYSCALL_AUDIO_STARTUP_CHIME: u32 = 72;
+pub const SYSCALL_AUDIO_PLAY_MELODY: u32 = 73;
+pub const SYSCALL_AUDIO_QUEUE_TONE: u32 = 74;
+pub const SYSCALL_AUDIO_POLL: u32 = 75;
+pub const SYSCALL_AUDIO_AC97_AVAILABLE: u32 = 76;
+
+// Multi-monitor syscalls
+pub const SYSCALL_FB_GET_COUNT: u32 = 77;
+pub const SYSCALL_FB_GET_PRIMARY: u32 = 78;
+pub const SYSCALL_FB_GET_WIDTH: u32 = 79;
+pub const SYSCALL_FB_GET_HEIGHT: u32 = 80;
+pub const SYSCALL_FB_SET_CURSOR: u32 = 81;
+pub const SYSCALL_FB_GET_CURSOR: u32 = 82;
+pub const SYSCALL_FB_PRESENT: u32 = 83;
+pub const SYSCALL_FB_PRESENT_RECT: u32 = 84;
+pub const SYSCALL_FB_FILL_RECT: u32 = 85;
+pub const SYSCALL_FB_DRAW_RECT: u32 = 86;
+pub const SYSCALL_FB_DRAW_TEXT: u32 = 87;
+pub const SYSCALL_FB_CLEAR: u32 = 88;
+
 // Process management syscalls
-pub const SYSCALL_FORK: u32 = 66;
-pub const SYSCALL_EXECVE: u32 = 67;
-pub const SYSCALL_WAITPID: u32 = 68;
-pub const SYSCALL_GETPID: u32 = 69;
-pub const SYSCALL_GETPPID: u32 = 70;
-pub const SYSCALL_GETUID: u32 = 71;
-pub const SYSCALL_GETGID: u32 = 72;
-pub const SYSCALL_GETEUID: u32 = 73;
-pub const SYSCALL_GETEGID: u32 = 74;
-pub const SYSCALL_KILL: u32 = 75;
+pub const SYSCALL_FORK: u32 = 89;
+pub const SYSCALL_EXECVE: u32 = 90;
+pub const SYSCALL_WAITPID: u32 = 91;
+pub const SYSCALL_GETPID: u32 = 92;
+pub const SYSCALL_GETPPID: u32 = 93;
+pub const SYSCALL_GETUID: u32 = 94;
+pub const SYSCALL_GETGID: u32 = 95;
+pub const SYSCALL_GETEUID: u32 = 96;
+pub const SYSCALL_GETEGID: u32 = 97;
+pub const SYSCALL_KILL: u32 = 98;
 
 pub const CLIPBOARD_MAX: usize = 256;
 pub const MAX_WRITE_LENGTH: usize = 1024;
@@ -442,6 +469,75 @@ pub struct VfsXattrRemoveRequest {
     pub path_len: u32,
     pub name_ptr: u32,
     pub name_len: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct AudioToneRequest {
+    pub frequency: u32,
+    pub duration: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct AudioMelodyRequest {
+    pub note_count: u32,
+    pub data_ptr: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FbCursorRequest {
+    pub fb_id: u32,
+    pub x: u32,
+    pub y: u32,
+    pub kind: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FbRectRequest {
+    pub fb_id: u32,
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FbFillRectRequest {
+    pub fb_id: u32,
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub color: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FbDrawRectRequest {
+    pub fb_id: u32,
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub color: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FbDrawTextRequest {
+    pub fb_id: u32,
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub color: u32,
+    pub scale: u32,
+    pub text_ptr: u32,
+    pub text_len: u32,
 }
 
 #[repr(C)]
@@ -1030,6 +1126,312 @@ pub fn xattr_remove(path: &str, name: &str) -> Result<(), Errno> {
         Ok(())
     } else {
         Err(Errno::from(result))
+    }
+}
+
+// ============================================================================
+// Audio wrappers
+// ============================================================================
+
+#[cfg(feature = "user-app")]
+pub fn audio_init() -> Result<(), Errno> {
+    let result = invoke(SYSCALL_AUDIO_INIT, 0, 0);
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(Errno::Io)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn audio_volume_get() -> Result<u8, Errno> {
+    let result = invoke(SYSCALL_AUDIO_VOLUME_GET, 0, 0);
+    if result == u32::MAX {
+        Err(Errno::Io)
+    } else {
+        Ok(result as u8)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn audio_volume_set(level: u8) -> Result<(), Errno> {
+    let result = invoke(SYSCALL_AUDIO_VOLUME_SET, level as u32, 0);
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(Errno::Io)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn audio_play_tone(frequency_hz: u32, duration_ms: u32) -> Result<(), Errno> {
+    let mut req = AudioToneRequest {
+        frequency: frequency_hz,
+        duration: duration_ms,
+    };
+    let result = invoke(SYSCALL_AUDIO_PLAY_TONE, &mut req as *mut _ as u32, 0);
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(Errno::Io)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn audio_stop() -> Result<(), Errno> {
+    let result = invoke(SYSCALL_AUDIO_STOP, 0, 0);
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(Errno::Io)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn audio_beep() -> Result<(), Errno> {
+    let result = invoke(SYSCALL_AUDIO_BEEP, 0, 0);
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(Errno::Io)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn audio_startup_chime() -> Result<(), Errno> {
+    let result = invoke(SYSCALL_AUDIO_STARTUP_CHIME, 0, 0);
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(Errno::Io)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn audio_play_melody(notes: &[(u32, u32)]) -> Result<(), Errno> {
+    // Pack notes into a buffer (each note = 8 bytes: freq + duration)
+    let note_count = notes.len();
+    if note_count > 32 {
+        return Err(Errno::Io);
+    }
+    let mut buffer = [0u8; 256];
+    for (i, &(freq, dur)) in notes.iter().enumerate() {
+        let base = i * 8;
+        if base + 8 > 256 {
+            break;
+        }
+        buffer[base..base+4].copy_from_slice(&freq.to_le_bytes());
+        buffer[base+4..base+8].copy_from_slice(&dur.to_le_bytes());
+    }
+    let mut req = AudioMelodyRequest {
+        note_count: note_count as u32,
+        data_ptr: buffer.as_ptr() as u32,
+    };
+    let result = invoke(SYSCALL_AUDIO_PLAY_MELODY, &mut req as *mut _ as u32, 0);
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(Errno::Io)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn audio_queue_tone(frequency_hz: u32, duration_ms: u32) -> Result<(), Errno> {
+    let mut req = AudioToneRequest {
+        frequency: frequency_hz,
+        duration: duration_ms,
+    };
+    let result = invoke(SYSCALL_AUDIO_QUEUE_TONE, &mut req as *mut _ as u32, 0);
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(Errno::Io)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn audio_poll() -> Result<bool, Errno> {
+    let result = invoke(SYSCALL_AUDIO_POLL, 0, 0);
+    if result == u32::MAX {
+        Err(Errno::Io)
+    } else {
+        Ok(result != 0)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn audio_ac97_available() -> Result<bool, Errno> {
+    let result = invoke(SYSCALL_AUDIO_AC97_AVAILABLE, 0, 0);
+    if result == u32::MAX {
+        Err(Errno::Io)
+    } else {
+        Ok(result != 0)
+    }
+}
+
+// ============================================================================
+// Multi-monitor wrappers
+// ============================================================================
+
+#[cfg(feature = "user-app")]
+pub fn fb_get_count() -> Result<u32, Errno> {
+    let result = invoke(SYSCALL_FB_GET_COUNT, 0, 0);
+    if result == u32::MAX {
+        Err(Errno::Io)
+    } else {
+        Ok(result)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn fb_get_primary() -> Result<u32, Errno> {
+    let result = invoke(SYSCALL_FB_GET_PRIMARY, 0, 0);
+    if result == u32::MAX {
+        Err(Errno::Io)
+    } else {
+        Ok(result)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn fb_get_width(fb_id: u32) -> Result<u32, Errno> {
+    let result = invoke(SYSCALL_FB_GET_WIDTH, fb_id, 0);
+    if result == u32::MAX {
+        Err(Errno::Io)
+    } else {
+        Ok(result)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn fb_get_height(fb_id: u32) -> Result<u32, Errno> {
+    let result = invoke(SYSCALL_FB_GET_HEIGHT, fb_id, 0);
+    if result == u32::MAX {
+        Err(Errno::Io)
+    } else {
+        Ok(result)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn fb_set_cursor(fb_id: u32, x: u32, y: u32, kind: u32) -> Result<(), Errno> {
+    let mut req = FbCursorRequest {
+        fb_id,
+        x,
+        y,
+        kind,
+    };
+    let result = invoke(SYSCALL_FB_SET_CURSOR, &mut req as *mut _ as u32, 0);
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(Errno::Io)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn fb_get_cursor(fb_id: u32) -> Result<(u32, u32, u32), Errno> {
+    let mut req = FbCursorRequest { fb_id, x: 0, y: 0, kind: 0 };
+    let result = invoke(SYSCALL_FB_GET_CURSOR, &mut req as *mut _ as u32, 0);
+    if result == u32::MAX {
+        Err(Errno::Io)
+    } else {
+        Ok((req.x, req.y, req.kind))
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn fb_present(fb_id: u32) -> Result<(), Errno> {
+    let result = invoke(SYSCALL_FB_PRESENT, fb_id, 0);
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(Errno::Io)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn fb_present_rect(fb_id: u32, x: u32, y: u32, width: u32, height: u32) -> Result<(), Errno> {
+    let mut req = FbRectRequest {
+        fb_id,
+        x,
+        y,
+        width,
+        height,
+    };
+    let result = invoke(SYSCALL_FB_PRESENT_RECT, &mut req as *mut _ as u32, 0);
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(Errno::Io)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn fb_fill_rect(fb_id: u32, x: u32, y: u32, width: u32, height: u32, color: u32) -> Result<(), Errno> {
+    let mut req = FbFillRectRequest {
+        fb_id,
+        x,
+        y,
+        width,
+        height,
+        color,
+    };
+    let result = invoke(SYSCALL_FB_FILL_RECT, &mut req as *mut _ as u32, 0);
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(Errno::Io)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn fb_draw_rect(fb_id: u32, x: u32, y: u32, width: u32, height: u32, color: u32) -> Result<(), Errno> {
+    let mut req = FbDrawRectRequest {
+        fb_id,
+        x,
+        y,
+        width,
+        height,
+        color,
+    };
+    let result = invoke(SYSCALL_FB_DRAW_RECT, &mut req as *mut _ as u32, 0);
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(Errno::Io)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn fb_draw_text(fb_id: u32, x: u32, y: u32, text: &str, color: u32, scale: u32) -> Result<(), Errno> {
+    let text_len = text.len().min(1024);
+    let mut req = FbDrawTextRequest {
+        fb_id,
+        x,
+        y,
+        width: text_len as u32 * 6 * scale,
+        height: 8 * scale,
+        color,
+        scale,
+        text_ptr: text.as_ptr() as u32,
+        text_len: text_len as u32,
+    };
+    let result = invoke(SYSCALL_FB_DRAW_TEXT, &mut req as *mut _ as u32, 0);
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(Errno::Io)
+    }
+}
+
+#[cfg(feature = "user-app")]
+pub fn fb_clear(fb_id: u32, color: u32) -> Result<(), Errno> {
+    let result = invoke(SYSCALL_FB_CLEAR, fb_id, color);
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(Errno::Io)
     }
 }
 

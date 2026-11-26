@@ -48,7 +48,7 @@ impl Diagnostic {
     pub fn run(mut self) -> ! {
         self.render_header();
         self.render_sections();
-        framebuffer::present();
+        framebuffer::present_default();
 
         loop {
             self.frame = self.frame.wrapping_add(1);
@@ -61,18 +61,18 @@ impl Diagnostic {
     }
 
     fn render_header(&self) {
-        let width = framebuffer::get_width();
-        framebuffer::clear_screen(BACKGROUND);
-        framebuffer::fill_rect(0, 0, width, 48, PANEL);
-        framebuffer::draw_text(MARGIN_X, 14, "NEBULAOS DIAGNOSTIC MODE", TEXT, 2);
-        framebuffer::draw_text(
+        let width = framebuffer::get_width_default();
+        framebuffer::clear_screen_default(BACKGROUND);
+        framebuffer::fill_rect_default(0, 0, width, 48, PANEL);
+        framebuffer::draw_text_default(MARGIN_X, 14, "NEBULAOS DIAGNOSTIC MODE", TEXT, 2);
+        framebuffer::draw_text_default(
             MARGIN_X,
             36,
             &format!("Version {}  |  Press F12 to exit", VERSION),
             MUTED,
             1,
         );
-        framebuffer::present();
+        framebuffer::present_default();
     }
 
     fn render_sections(&self) {
@@ -153,35 +153,35 @@ impl Diagnostic {
         y += LINE_HEIGHT;
         self.kv("Mouse", if pci::find_by_class(0x03).is_some() { "detected" } else { "none" }, y);
 
-        framebuffer::present();
+        framebuffer::present_default();
     }
 
     fn section(&self, label: &str, y: u32) {
-        framebuffer::draw_text(MARGIN_X, y, label, ACCENT, 1);
-        framebuffer::draw_rect(MARGIN_X, y + LINE_HEIGHT, 200, 2, 0x35506E);
+        framebuffer::draw_text_default(MARGIN_X, y, label, ACCENT, 1);
+        framebuffer::draw_rect_default(MARGIN_X, y + LINE_HEIGHT, 200, 2, 0x35506E);
     }
 
     fn kv(&self, key: &str, value: &str, y: u32) {
-        framebuffer::draw_text(MARGIN_X + 8, y, key, MUTED, 1);
-        framebuffer::draw_text(MARGIN_X + 160, y, value, TEXT, 1);
+        framebuffer::draw_text_default(MARGIN_X + 8, y, key, MUTED, 1);
+        framebuffer::draw_text_default(MARGIN_X + 160, y, value, TEXT, 1);
     }
 
     fn kv_colored(&self, key: &str, value: &str, color: u32, y: u32) {
-        framebuffer::draw_text(MARGIN_X + 8, y, key, MUTED, 1);
-        framebuffer::draw_text(MARGIN_X + 160, y, value, color, 1);
+        framebuffer::draw_text_default(MARGIN_X + 8, y, key, MUTED, 1);
+        framebuffer::draw_text_default(MARGIN_X + 160, y, value, color, 1);
     }
 
     fn kv_pci(&self, _index: usize, dev: &pci::PciDevice, y: u32) {
         let label = format!("{:02}:{:02}.{}", dev.bus, dev.device, dev.function);
-        framebuffer::draw_text(MARGIN_X + 8, y, &label, MUTED, 1);
-        framebuffer::draw_text(
+        framebuffer::draw_text_default(MARGIN_X + 8, y, &label, MUTED, 1);
+        framebuffer::draw_text_default(
             MARGIN_X + 80,
             y,
             &format!("ven=0x{:04X} dev=0x{:04X}", dev.vendor_id, dev.device_id),
             TEXT,
             1,
         );
-        framebuffer::draw_text(
+        framebuffer::draw_text_default(
             MARGIN_X + 240,
             y,
             pci::class_name(dev.class, dev.subclass),
